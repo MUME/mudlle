@@ -1,0 +1,26 @@
+mc:verbose = 0;
+start = ctime();
+pcompile("dlist.mud");
+pcompile("sequences.mud");
+pcompile("misc.mud");
+pcompile("compiler.mud");
+pcompile("link.mud");
+pcompile("graph.mud");
+pcompile("asparc.mud");
+pcompile("vars.mud");
+pcompile("flow.mud");
+pcompile("optimise.mud");
+pcompile("ins3.mud");
+pcompile("msparc.mud");
+pcompile("phase1.mud");
+pcompile("phase2.mud");
+pcompile("phase3.mud");
+pcompile("phase4.mud");
+pcompile("gensparc.mud");
+pcompile("sparc.mud");
+pcompile("compile.mud");
+pcompile("noinf.mud");
+pcompile("inference.mud");
+display(format("cpu time: %s ms", ctime() - start)); newline();
+display(format("nins: %s", nins)); newline();
+

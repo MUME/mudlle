@@ -1,0 +1,4 @@
+#!/bin/sh
+touch .depend runtime/.depend
+make -f mkf depend
+make -f mkf

@@ -1,0 +1,1333 @@
+1. Preface
+==========
+
+This text is the reference manual for the mudlle language. To
+familiarize yourself with the language, look at the introductory
+manual first. To find out information on the MUME interface,
+consult the mudlle-mume manual.
+
+Any complaints or questions should be addressed to Owl.
+
+2. Notation
+===========
+
+The following notation is used to indicate what types of arguments a
+function called 'name' expects, as well as the type of its result:
+
+name: <p1> <p2> ... <pi> -> <r>
+
+This means that function 'name' takes 'i' parameters <p1>, <p2>, ...
+<pi> (or signals an error if there aren't enough). When it has
+finished, it returns a result of type <r>.
+
+<p1>, <p2>, ..., <r> are words, followed by an optional digit, for
+example 'n1', 'x' or 'table3'. The name indicates the type of the expected
+argument (n stands for an integer, for example), the digit allows
+multiple arguments of the same type to be distinguished. For example:
+
+  modulo: n1 n2 -> n
+
+means that 'modulo' is a function of 2 integers returning an integer.
+So the following code is legal:
+
+  modulo(3,2)
+  modulo(3+2, modulo(99,23))
+
+but the following will cause a runtime error:
+
+  modulo("aa", 1) // Bad type for arguments
+  modulo(3)	  // Bad number of arguments
+
+If the result type is omitted (eg as in 'newline: -> ') it means that
+the function returns an unspecified value (ie nothing useful). 
+
+If the parameter list ends with '...' it means that the function
+accepts a variable number of parameters, as in
+
+  list: x1 ... -> l
+
+The help string associated with the function should make clear any
+restrictions on the parameters.
+
+Here is a list of the names used, and the corresponding types
+(definitions and examples of all these types are given further on):
+
+  x, y, x1, y1, x2, y2, ... : a value of any type
+  n, n1, n2, ... : an integer
+  b, b1, b2, ... : a boolean value (0 = FALSE, everything else = TRUE)
+  s, s1, s2, ... : a string
+  fn, fn1,   ... : a function (or closure as it is sometimes known)
+  sym, sym1, ... : a symbol
+  table, ...     : a symbol table
+  l, l1, l2, ... : a list
+  v, v1, v2, ... : a vector
+  p, p1, p2, ... : a MUME person (player or mobile)
+  o, o1, o2, ... : a MUME object (eg a sword)
+
+If the types and number of arguments don't match what is specified for
+the function, and error will be signaled. Of course, descriptions of
+the functions may describe other restrictions (eg you can't divide by
+0).
+
+In the examples that follow, I shall use the word RESULT: to indicate
+what the result of evaluating various examples, eg:
+
+  3 + 2
+  RESULT: 5
+
+or
+
+  3 + "fun"
+  RESULT: wrong type of arguments
+
+(the latter example is actually an error message)
+
+3. MUDLLE, The Language
+=======================
+
+3.1 Lexical structure
+---------------------
+
+Mudlle programs are composed of a certain number of tokens, which can
+be any of the following:
+
+- white space & comments: these may serve as separators between tokens,
+  but are otherwise ignored.
+
+  white space is: space, cr, lf and tab.
+  comments: start with // and extend to the end of the line
+  comments may also span multiple lines if delimited by /* and */. These
+  comments nest (this is not the same as the C behaviour).
+
+- integers: integers range from -2^30 to 2^30 - 1 and are entered 
+  as usual in base 10.
+
+  You can also get the ASCII code for a particular character with
+  the ?c notation (eg ?A is 65, ?9 is 57, ...). ?\n, ?\r, ?\t and
+  ?\\ give the codes for newline, carriage return, tab and \
+  respectively.
+
+- identifiers: identifiers start with a letter, _ or : and continue with
+  letters, digits, _, :, $, ? and !. There is no limit on identifier length
+  and identifiers are not case sensitive.
+
+- strings: strings must be surrounded with double quotes (") and may
+  not be longer than a single line. To include a " in a string preceed
+  it with a \. To get a cr, lf or tab, use \r, \n and \t respectively.
+  To get a \, use \\. There are no limits on string length.
+
+- keywords: the following identifiers are reserved for use as keywords:
+    fn, if, else, while, or, and, not, library, module, requires,
+    defines, reads, writes.
+
+- symbolic keywords: &&, ||, !. [, ], |, ;, +, -, *, /, %, (, ), &,
+  ~, ^, comma (,), dot(.), =, ==, !=, <, <=, >, >=, <<. >>, '.
+
+
+3.2 Syntax
+----------
+
+Mudlle's syntax is in some respects quite close to C. Here it is, in
+EBNF form (keywords and other tokens are in capital letters, symbolic
+keywords are surrounded by quotes (')):
+
+mudlle_file : simple | library | module ;
+
+simple : expression_list 
+
+module : MODULE optional_symbol requires reads writes block optional_semi
+
+library : LIBRARY SYMBOL requires defines reads writes block optional_semi
+
+optional_symbol :  /* empty */ | SYMBOL
+
+requires :  /* empty */ | REQUIRES variable_list
+
+defines : DEFINES variable_list
+
+reads :  /* empty */ | READS variable_list
+
+writes :  /* empty */ | WRITES variable_list
+
+
+expression_list : expression_list1 optional_semi
+
+expression_list1 :
+  expression_list1 ';' expression  |
+  expression
+
+optional_semi : /* empty */ | ';'
+
+expression :
+  label expression |
+  basic_expression
+
+basic_expression :
+  control_expression |
+  function_expressnion |
+  variable '=' expression |
+  indexed_ref '=' expression |
+  op_expression
+
+control_expression : if | while | loop | exit
+
+if : IF '(' expression ')' expression optional_else
+
+optional_else : /* empty */ | ELSE expression
+
+while : WHILE '(' expression ')' expression
+
+loop : LOOP expression
+
+exit : EXIT optional_label basic_expression
+
+optional_label : label | /* empty */
+
+label : '<' SYMBOL '>'
+
+function_expression : FN optional_help parameters expression
+
+optional_help : /* empty */  | STRING
+
+parameters : '(' variable_list ')'  ;
+
+variable_list : /* empty */  | variable_list1
+
+variable_list1 : variable_list1 ',' variable  | variable
+
+indexed_ref : simple_expression '[' expression ']'
+
+op_expression : 
+  op_expression '.'  op_expression |
+  op_expression '||' op_expression |
+  op_expression OR   op_expression |
+  op_expression '&&' op_expression |
+  op_expression AND  op_expression |
+  op_expression '==' op_expression |
+  op_expression '!=' op_expression |
+  op_expression '<'  op_expression |
+  op_expression '<=' op_expression |
+  op_expression '>'  op_expression |
+  op_expression '>=' op_expression |
+  op_expression '|'  op_expression |
+  op_expression '^'  op_expression |
+  op_expression '&'  op_expression |
+  op_expression '<<' op_expression |
+  op_expression '>>' op_expression |
+  op_expression '+'  op_expression |
+  op_expression '-'  op_expression |
+  op_expression '*'  op_expression |
+  op_expression '/'  op_expression |
+  op_expression '%'  op_expression |
+  op_expression '-'  op_expression |
+  op_expression '~'  op_expression |
+  op_expression NOT  op_expression |
+  NOT op_expression |
+  '!' op_expression |
+  '-' op_expression |
+  '~' op_expression |
+  simple_expression
+
+simple_expression :
+  function_call |
+  indexed_ref |
+  variable  |
+  simple_constant  |
+  QUOTE constant  |
+  block  |
+  '(' expression ')'
+
+function_call : simple_expression '(' call_list ')'
+
+call_list : /* empty */ | call_list1  ;
+
+call_list1 : call_list1 ',' expression  | expression
+
+constant :
+  simple_constant |
+  '[' constant_list ']' |
+  '(' constant_list ')'
+
+simple_constant : INTEGER | STRING
+
+constant_list : /* empty */ | constant_list constant ;
+
+variable : SYMBOL ;
+
+block :
+  '[' expression_list ']' |
+  '[' '|' variable_list '|' expression_list ']' ;
+
+The op_expression above does not specify the associativity or priority
+of the operators. All operators except '.' associate to the left ('.'
+associates to the right). The priorities are as follows, from highest 
+to lowest:
+
+  NOT, !, ~, (unary) -
+  *, /, %
+  +, -
+  <<, >>
+  &
+  |, ^
+  ==, !=, <, <=, >, >=
+  AND, &&,
+  OR, ||
+  .
+
+Brackets ('(' and ')') may of course be used to override the default
+precedences.
+
+
+3.3 Types
+---------
+
+The following types are defined in mudlle:
+
+- integer: integers are stored in 31 bits and must therefore be
+  between -1073741824 and 1073741823. Examples: 32, -999999, ?\.
+
+- string: strings are sequences of characters of a given length n.
+  There are no limits on the maximum length of strings. For a sequence
+  of length n, the first character is numbered 0, the last n-1. The
+  characters are represented by their ascii codes.
+  Examples: "Owl", "MUME", ...
+
+- pair: a pair of values, eg (1 . 2). Pairs are created with the
+  'cons' function or the '.'  operator:
+
+    cons(3, 2)
+    RESULT: (3 . 2)
+
+  Lists in mudlle follow the traditional Lisp representation based on
+  the concept of 'pairs'. A pair is just what it's name implies: a pair
+  of values. 
+
+  Lists are just a convention on the use of pairs: to pass a list to a
+  function you pass it a pair. The first element of the pair is
+  considered to be the first element of the list. The second element of
+  the pair is expected to be either: 
+
+  - null (the null value), which means that this is the end of the list.
+
+  - another pair. Then the first element of this second pair is the
+  second element of the list, and the second element must be either a
+  pair (containing the third element of the list, and so on) or null.
+
+  - any other value: the list isn't a proper list (so (3 . 2) above is a
+  malformed list).
+
+  So (1 2 3) is just a shorthand for (1 . (2 . (3 . null))).
+
+  The printing functions know about lists and print them in a friendly
+  fashion.
+
+- null type: used to mark the end of lists, has only one value: null.
+
+- vector: an one-dimensional array of values, similar to a list. The
+  first element is numbered 0.
+  Examples: [ ], [ 12 -1 ].
+
+  There are no multi-diensional arrays, but vectors may contain other vectors
+  (the effect is very similar), eg [ [ 1 9 ] [ 4 12] ].
+
+- function: fn (x) x + 1, but also includes primitives such as display
+
+- associative array: an associative array allows you to associate
+  values with strings. It can thus be viewed as a generalisation of an
+  array, but using strings instead of numbers as indexes.
+
+- symbol: an associative array stores a number of 'symbols'. A symbol
+  is just a name (a string) and a value.
+
+- person: MUME mobiles or players.
+
+- object: MUME object, eg a sword.
+
+- gone: a MUME object or person that has been destroyed.
+
+It isn't possible to define any new types in mudlle, but the existing
+ones are flexible enough to represent any data structure. For more
+details on the MUME types, see the mudlle-mume manual.
+
+If you have a complex record-like data structure, the best approach is
+probably to use a vector with the right number of fields, and constants
+to name the offsets.
+
+It is possible to define constants of the integer, string, list
+(pairs) and vector types in mudlle source. These constants are really
+constant, any attempt to modify them will cause a runtime error.
+
+All types are disjoint, ie any value has only one type.
+
+There is no boolean type, instead integer 0 is false and everything other
+value is true. Operations that return a boolean return 1 for true, 0
+for false (it is best to use the predefined 'true' and 'false' variables).
+
+Similarly, there is no character type, the ascii value of characters
+(ie an integer) is used instead.
+
+A number of functions exist for returning the type of a value, or testing
+if it belongs to a particular type:
+
+  typeof: x -> n. Return type of x.
+  function?: x -> n. True if x is a function.
+  integer?: x -> n. True if x is an integer.
+  string?: x -> n. True if x is a string.
+  vector?: x -> n. True if x is a vector.
+  pair?: x -> n. True if x is a pair.
+  null?: x -> n. True if x is null.
+  symbol?: x -> n. True if x is a symbol.
+  table?: x -> n. True if x is an associative array.
+
+typeof returns an integer representing the values type, one of the following
+constants:
+  type_code, type_closure, type_variable, type_internal, type_primitive,
+  type_varargs, type_secure, type_integer, type_string, type_vector, type_pair,
+  type_symbol, type_table, type_private, type_object, type_character, type_gone,
+  type_outputport, type_mcode, type_null
+
+Most of these values should not be seen... (specifically: type_code, 
+type_variable, type_internal, type_outputport, type_mcode). type_closure,
+type_primitive, type_varargs and type_secure all count as functions.
+
+3.4 Expressions
+---------------
+
+As can be seen in the grammar above, mudlle is an expression language.
+Any syntaxically correct program is an expression with a single result
+and possibly some side effects (such as modifying some variables,
+displaying some results, etc). Some functions or expressions do not
+have any useful results, those expressions are said to return the
+`undefined' value. This value should never be used.
+
+The main classes of expressions are:
+
+- binary and unary expressions (eg 3 + 2, a == b, -z)
+
+- constants, variables, indexed references, assignment and indexed
+  assignment.
+
+- function definition and function call.
+
+- blocks
+
+- control expressions (if, while, loop)
+
+- expression lists (which express the sequential nature of computations)
+
+The order of evaluation of the expressions composing a more complex
+expression is undefined, except for the following cases:
+
+- parameters of a function are evaluated before the function is called.
+  But the order of their evaluation is unspecified.
+
+- the expressions in an expression list are evaluated in order, from
+  first to last.
+
+- the condition of an if or while is evaluated before its body.
+
+- in 'a && b' and 'a || b', a is evaluated before b.
+
+Expressions may be labeled, and terminated prematurely by the use
+of 'exit<name>' within their body (exit specifies the result of the
+expression).
+
+3.4.1 Binary and unary expressions
+----------------------------------
+
+Most operators only accept one type of argument. Those that accept
+more are 'overloaded' operators. They will be described several times
+in this section. The operators can be divided into three classes:
+numerical, boolean and miscellaneous.
+
+3.4.1.1 Numerical operators
+
+All numbers in mudlle are 31 bit 2's complement numbers.  The operators
+cause all their arguments to be evaluated, though in an arbitrary and
+unspecified order.
+
+The following arithmetic operators return a number:
+
+  (unary) -: negation
+  *: multiplication
+  /: division
+  %: remainder
+  +: addition
+  -: subtraction
+
+There is no overflow checking, numbers just wrap around according to the
+rules of 2's complement arithmetic. / and % are defined as in C (ie their
+behaviour on negative arguments is uncertain, -3/2 can be -1 or -2, and %
+is defined in consequence so that (a / b) * b + a % b = a). If you need
+the mathematical definition of 'modulo', use the modulo function, not %.
+
+The following operators allow manipulation of integers as 31 bit binary
+numbers:
+
+  ~: bitwise negation.
+  <<: n1 << n2 shifts n1 left by n2 bits (and adds 0 bits).
+  >>: n1 >> n2 shifts n1 right by n2 bits (and adds 0 bits).
+  &: bitwise and
+  |: bitwise or
+  ^: bitwise exclusive or
+
+To compare two integers (and return a boolean), use <, <=, >, or >=.
+
+3.4.1.2 Boolean operators
+
+These are: ==, !=, and, or, not, !, &&, ||. All return true (1) or
+false (0).
+
+The == operator compares two values and returns true if they are the
+*same value*. By this it is meant a particular value created at a
+particular moment. The contents are not compared. So:
+
+  "fun" == "fun"
+  RESULT: 0
+
+  a = "fun"; a == a
+  RESULT: 1
+
+The result of the first expression is actually undefined, ie it may be
+either 1 or 0 (depending on whether the compiler recognises if the two
+constants are identical at compile time).
+
+Similarly
+
+  cons(3, 2) == cons(3, 2)
+  RESULT: 0
+
+  a = cons(3, 2); a == a
+  RESULT: 1
+
+Separate calls to cons, and all other functions which create values (like
+'list', 'vector', etc) are guaranteed to return "unequal" values (ie values
+for which == returns false).
+
+However, 2 integers are '==' if they have the same value. So:
+
+  33 == 32 + 1
+  RESULT: 1
+
+'a != b' is simply 'not (a == b)'.
+
+(To understand how == works, it is useful to know that all values in mudlle
+are represented as pointers to the memory area which contains the actual
+data (except for integers). == just compares two pointers for equality).
+
+and, or, not and ! (which is just a synonym for 'not') evaluate
+both their arguments and return the appropriate boolean value.
+
+&& and || are like 'and' and 'or' respectively, except that they
+evaluate their first argument first and only evaluate the second
+argument if necessary (for 'and', the second is evaluated if the
+first is true, for 'or' if the first is false). Thus you can
+write
+
+  if (a != 0 && 100 / a > 10) ...
+
+without the runtime error which is produced by:
+
+  if (a != 0 and 100 / a > 10) ...
+
+
+3.4.1.3 Miscellaneous operators
+
+'.' is the pair building operator. 'a . b' creates a new pair whose
+elements are a and b. This is identical to 'cons(a, b)'. '.' associates
+to the right, so you can use:
+
+  a . b / 2 . "hello" . null
+
+to create the list
+
+  ( a b/2 "hello")
+
+
+'+' is also string concatenation. Example:
+
+  "aa " + "zeta"
+  RESULT: "aa zeta"
+
+3.4.2 Constants, variables, etc
+-------------------------------
+
+Mudlle allows constants of some types to be specified in programs,
+specifically lists, vectors, integers and strings. A list is just
+a shorthand for a set of linked pairs. Evaluating a constant returns
+the constant itself. For example:
+
+  a = 23; // An integer constant
+  display("Hello world!"); // A string constant
+  values = '[1 4 9 "hello!" ]; // A vector (one dimensional array)
+  lvalues = '(1 4 9 "hello!"); // The same values, in a list
+
+The value of a constant may not be modified, eg
+
+  a = "abcdef"; a[2] = ?z 
+
+produces a runtime error.
+
+There are two classes of variables, local and global. They are both
+untyped (i.e. they may at different times contain values of different
+types, 'a = 3; a = "hello"' is perfectly legal). The local variables
+are the parameters of functions and the variables declared in a code
+block. All other variables are global (see the section on libraries
+for information on the global scope).
+
+To get a variable's value, you use its name, as in 'a + 1'. To set a
+variable to a particular you use the assignment operator '=':
+
+  a = 3
+
+The value of an assignment expression is the value assigned, so you
+can write:
+
+  a = (b = "hello")
+
+which will set both a & b to "hello" (the brackets are unecessary).
+
+Mudlle also has a special notation to refer to the contents of
+indexable values. Indexable values are vectors (the index is a number
+from 0 to the length of the vector - 1), strings (same as vectors, but
+the contents are unsigned 8 bit numbers) and associative arrays (the
+index is an arbitrary string). The usual array notation is used:
+
+  a[3] // Return 4th element of vector stored in a
+  b["test"] // Return element "test" of associative array in b
+
+The value that is indexed does not have to be a variable, it simply
+must be an expression whose value is of the appropriate type:
+
+  '["Hello" "Goodbye" "Go away"][answer]
+
+And to assign a value:
+
+  a[2] = a[1] + 1
+  b["test"] = null
+
+Both the indexed assignment and lookup operations are simply short
+cuts for calls to the 'ref' and 'set' functions:
+
+  a[x] is the same as ref(a, x)
+  a[x] = b is the same as set!(a, x, b)
+
+3.4.3 Functions
+---------------
+
+Mudlle functions take a fixed number of arguments and return a single
+result (some primitives accept a variable number of arguments).
+Functions are values like any other and are displayed as '{closure}'
+if you try and print them. They are not automatically associated with
+a particular name as in programming languages like C or Pascal (it is
+up to the programmer to store the function in an appropriate variable).
+
+3.4.3.1 Function definition
+
+The formal definition of a function is:
+
+  type FN help_string ( parameters ) expression
+
+or
+
+  type FN help_string parameter expression
+
+Where the parameters are:
+
+  type1 parameter1, type2 parameter2, ...
+
+and type is either absent, or one of the following words (note that
+they are not keywords):
+
+  int, string, vector, pair, symbol, table, object, character, gone,
+  function, list, none, any, null
+
+The (optional) help_string is for use with the 'help' and 'apropos'
+functions (see the function reference below) and is otherwise ignored.
+
+The parameters introduce formal names for the variables which will
+contain the function's arguments, for use within the 'expression'.
+These variables are created when the function is called and have 
+indefinite extent (they will continue existing as long as necessary).
+Their scope is the 'expression'.
+
+In the second form of function, the single parameter contains a vector
+of all the function's arguments. Any number of arguments is therefore
+accepted.
+
+The 'expression' defines the value of the function, it is evaluated
+every time the function is called, with new parameter variables bound
+to the arguments passed.
+
+The types are checked at function entry and exit. Note that specifying
+a type for an argument does not imply that the corresponding variable
+in the function definition need always hold a value of that type (ie
+the type declaration applies to the function, not to the variable). The
+following code is quite legal, though bad practice:
+
+  fn (int i) [ a = i; i = "fun"; i + " no?" ]
+
+The none type matches no value, null only matches null, gone only
+"gone values" (see the MUME documentation) and any matches everything. 
+They are present for completeness.
+
+Some examples:
+
+  int fn (int x) x + 1 // parameter: int x, expression: x + 1
+
+  fn () display("hello world!\n") // no parameters
+
+  fn (x) (fn (y) x + y) // parameter: x, expression: fn (y) x + y
+
+  fn v display(apply(format, v)) // display a formatted string
+
+The third function is an example where the parameter x created when the
+call was made will continue to exist after the function returns (x is
+necessary to compute 'fn (y) x + y').
+
+3.4.3.2 Function call
+
+Functions are called with the following syntax:
+
+  function_expression ( arguments )
+
+The function_expression must evaluate to a function with as many
+parameters as there are arguments. The arguments is a list of comma
+separated expressions.
+
+A call proceeds as follows:
+
+- the function_expression and argument expressions are evaluated (in
+  an unspecified order)
+- the value of the function_expression is checked to make sure that it
+  is a function with the appropriate number of parameters
+- the local variables for the parameters of the function are created
+  and the value of the arguments stored in them. In the case of variable
+  argument functions, a vector is created for the arguments and stored
+  in the single parameter
+- any type checks specified for the arguments are done, and cause runtime
+  errors if they fail
+- the function's expression is evaluated
+- the type of the expression's result is checked
+- this result is the result of the function call
+
+Example:
+
+  add1 = fn (x) x + 1; add1(7)
+  RESULT: 8
+
+3.4.4 Blocks
+------------
+
+A block is a possibly empty list of variable declarations, followed by
+a sequence of expressions:
+
+  [ | variable_list | expression_list ]
+
+If the variable_list is empty, the vertical bars (|) may be omitted.
+The variables are separated by commas (,), the expressions by
+semi-colons (;).
+
+The scope of the variables is the block in which they are declared,
+and their extent is (as with functions) indefinite.
+
+A block is evaluated as follows:
+
+- the local variables are created and initialised to null.
+- the expressions in the list are evaluated in the order given
+- the value of the last expression is the value of the block
+
+Note: the current compiler and interpreter do not implement blocks
+correctly:
+
+- the interpreter creates and initialises all variables at function
+  entry. Thus loops containing blocks do not function as expected
+
+- the compiler creates all variables at function entry, and initialises
+  them at block entry. Loops generally work as expected, except for the
+  rare cases where the programmer expects a *new* variable at each
+  loop iteration. Ie the following doesn't work:
+
+    make_functions = fn (n)
+      [
+	| v, i |
+
+	v = make_vector(n);
+	i = 0;
+	while (i < vector_length(v))
+	  [
+	    | sum |
+
+	    sum = 0;
+	    v[i] = fn (x) sum = sum + x;
+          ];
+        v
+      ];
+
+  This should return a vector of n independent summing functions. Instead
+  they all share a single sum variable. The following code does work:
+	
+    make_functions = fn (n)
+      [
+	| v, i |
+
+	v = make_vector(n);
+	for(0, n - 1, 
+	    fn (i)
+	      [
+	        | sum |
+
+	        sum = 0;
+	        v[i] = fn (x) sum = sum + x;
+              ]);
+        v
+      ];
+
+The definition of blocks might be changed to match one of the two
+implementatins...
+
+
+In a block, all expressions but the last are only useful for their
+side effects:
+
+  [ a + 2; b + 2 ]
+
+is the same as
+
+  b + 2
+
+but
+
+  [ c = a + 2; b + 2 ]
+
+isn't.
+
+3.4.5 Labeled expressions
+-------------------------
+
+You can give a 'label' to an expression by preceding it with a name
+surrounded by '<' and '>', and you can then subsequently terminate
+the evaluation of this expression with an 'exit<name> expression'
+construction. The value of the labeled expression is then that of
+the argument to exit.
+
+You can only use exit<name> from within a block labeled 'name'.  If
+two expressions with the same name are nested within each other, the
+exit applies to the nearest enclosing label (lexical scope).  Attempts
+to use such an exit elsewhere will cause a (compile-time) error.
+However, the labeled expression must be within the same function as the
+exit, i.e. you cannot do:
+
+  f1 = fn ()
+    <exit_f1> [
+      | f2 |
+
+      f2 = fn () 
+        if (a) exit<exit_f1> false;
+
+      ...;
+      f2()
+    ];
+
+as <exit_f1> is not within f2 (The main aim of this restriction is to
+avoid any confusion of mudlle with Common Lisp ;-)).
+
+The expression defining a function is implicitly labeled 'function'.
+
+3.4.6 Control structure
+-----------------------
+
+Mudlle has four basic control structures: 'if', 'while', 'loop' and
+recursion (or more strictly, abstraction and application).
+
+The 'if' and 'while' are fairly traditional:
+
+  IF (condition) expression
+  IF (condition) expression1 ELSE expression2
+  WHILE (condition) expression
+
+'if' without an 'else' evaluates the condition, and if it is true
+evaluates the expression. The result of an 'if' without an 'else' is
+always undefined.
+
+'if' with an 'else' evaluates the condition and then, if it was true,
+'expression1', else 'expression2'. The result of this type of 'if' is
+the value of the expression that was evaluated.
+
+'while' evaluates the condition, and if it is true the 'expression'.
+This process repeats until the condition evaluates to false. The
+result of a 'while' is always undefined.
+
+'loop' executes its expression indefinitely:
+
+  LOOP expression
+
+The expression must contain at least one 'exit' statement to allow
+termination of the loop (either a labeled exit to terminate an
+expression that contains the loop, or an unnamed one that exits from
+the innermost loop):
+
+  EXIT<label> expression
+  EXIT expression
+
+More complex control structures can be built with function calls and
+recursion. There are a number of functions (for, repeat, lmap, etc)
+which are effectively control structures (most are iterators).
+
+3.5 Libraries
+-------------
+
+Mudlle files come in three varieties: simple files, modules and libraries.
+
+3.5.1 Simple files
+
+Simple files are just lists of expressions, that are evaluated in sequence.
+Any global variables used are implicitly declared. This is what you use
+when you type an expression at the command line (the command line is treated
+like a file, so you could enter a library there, but ...). When a file is
+very simple and simply calls one or two functions this is also the best
+approach.
+
+3.5.2 Modules
+
+Modules provide control of the global name space: every global symbol
+used within the module's body must either belong to an explicitly
+imported library, or be specified in the module header. A module looks
+like this:
+
+  module optional_name
+  requires library1, library2, ...
+  reads variable1, variable2, ...
+  writes variable3, variable4, ...
+  [
+    body
+  ];
+
+The body is an expression list. These expressions can read the global
+variables specified in the reads and writes lists and those belonging
+to the 'required' libraries. They can only write those in the writes
+list (the requires, reads and writes clauses are all optional).
+
+When a module is loaded, mudlle checks the 'requires' list. If any of
+the specified libraries is not yet loaded then mudlle attempst to find
+and load them before executing the module's body. If the libraries cannot
+be found, or an error occurs while trying to load and run them, then the
+module cannot be loaded.
+
+Attempts to load a module that writes a symbol that belongs to a library
+will fail.
+
+3.5.3 Libraries
+
+A library is just like a module, but defines a number of global variables.
+These variables are then said to 'belong' to the library. Attempts to
+write to such variables anywhere except in the top level body of their
+library will fail ('variable is read-only').
+
+  library name
+  requires library1, library2, ...
+  defines libvar1, libvar2, ...
+  reads variable1, variable2, ...
+  writes variable3, variable4, ...
+  [
+    body
+  ];
+
+libvar1 and libvar2 should be assigned a value in body, but not in any
+of its functions:
+
+  library simple
+  defines v
+  [
+    v = fn (x) x + 1
+  ];
+
+is ok.
+
+  library bad
+  defines v, w
+  [
+    v = fn (x) w = x + 1
+  ];
+
+is not. For that example, you would use:
+
+  library ok
+  defines v
+  writes w
+  [
+    v = fn (x) w = x + 1
+  ];
+
+As with modules, the required libraries are loaded first. This means
+that there cannot be any loops in the library requirements (a cannot
+require b, and b require a for instance). If any such cases become
+necessary, they can be handled with a few well chosen 'reads'.
+
+Apart from the 'defines' clauses, libraries behave like modules. It
+is not possible to 'write' or 'define' a variable belonging to another
+library.
+
+3.5.4 Miscellaneous
+
+The interpreter will actually load modules even if their required
+libraries are missing. This may or may not work ...
+
+Modules with a name can also be required, which allows you to specify
+an order for the loading of modules. However requiring a module does
+not give access to any extra global symbols, as modules do not have a
+'defines' clause.
+
+All the primitives and other system constants are in the 'system'
+library.
+
+3.6 Storage allocation
+----------------------
+
+Several comments above have indicated that values, variables, etc are
+allocated but never explicitly freed. This task is the responsibility
+of the language, it must recover any memory that is not used any more.
+
+Basically, all values to which there is still a reference (in a
+variable, as an element of an array which is itself referenced
+somewhere, ...) will be kept. Everything else is freed automatically,
+thus freeing you, the programmer, from an annoying burden.
+
+3.7 Errors
+----------
+
+All operations and functions check their arguments for consistency
+before executing them, and signal an appropriate error if necessary.
+The possible errors are:
+
+  bad function -- you tried to call something that wasn't a function,  eg:
+
+    hello = 1; hello()
+    RESULT: error: bad function
+
+  bad type -- you passed arguments of the wrong type, eg:
+
+    3+"fun"
+    RESULT: error: bad type
+
+  divide by zero -- you tried to do a division by zero
+
+  bad index -- you tried to access a non-existent element of an array
+    or string, eg:
+
+    a = [ 1 ]; a[2]
+    RESULT: error: bad index
+
+  bad value -- a parameter had an invalid value (lots of causes)
+
+  variable is read-only -- you tried to modify a variable belonging to
+    a library:
+
+    display = 1
+    RESULT: error: variable is read-only
+
+  value is read-only -- you tried to modify a read only value,
+    probably a constant:
+
+    a = '[1]; a[0] = 99
+    RESULT: error: value is read-only
+
+
+  function probably has an infinite loop -- your code took to
+    long to execute. Either it has an infinite loop or you should
+    make it simpler.
+
+  function probably has an infinite recursion -- the depth of
+    recursive calls exceeded a predefined limit, currently 400.
+
+  wrong number of parameters -- example:
+
+    modulo(3)
+    RESULT: error: wrong number of parameters
+
+  insufficient privilege -- see the mudlle-mume manual (you tried
+    to do something that is forbidden to you)
+
+  user interrupt -- user pressed control-c
+
+4. The language primitives
+==========================
+
+To get help on a particular function, you can use the predefined
+function 'help'. For example, 'help(help)' prints:
+
+  fn -> . Provides help on variable function fn
+
+and 'help(modulo)' prints:
+
+  n1 n2 -> n. n = n1 mod n2
+
+As you can see, 'help' also displays a quick explanation of the
+function beyond the definition of parameter and result types.
+
+If you don't know the precise name of a function, you can use
+apropos(string) to get help on all functions whose name
+contains 'string', for example
+
+  apropos("sub")
+  RESULT: 
+    substring
+    Primitive: s1 n1 n2 -> s2. Extract substring of s starting at n1 of length n2.
+    The first character is numbered 0
+
+
+The primitive functions are organised by the type of value on which
+they primarily operate.
+
+4.1 Integers
+------------
+
+  integer?: x -> b. Returns TRUE if x is an integer.
+
+  negate: n1 -> n2. n2 = -n1. This is the same as -n1.
+
+  modulo: n1 n2 -> n. Returns (n1 mod n2), with the usual mathematical
+  definition of modulo (this is different from % when negative numbers
+  are involved).
+
+  min: n1 n2 -> n. Returns n1 if n1<n2, n2 otherwise.
+
+  max: n1 n2 -> n. Returns n1 if n1>n2, n2 otherwise.
+
+  abs: n1 -> n2. Returns |n1|.
+
+
+4.2 Strings
+-----------
+
+  string?: x -> b. Returns TRUE if x is a string.
+
+  make_string: n -> s. Creates a new string of length n. The contents
+  are undefined.
+
+  string_length: s -> n. Returns the length of string s.
+
+  string_fill!: s n -> . Sets all the characters in s to ascii code n. s
+  must not be a constant. The result is undefined.
+
+  string_ref: s n1 -> n2. Return the ascii code (n2) of the n1'th
+  character of s. You can also use the indexed notation, s[n1].
+
+  string_set!: s n1 n2 -> . Set the n1'th character of s to the character
+  whose ascii code is n2. s must not be a constant. The result is
+  undefined. You can also use the indexed notation, s[n1] = n2.
+
+  string_cmp: s1 s2 -> n. Compare 2 strings. Returns 0 if s1 = s2, < 0
+  if s1 < s2 and > 0 if s1 > s2.
+
+  string_icmp: s1 s2 -> n. Compare 2 strings ignoring the case of the
+  characters.  Returns 0 if s1 = s2, < 0 if s1 < s2 and > 0 if s1 > s2.
+
+  string_search: s1 s2 -> n. Searches in string s1 for string s2.
+  Returns -1 if not found, index of first matching character otherwise.
+
+  string_isearch: s1 s2 -> n. Searches in string s1 for string s2 (case
+  insensitive). Returns -1 if not found, index of first matching character
+  otherwise.
+
+  substring: s1 n1 n2 -> s2. Extract substring of s starting
+  at n1 of length n2. The returned string is modifiable.
+
+  string_append: s1 s2 -> s. Concatenate s1 and s2. The returned string
+  is modifiable. You can also use s1+s2.
+
+
+4.3 Pairs
+---------
+
+  pair?: x -> b. Returns TRUE if x is a pair.
+
+  cons: x1 x2 -> l. Make a new pair from elements x1 & x2.
+
+  car: l -> x. Returns first element of pair l
+
+  cdr: l -> x. Returns 2nd element of pair l
+
+  set_car!: l x ->. Sets the first element of pair l to x. l must not be
+  a constant.
+
+  set_cdr!: l x ->. Sets the 2nd element of pair l to x. l must not be
+  a constant.
+
+  list: x1 ... -> l. Returns a list of the arguments
+
+
+4.4 Vectors
+-----------
+
+  vector?: x -> b. Returns TRUE if x is a vector.
+
+  make_vector: n -> v. Create an empty vector of length n (all elements
+  are set to null).
+
+  vector_length: v -> n. Returns the length of the vector.
+
+  vector_fill!: v x -> . Sets all elements of vector v to x. This is
+  illegal if v is a constant array.
+
+  vector_ref: v n -> x. Return the n'th element of v. You can use v[n]
+  instead.
+
+  vector_set!: v n x -> x. Set the n'th element of v to x. You can use
+  v[n] = x instead.
+
+  vector: x1 ... -> v. Returns a vector of the arguments
+
+  sequence:  x1 ... -> v. Returns a constant vector of the arguments
+  (attempts to modify the vector will cause runtime errors).
+
+4.5 Functions
+-------------
+
+  function?: x -> b. Returns TRUE if x is a function.
+
+  apply: fn v -> x. Executes function fn with the arguments in vector
+  v, and returns its result.
+
+
+4.6 Associative arrays
+----------------------
+
+  table?: x -> b. Returns TRUE if x is an associative array
+
+  make_table: -> table. Create a new (empty) associative array
+
+  table_ref: table s -> x. Returns the value of s in symbol table. If
+  s isn't in the table, returns null. table[s] returns the same result.
+
+  table_set!: table s x -> x. Sets the value of entry s in symbol table
+  to x. table[s] = x has the same effect.
+
+  table_list: table -> l. Returns list of symbols in table whose value
+  isn't null
+
+  table_prefix: table s -> l. Returns list of symbols in table whose value
+  isn't null, and whose name starts with s.
+
+  symbol?: x -> b. Returns TRUE if x is a symbol
+
+  symbol_name: sym -> s. Returns the name of a symbol. The returned
+  string is read only.
+
+  symbol_get: sym -> x. Returns the value of a symbol.
+
+  symbol_set!: sym x -> . Sets the value of symbol sym to x. The result
+  is undefined. This modifies the value of the entry in the
+  associative array this symbol came from.
+
+4.7 Input/Output
+----------------
+
+See the MUME documentation for details on MUME I/O (these functions,
+and others, may be used).
+
+  write: x -> . Print a representation of x.
+
+  display: x -> . Display a representation of x.
+
+  examine: x -> . Examine a representation of x.
+
+  newline: -> . Print a newline.
+
+  load: s -> . Loads file s.
+
+  save_data: s x -> . Writes mudlle value x to file s
+
+  load_data: s -> x. Loads a value from a mudlle save file
+
+  itoa: n -> s. Converts integer into string
+
+  atoi: s -> n. Converts string into integer. Returns s if conversion failed
+
+  format: s x1 x2 ... -> s. Formats string s with parameters x1, ...
+    The format string is copied as is to the result, except for format
+    specifiers introduced by %:
+      %% is replaced by a single %.
+      %s is replaced by a string representation of the next argument
+	 (like display).
+      %w is replaced by a string representation of the next argument
+         (like write).
+      %c is replaced by the character whose ASCII code is the next
+         argument (which must be an integer between 0 and 255).
+      %n is replaced by the end-of-line sequence (\n\r in MUME).
+      %p compares the next argument (an integer) with 1, and is replaced
+	 by "s" if it is different (for plurals).
+      %P compares the next argument (an integer) with 1, and is replaced
+	 by "ies" if it is different, "y" if it is equal (also for plurals).
+
+display, write and examine display varying amounts of information on
+their parameter, display the least, examine the most.
+
+If a value is too complex to be printed (e.g. a circular list), 
+write, display and examine will simply print '<complex>'. The same
+applies to format, except that it will return the string "<complex>".
+
+load loads a file whose pathname you specify. MUME uses different file
+manipulation functions.
+
+4.8 Miscellaneous
+-----------------
+
+  ref: x1 x2 -> x3. Generic interface to lookup operations,
+  same as x1[x2]
+
+  set!: x1 x2 x3 -> . Generic interface to set operations, 
+  same as x1[x2] = x3
+
+  error: n -> . Causes error n", 1, (value errno)
+
+  catch_error: fn b -> x. Executes fn() and returns its result. If an error
+  occurs, returns the error number. If b is true, error messages are suppressed
+
+  handle_error: fn1 fn2 -> x. Executes fn1(). If an error occurs, calls 
+  fn2(errno). Returns result of fn1 or fn2
+
+  readonly?: x -> b. Returns true if x is a read-only value (attempts to modify
+  it will cause a 'readonly value' error).
+
+  protect: x -> x. Makes x readonly (cannot be reversed).
+
+  typeof: x -> n. Return type of x (one of the type_xxx constants)
+
+4.9 Development and debugging
+-----------------------------
+
+  quit: -> . Exit mudlle.
+
+  help: fn -> . Provides help on function c.
+
+  help_string: fn -> s. Returns fn's help string, or false if none
+
+  apropos: s -> . Finds all global variables whose name contains
+  substring s and prints them (with help)
+
+  profile: fn -> x. Returns profiling information for function fn:
+  (#calls #instructions) for mudlle functions, #calls for primitives
+
+  dump_memory:  -> . Dumps GC memory (for use by external profiler)
+
+  debug: n -> . Set debug level (0 = no debug). This is most useful if
+  you know how the mudlle internals work ...
+
+  gcstats: -> l. Returns GC statistics. The same comment as for
+  debug() applies ...
+
+  garbage_collect: n -> . Does a forced garbage collection, reserving
+  n bytes of memory
+
+  obj_size: x -> (n1 . n2) Returns object's size n1 (in bytes) (of which
+  n2 mutable bytes)
+
+4.10 Other functions
+--------------------
+
+A number of other primitives exist for internal purposes (mostly compiler
+support).
+
+Many other functions are available, many of which are written in mudlle.
+They are mainly found in the misc, dlist, sequences and graph libraries.
