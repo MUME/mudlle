@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <math.h>
+#include <string.h>
 
 #include "runtime.h"
 #include "mudlle-float.h"
@@ -213,9 +214,9 @@ OPERATION(bicmp, "bi1 bi2 -> n. Returns < 0 if bi1 < bi2, 0 if bi1 == bi2, "
 	  "and > 0 if bi1 > bi2", 2, (struct bigint *m1, struct bigint *m2),
 	  OP_LEAF | OP_NOESCAPE)
 {
-  struct gcpro gcpro1;
+  struct gcpro gcpro1, gcpro2;
 
-  GCPRO1(m1);
+  GCPRO2(m1, m2);
   m1 = get_bigint(m1); 
   m2 = get_bigint(m2);
   UNGCPRO();
@@ -226,14 +227,19 @@ OPERATION(bicmp, "bi1 bi2 -> n. Returns < 0 if bi1 < bi2, 0 if bi1 == bi2, "
 OPERATION(bishl, "bi1 n -> bi2. Returns bi1 << n",
 	  2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE)
 {
-  mpz_t m;
   struct bigint *rm;
+  mpz_t m;
+  long n;
 
   ISINT(v);
   bi = get_bigint(bi);
 
+  n = intval(v);
+  if (n < 0)
+    runtime_error(error_bad_value);
+
   mpz_init(m);
-  mpz_mul_2exp(m, bi->mpz, intval(v));
+  mpz_mul_2exp(m, bi->mpz, n);
   rm = alloc_bigint(m);
   free_mpz_temps();
 
@@ -320,12 +326,12 @@ OPERATION(bi ## name, "bi1 bi2 -> bi3. Returns bi1 " #sym " bi2",	\
 	  2, (struct bigint *bi1, struct bigint *bi2),			\
 	  OP_LEAF | OP_NOESCAPE)					\
 {									\
-  struct gcpro gcpro1;							\
+  struct gcpro gcpro1, gcpro2;						\
   mpz_t m;								\
   struct bigint *rm;							\
 									\
+  GCPRO2(bi1, bi2);							\
   bi1 = get_bigint(bi1);						\
-  GCPRO1(bi1);								\
   bi2 = get_bigint(bi2);						\
   UNGCPRO();								\
 									\
@@ -339,63 +345,64 @@ OPERATION(bi ## name, "bi1 bi2 -> bi3. Returns bi1 " #sym " bi2",	\
 									\
   return rm;								\
 }
-#else
+
+#else  /* ! USE_GMP */
 
 void free_mpz_temps(void)
 {
 }
 
 UNIMPLEMENTED(itobi, "n -> bi. Return n as a bigint", 1, (value n),
-	  OP_LEAF | OP_NOESCAPE)
+	      OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(ftobi, "f -> bi. Truncates f into a bigint", 
-	  1, (struct mudlle_float *f), OP_LEAF | OP_NOESCAPE)
+	      1, (struct mudlle_float *f), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bitoa, "bi -> s. Return a string representation for bi", 
-	  1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
+	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bitoa_base, "bi n -> s. Return a string representation for bi, "
-	  "base n (2 - 32)",
-	  2, (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE)
+	      "base n (2 - 32)",
+	      2, (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(atobi, "s -> bi. Return the number in s as a bigint", 
-	  1, (struct string *s), OP_LEAF | OP_NOESCAPE)
+	      1, (struct string *s), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bitoi, "bi -> i. Return bi as an integer (error if overflow)", 
-	  1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
+	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bisgn, "bi -> n. Return -1 if bi < 0, 0 if bi == 0, or 1 if bi > 0",
-	  1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
+	      1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bitof, "bi -> f. Return bi as a float", 
-	  1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
+	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bicmp, "bi1 bi2 -> n. Returns < 0 if bi1 < bi2, 0 if bi1 == bi2, "
-	  "and > 0 if bi1 > bi2", 2, (struct bigint *m1, struct bigint *m2),
-	  OP_LEAF | OP_NOESCAPE)
+	      "and > 0 if bi1 > bi2", 2, (struct bigint *m1, struct bigint *m2),
+	      OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bishl, "bi1 n -> bi2. Returns bi1 << n",
-	  2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE)
+	      2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bipow, "bi1 n -> bi2. Returns bi1 raised to the power n",
-	  2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE)
+	      2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bisqrt, "bi1 -> bi2. Returns the integer part of sqrt(bi1)",
-	  1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
+	      1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bifac, "n -> bi1. Returns n!",
-	  1, (value v), OP_LEAF | OP_NOESCAPE)
+	      1, (value v), OP_LEAF | OP_NOESCAPE)
 
-#define BIUNOP(name, desc) \
-UNIMPLEMENTED(bi ## name, "bi1 -> bi2. Returns " desc, \
-	  1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
+#define BIUNOP(name, desc)					\
+UNIMPLEMENTED(bi ## name, "bi1 -> bi2. Returns " desc,		\
+	      1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
 
-#define BIBINOP(name, sym, isdiv) \
-UNIMPLEMENTED(bi ## name, "bi1 bi2 -> bi3. Returns bi1 " #sym " bi2", \
-	  2, (struct bigint *bi1, struct bigint *bi2),  \
-	  OP_LEAF | OP_NOESCAPE)
+#define BIBINOP(name, sym, isdiv)					\
+UNIMPLEMENTED(bi ## name, "bi1 bi2 -> bi3. Returns bi1 " #sym " bi2",	\
+	      2, (struct bigint *bi1, struct bigint *bi2),		\
+	      OP_LEAF | OP_NOESCAPE)
 
-#endif
+#endif /* ! USE_GMP */
 
 BIUNOP(com, "~bi")
 BIUNOP(neg, "-bi")

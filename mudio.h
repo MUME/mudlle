@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -26,8 +26,10 @@
 
 /* Warning: mprint/mprintf/mputs may cause gc */
 
+
 typedef int Muser;		/* Unused. */
 #define EOL "\n"
+
 
 typedef struct oport *Mio;
 #define mprintf pprintf

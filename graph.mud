@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -125,7 +125,7 @@ graph_nodes = fn "graph -> l. Returns list of nodes of graph" (g)
 
 graph_nodes_apply = fn "fn graph -> l. Applies fn to the of nodes of graph" (f, g)
   [
-    | l, dl |
+    | dl |
     dl = g[0];
 
     while (dl)
@@ -133,7 +133,6 @@ graph_nodes_apply = fn "fn graph -> l. Applies fn to the of nodes of graph" (f, 
 	f(dl);
 	dl = dl[1];
       ];
-    l
   ];
 
 graph_node_graph = fn "node -> graph. Returns node's graph" (vector n) n[2];

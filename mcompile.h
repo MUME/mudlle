@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,7 +27,7 @@
 
 /* Compile module references */
 
-int mstart(block_t heap, mfile f);
+int mstart(block_t heap, mfile f, int seclev);
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -51,6 +51,10 @@ void mexecute(ulong offset, const char *name, int count, fncode fn);
 void massign(ulong n, const char *name, fncode fn);
 /* Effects: Generate code to assign to variable n
 */
+
+void mwarn_module(void);
+/* Effects: Warns about unused variables
+ */
 
 void mcompile_init(void);
 

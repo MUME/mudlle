@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -37,7 +37,7 @@ struct table			/* Is a record */
   struct vector *buckets;
 };
 
-ulong hash(const char *_name)
+static ulong hash(const char *_name)
 /* Randomly chosen hash function. Probably not very good. */
 {
   unsigned const char *name = (unsigned const char *)_name;
@@ -229,6 +229,9 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
   struct gcpro gcpro1, gcpro2;
   struct symbol *sym;
 
+  assert(~table->o.flags & OBJ_READONLY);
+  assert(~table->buckets->o.flags & OBJ_READONLY);
+
   GCCHECK(name); GCCHECK(data);
   assert(add_position < intval(table->size) && !table->buckets->data[add_position]);
   GCPRO1(table);
@@ -367,15 +370,16 @@ struct symbol *table_exists(struct table *table, int (*check)(struct symbol *))
 void table_foreach(struct table *table, void (*action)(struct symbol *))
 {
   struct gcpro gcpro1;
-  struct symbol **bucket;
   int i, size;
 
   GCPRO1(table);
   size = intval(table->size);
-  bucket = (struct symbol **)&table->buckets->data[0];
-  for (i = 0; i < size; ++i, ++bucket)
-    if (*bucket)
-      action(*bucket);
+  for (i = 0; i < size; ++i)
+    {
+      struct symbol *bucket = (struct symbol *)table->buckets->data[i];
+      if (bucket)
+	action(bucket);
+    }
   UNGCPRO();
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -219,6 +219,40 @@ OPERATION(shift_left, "n1 n2 -> n. n = n1 << n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
+OPERATION(rotate_left, "n1 n2 -> n. n = n1 rotate left n2", 2,
+	  (value v1, value v2),
+	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+{
+  unsigned long l1;
+  long l2;
+
+  if (!integerp(v1) || !integerp(v2))
+    runtime_error(error_bad_type);
+
+  l1 = uintval(v1);
+  l2 = intval(v2);
+  l2 %= 31;
+
+  return makeint((l1 << l2) | (l1 >> (31 - l2)));
+}
+
+OPERATION(rotate_right, "n1 n2 -> n. n = n1 rotate right n2", 2,
+	  (value v1, value v2),
+	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+{
+  unsigned long l1;
+  long l2;
+
+  if (!integerp(v1) || !integerp(v2))
+    runtime_error(error_bad_type);
+
+  l1 = uintval(v1);
+  l2 = intval(v2);
+  l2 %= 31;
+
+  return makeint((l1 >> l2) | (l1 << (31 - l2)));
+}
+
 OPERATION(shift_right, "n1 n2 -> n. n = n1 >> n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
@@ -234,6 +268,7 @@ OPERATION(bitnot, "n1 -> n2. n2 = ~n1", 1, (value v),
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
+
 
 void arith_init(void)
 {
@@ -258,6 +293,9 @@ void arith_init(void)
   DEFINE("<<", shift_left);
   DEFINE(">>", shift_right);
   DEFINE("~", bitnot);
+
+  DEFINE("rol", rotate_left);
+  DEFINE("ror", rotate_right);
 
   DEFINE("sqrt", sqrt);
 

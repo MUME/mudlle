@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -21,7 +21,7 @@
 
 library mx86 // mudlle assembler for x86
 // uses x86: prefix
-requires system, dlist, misc, sequences, vars
+requires system, dlist, misc, sequences, vars, compiler
 
 defines x86:l_ins, x86:l_alias, x86:l_number, x86:il_label, x86:il_ins,
   x86:il_node, x86:il_number, x86:il_offset, x86:i_op, x86:i_arg1, x86:i_arg2,
@@ -237,7 +237,7 @@ x86:op_op16 = 34; // generate the operand size prefix
     //   if necessary.
     //   Clears the current label
     [
-      | newins, type |
+      | newins |
       
       // Add instruction
       newins = vector(fcode[1], ins, null, ins_index = ins_index + 1, 0);
@@ -407,7 +407,7 @@ be generated in x86code" (fcode, label)
 
   x86:ins_list = fn "x86code -> . Prints instruction list" (fcode)
     [
-      | scan, ilist, ifind |
+      | scan, ilist |
       
       ilist = fcode[0];
       scan = ilist;
@@ -466,6 +466,8 @@ be generated in x86code" (fcode, label)
 	if (integer?(a)) format("%s", a)
 	else if (cdr(a)) format("2*%s+1", car(a))
 	else format("2*%s", car(a))
+      else if (m == x86:lfunction)
+	format("fn[%s]", mc:fname(a))
       else
 	format("%s[%s]", mode[m], a);
     ];

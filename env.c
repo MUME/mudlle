@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -178,7 +178,8 @@ static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
   return vclass;
 }
 
-variable_class env_lookup(const char *name, ulong *offset)
+variable_class env_lookup(const char *name, ulong *offset,
+			  int do_read, int do_write)
 {
   struct env_stack *env;
 
@@ -195,7 +196,13 @@ variable_class env_lookup(const char *name, ulong *offset)
 	for (scope = env->locals; scope; scope = scope->next)
 	  for (pos = scope->index, vars = scope->locals; vars; pos++, vars = vars->next)
 	    if (strcmp(name, vars->var) == 0)
-	      return env_close(env, pos, offset);
+	      {
+		if (do_read)
+		  vars->was_read = 1;
+		if (do_write)
+		  vars->was_written = 1;
+		return env_close(env, pos, offset);
+	      }
       }
   
   /* Not found, is global */

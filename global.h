@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -29,6 +29,7 @@ extern struct env *environment;
 extern struct vector *env_values;
 extern struct vector *mvars;
 extern struct table *global;
+extern struct vector *global_names;
 
 ulong global_lookup(const char *name);
 /* Returns: the index for global variable name in environment.
@@ -60,6 +61,10 @@ struct list *global_list(void);
 #define GCONSTANT(offset) (!integerp(mvars->data[(offset)]))
 /* Returns: a true value if global variable offset is not modifiable
      (ie is a 'define' of some module)
+*/
+
+#define GNAME(offset) ((struct string *)global_names->data[offset])
+/* Returns: the name of the global at 'offset'
 */
 
 #endif

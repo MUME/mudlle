@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,8 +20,8 @@
  */
 
 library genx86 // Code generation for x86 (not particularly good)
-requires system, sequences, misc, dlist,
-  compiler, vars, ins3, mx86, inference, ax86, flow, graph
+requires sequences, misc, dlist, compiler, vars, ins3, mx86, inference, 
+  ax86, flow, graph
 
 defines
   x86:nscratch, x86:ncaller, x86:nregargs, x86:ncallee,
@@ -32,7 +32,7 @@ reads mc:verbose, mc:myself
 writes nops_called, nops_inlined, framesizes, c1, c2
 [
 
-  | object_flags, reg_argcount, reg_closure_in, regs_args_in, relop,
+  | object_flags, reg_argcount, reg_closure_in, relop,
     reg_result, regs_scratch, regs_caller, select_registers,
     mgen_return, relops, mgen_branch, builtins, reg_dest, mgen_compute,
     mgen_memory, mgen_closure, mgen_call, callop1, callop2, rev_x86relop,
@@ -40,7 +40,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
     reg_arg1, reg_closure, reg_fp, reg_sp, mgen_trap, regs_allscratch,
     object_type, type_branch, get_type, typearg1, typearg2, inline1?,
     inline2?, mgen_inline1, mgen_inline2, type_trap, makeint, intval, mfalse,
-    mtrue, function_offset, call, call_closure, call_primitive, nop, ret,
+    mtrue, function_offset, call, call_closure, call_primitive,
     object_size, object_info, call_builtin, perform3, perform3cst, setcc,
     intcst?, argstart, enames, commute_x86relop, in_scratch?, logical_or,
     safemove, myvexists?, cc_frame_end_sp, cc_frame_end_bp, cc_callee,
@@ -246,7 +246,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
     // Effects: Selects registers for ifn
     // Returns: Information on allocation count
     [
-      | regs, args, arg, offset, cvars, locals, regs_callee |
+      | args, offset, cvars, locals, regs_callee |
 
       // Allocate caller regs
       select_registers(ifn, mc:reg_caller, regs_caller);
@@ -402,7 +402,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
   x86:mgen_preamble = fn (ifn, ainfo)
     [
-      | code, ilist, argcheck, locals, cvars, n, offset, args, fmisc |
+      | code, ilist, argcheck, locals, cvars, offset, args, fmisc |
 
       code = x86:new_code();
       ilist = ifn[mc:c_fvalue];
@@ -521,7 +521,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
 	      // & copy to correct location
 	      move(code, loc, locarg, x86:lvar, arg);
-	      assertMessage(!in_scratch?(arg), "oops - argument unspilt to scratch");
+	      assert_message(!in_scratch?(arg), "oops - argument unspilt to scratch");
 	    ];
 	];
 
@@ -540,7 +540,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 	      if (cvarloc[mc:v_lclass] == mc:v_lregister) // unspill closure entry
 		move(code, x86:lidx, reg_closure . offset,
 		     x86:lreg, cvarloc[mc:v_lrnumber]);
-	      assertMessage(!in_scratch?(cvar), "oops - closure var unspilt to scratch");
+	      assert_message(!in_scratch?(cvar), "oops - closure var unspilt to scratch");
 	      offset = offset + 4;
 	    ];
 	  cvars = cdr(cvars);
@@ -560,7 +560,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 	      call_builtin(code, "balloc_variable");
 	      move(code, x86:limm, 0, x86:lidx, reg_arg1 . object_offset);
 	      move(code, x86:lreg, reg_arg1, x86:lvar, local);
-	      assertMessage(!in_scratch?(local), "oops - local var unspilt to scratch");
+	      assert_message(!in_scratch?(local), "oops - local var unspilt to scratch");
 	    ];
 	];
 
@@ -590,7 +590,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
   mgen_trap = fn (code, ins)
     [
-      | trap, nerror, args, types, arg1, type1, arg2, type2 |
+      | trap, nerror, args, types, arg1, type1, arg2 |
 
       trap = ins[mc:i_top];
       nerror = ins[mc:i_tdest];
@@ -603,11 +603,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 	  else type1 = car(types);
 
 	  if (cdr(args) != null)
-	    [
-	      arg2 = cadr(args);
-	      if (!types) type2 = get_type(arg2)
-	      else type2 = cadr(types);
-	    ];
+	    arg2 = cadr(args);
 	];
 
       if (trap == mc:trap_always)
@@ -633,7 +629,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
   mgen_return = fn (code, ifn, ainfo, ins)
     [
-      | r, fmisc |
+      | fmisc |
 
       fmisc = ifn[mc:c_fmisc];
       move(code, x86:lvar, ins[mc:i_rvalue], x86:lreg, reg_result);
@@ -664,7 +660,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
   mgen_branch = fn (code, ins)
     [
-      | op, dest, args, arg1, arg2, types, type1, type2, r1, r2, rboth |
+      | op, dest, args, arg1, arg2, types, type1, type2 |
 
       op = ins[mc:i_bop];
       dest = ins[mc:i_bdest][mc:l_mclabel];
@@ -1100,7 +1096,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
   
   mgen_compute = fn (code, ins)
     [
-      | args, arg1, arg2, r1, r2, rd, op, dest, types, type1, type2 |
+      | args, arg1, arg2, op, dest, types, type1, type2 |
       
       op = ins[mc:i_aop];
       dest = ins[mc:i_adest];
@@ -1218,7 +1214,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
   call_primitive = fn (code, called, prim)
     [
-      | flags, primcallop |
+      | flags |
 
       flags = primitive_flags(prim);
       
@@ -1295,7 +1291,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 
   mgen_call = fn (code, ins)
     [
-      | args, nargs, called, prim, dest, done |
+      | args, nargs, called, dest, done |
       
       args = ins[mc:i_cargs];
       called = car(args);
@@ -1353,7 +1349,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 	]
       else
 	[
-	  | r, success, commit, abort, fail, abort_notptr, usedfail |
+	  | success, commit, abort, fail, abort_notptr, usedfail |
 	  
 	  fail = x86:new_label(code);
 	  usedfail = false;
@@ -1653,7 +1649,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2
     //     1 for source (reg_scratch)
     //     1 for destination if it is not indexed (reg_arg0) (ie dest is global)
     [
-      | sea, dea, sscratch, dscratch |
+      | sea, dea |
       
       // type: x86:limm, x86:lcst, x86:lfunction, x86:lreg,
       // x86:lidx, x86:l[rq]idx, x86:lvar
@@ -1677,12 +1673,12 @@ writes nops_called, nops_inlined, framesizes, c1, c2
 	    [
 	      | sr |
 
-	      assertMessage(dtype != x86:lridx && dtype != x86:lqidx,
+	      assert_message(dtype != x86:lridx && dtype != x86:lqidx,
 			    "scaled destination unsupported (for now)");
 	      // find a usable scratch register
 	      // can't use vexists? because 0 is a valid register number. grr.
 	      sr = myvexists?(fn (r) !(dtype == x86:lidx && car(dest) == r), scratchregs);
-	      assertMessage(sr != null, "no register for move");
+	      assert_message(sr != null, "no register for move");
 	      x86:mov(code, stype, source, x86:lreg, sr);
 	      x86:mov(code, x86:lreg, sr, dtype, dest);
 	    ];

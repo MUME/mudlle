@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,10 +20,9 @@
  */
 
 library phase2 // Phase 2: 3-address (not really) generation
-requires system, sequences, dlist, misc,
-  compiler, vars, ins3
+requires system, sequences, misc, compiler, vars, ins3
 defines mc:phase2
-reads mc:verbose, mc:this_module
+reads mc:this_module
 writes mc:this_function
 // See ins3.mud for details on these instructions
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -28,13 +28,19 @@
 #include "compile.h"
 #include <stdlib.h>
 #include <string.h>
+
+#define YYERROR_VERBOSE
+
 %}
 
 %union {
   char *string;
   char *symbol;
   int integer;
-  int operator;
+  struct {
+    int op;
+    int lineno;
+  } operator;
   double mudlle_float;
   char *bigint_str;
   constant tconstant;
@@ -56,6 +62,7 @@
   patternlist tpatternlist;
   matchnode tmatchnode;
   matchnodelist tmatchnodelist;
+  int lineno;
 }
 
 %token FUNCTION IF ELSE WHILE ASSIGN QUOTE MEXIT LOOP
@@ -104,6 +111,7 @@
 %type <tmatchnode> match_node
 %type <tmatchnodelist> match_list
 %type <operator> OP_ASSIGN INCREMENTER
+%type <lineno> save_lineno
 
 %{
 
@@ -114,7 +122,8 @@ block_t parser_memory;
 
 void yyerror(const char *s)
 {
-  compile_error("%s", s);
+  if (!erred)
+    compile_error("%s", s);
 }
 
 static component make_binary(unsigned int op, component arg1, component arg2)
@@ -130,7 +139,7 @@ static component make_unary(unsigned int op, component arg)
 }
 
 static component make_ref_set_increment(component exp0, component exp1, 
-					int op, component exp2,
+					int op, int line, component exp2,
 					int is_postfix)
 {
     /* prefix:
@@ -184,16 +193,21 @@ static component make_ref_set_increment(component exp0, component exp1,
 				 new_component(parser_memory, c_recall, "~ref"),
 				 make_binary(op, val, exp2)),
 		   cl);
+    cl->c->lineno = line;
 
     if (is_postfix)
       cl = new_clist(parser_memory,
 		     new_component(parser_memory, c_recall, "~val"),
 		     cl);
 
-    return new_component(parser_memory, c_block,
-			 new_codeblock(parser_memory,
-				       vl,
-				       reverse_clist(cl)));
+    val = new_component(parser_memory, c_block,
+			new_codeblock(parser_memory,
+				      vl,
+				      reverse_clist(cl),
+				      NULL, -1));
+    val->lineno = line;
+
+    return val;
 }
 
 void parser_init(void)
@@ -248,35 +262,38 @@ struct mkeyword {
 };
 
 static struct mkeyword types[] = {
-  { "int", type_integer },
-  { "string", type_string },
-  { "vector", type_vector },
-  { "pair", type_pair },
-  { "symbol", type_symbol },
-  { "table", type_table },
-  { "object", type_object },
+  { "int",       type_integer },
+  { "string",    type_string },
+  { "vector",    type_vector },
+  { "pair",      type_pair },
+  { "symbol",    type_symbol },
+  { "table",     type_table },
+  { "object",    type_object },
   { "character", type_character },
-  { "float", type_float },
-  { "bigint", type_bigint },
-  { "gone", type_gone },
-  { "function", stype_function },
-  { "list", stype_list },
-  { "none", stype_none },
-  { "any", stype_any },
-  { "null", type_null }
+  { "float",     type_float },
+  { "bigint",    type_bigint },
+  { "gone",      type_gone },
+  { "function",  stype_function },
+  { "list",      stype_list },
+  { "none",      stype_none },
+  { "any",       stype_any },
+  { "null",      type_null }
 };
 #define NTYPES (sizeof types / sizeof(struct mkeyword))
 
-mtype find_type(char *name)
+static int find_type(const char *name, mtype *type)
 {
   int i;
 
   for (i = 0; i < NTYPES; i++)
     if (!stricmp(name, types[i].name))
-      return types[i].value;
+      {
+	*type = types[i].value;
+	return 1;
+      }
 
   compile_error("unknown type %s", name);
-  return stype_none;
+  return 0;
 }
 
 %}
@@ -293,7 +310,8 @@ entry_types :
   module ;
 
 simple : expression_list 
- { $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, new_codeblock(parser_memory, NULL, $1)); } ;
+ { $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, 
+		 new_codeblock(parser_memory, NULL, $1, NULL, -1)); } ;
 
 module : MODULE optional_symbol imports reads writes code_block optional_semi
   { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $6); } ;
@@ -324,16 +342,27 @@ expression_list :
   expression_list1 optional_semi { $$ = reverse_clist($1); } ;
 
 expression_list1 :
-  expression_list1 ';' expression { $$ = new_clist(parser_memory, $3, $1); } |
-  expression { $$ = new_clist(parser_memory, $1, NULL); } ;
+  expression_list1 ';' save_lineno expression { 
+    $4->lineno = $3;
+    $$ = new_clist(parser_memory, $4, $1);
+  } |
+  expression_list1 ';' ELSE {
+    yyerror("there must be no semicolon before \"else\"");
+    YYABORT;
+  } |
+  save_lineno expression { 
+    $2->lineno = $1;
+    $$ = new_clist(parser_memory, $2, NULL); 
+  } ;
 
 optional_semi : /* empty */ | ';' ;
 
-expression : labeled_expression | e0 ;
+expression : labeled_expression | save_lineno e0 { $$ = $2; $$->lineno = $1; };
 
-labeled_expression : label expression 
+labeled_expression : label save_lineno expression 
   { 
-    $$ = new_component(parser_memory, c_labeled, $1, $2); 
+    $$ = new_component(parser_memory, c_labeled, $1, $3); 
+    $$->lineno = $2;
   } ;
 
 label : LT SYMBOL GT { $$ = $2; } ;
@@ -342,20 +371,25 @@ optional_label : label { $$ = $1; }
 	       | /* empty */ { $$ = NULL; } ;
 
 e0 :
-  '@' pattern ASSIGN expression { $$ = new_pattern_component(parser_memory, $2, $4); } |
+  '@' pattern ASSIGN expression { 
+    $$ = new_pattern_component(parser_memory, $2, $4);
+  } |
   control_expression |
   function_expression { $$ = new_component(parser_memory, c_closure, $1); } |
-  variable ASSIGN expression { $$ = new_component(parser_memory, c_assign, $1, $3); } |
+  variable save_lineno ASSIGN expression { 
+    $$ = new_component(parser_memory, c_assign, $1, $4);
+    $$->lineno = $2;
+  } |
   variable OP_ASSIGN expression {
       $$ = new_component(parser_memory, c_assign,
-			 $1, make_binary($2,
+			 $1, make_binary($2.op,
 					 new_component(parser_memory, c_recall, $1),
 					 $3));
   } |
   e2 '[' expression ']' ASSIGN expression
     { $$ = new_component(parser_memory, c_builtin, b_set, 3, $1, $3, $6); } |
   e2 '[' expression ']' OP_ASSIGN expression {
-    $$ = make_ref_set_increment($1, $3, $5, $6, 0);
+    $$ = make_ref_set_increment($1, $3, $5.op, $5.lineno, $6, 0);
   } |
   e1 ;
 
@@ -449,7 +483,7 @@ optional_type :
   type ;
 
 type :
-  SYMBOL { $$ = find_type($1); } ;
+  SYMBOL { if (!find_type($1, &$$)) YYABORT; } ;
 
 e1 :
   e1 '.' e1 { $$ = make_binary(b_cons, $1, $3); } |
@@ -481,23 +515,23 @@ e1 :
     $$ = new_component
       (parser_memory, c_assign, 
        $2, 
-       make_binary($1,
+       make_binary($1.op,
 		   new_component(parser_memory, c_recall, $2),
 		   new_component(parser_memory, c_constant,
 				 new_constant(parser_memory, cst_int, 1))));
   } |
   variable INCREMENTER { 
-    $$ = new_postfix_inc_component(parser_memory, $1, $2); } |
+    $$ = new_postfix_inc_component(parser_memory, $1, $2.op); } |
   INCREMENTER e2 '[' expression ']' {
     $$ = make_ref_set_increment
-      ($2, $4, $1,
+      ($2, $4, $1.op, $1.lineno, 
        new_component(parser_memory, c_constant,
 		     new_constant(parser_memory, cst_int, 1)),
        0);
   } |
   e2 '[' expression ']' INCREMENTER {
     $$ = make_ref_set_increment
-      ($1, $3, $5,
+      ($1, $3, $5.op, $5.lineno,
        new_component(parser_memory, c_constant,
 		     new_constant(parser_memory, cst_int, 1)),
        1);
@@ -518,8 +552,10 @@ array_ref :
     { $$ = new_component(parser_memory, c_builtin, b_ref, 2, $1, $3); } ;
 
 function_call :
-  e2 '(' call_list ')'
-    { $$ = new_component(parser_memory, c_execute, new_clist(parser_memory, $1, $3)); } ;
+  e2 save_lineno '(' call_list ')' {
+    $$ = new_component(parser_memory, c_execute, new_clist(parser_memory, $1, $4));
+    $$->lineno = $2;
+  } ;
 
 call_list :
   /* empty */ { $$ = NULL; } |
@@ -546,8 +582,8 @@ optional_constant_tail :
 simple_constant :
   string_constant |
   INTEGER { $$ = new_constant(parser_memory, cst_int, $1); } |
-  FLOAT { $$ = new_constant(parser_memory, cst_float, $1); }; |
-  BIGINT { $$ = new_constant(parser_memory, cst_bigint, $1); }
+  FLOAT { $$ = new_constant(parser_memory, cst_float, $1); } |
+  BIGINT { $$ = new_constant(parser_memory, cst_bigint, $1); } ;
 
 string_constant :
   STRING { $$ = new_constant(parser_memory, cst_string, $1); } ;
@@ -558,11 +594,25 @@ optional_constant_list :
 
 constant_list :
   constant { $$ = new_cstlist(parser_memory, $1, NULL); } |
-  constant_list constant { $$ = new_cstlist(parser_memory, $2, $1); } ;
+  constant_list constant { $$ = new_cstlist(parser_memory, $2, $1); } |
+  constant ',' {
+    yyerror("there should be no commas between constant elements");
+    YYABORT;
+  } ;
 
 table_entry_list :
   table_entry { $$ = new_cstlist(parser_memory, $1, NULL); } |
-  table_entry_list table_entry { $$ = new_cstlist(parser_memory, $2, $1); } ;
+  table_entry_list table_entry { 
+    const char *sym = $2->u.constpair->cst1->u.string;
+    const char *conflict;
+    if ((conflict = cstlist_has_symbol($1, sym)))
+      {
+	compile_error("table entry '%s' conflicts with entry '%s'",
+		      sym, conflict);
+	YYABORT;
+      }
+    $$ = new_cstlist(parser_memory, $2, $1);
+  } ;
 
 table_entry :
   string_constant ASSIGN constant { 
@@ -571,13 +621,16 @@ table_entry :
   } ;
 
 pattern :
-  pattern_list |
-  pattern_array ;
+  save_lineno pattern_list { $$ = $2; $$->lineno = $1; } |
+  save_lineno pattern_array { $$ = $2; $$->lineno = $1; } ;
 
 pattern_atom :
   pattern |
   SINK { $$ = new_pattern_sink(parser_memory); } |
-  variable { $$ = new_pattern_symbol(parser_memory, $1, stype_any); } |
+  save_lineno variable {
+    $$ = new_pattern_symbol(parser_memory, $2, stype_any);
+    $$->lineno = $1;
+  } |
   simple_constant { $$ = new_pattern_constant(parser_memory, $1); } |
   ',' pattern_atom_expr { $$ = $2; } ;
 
@@ -623,8 +676,8 @@ variable_name :
   SYMBOL ;
 
 code_block :
-  '[' optional_variable_list expression_list ']' { 
-    $$ = new_codeblock(parser_memory, $2, $3);
+  '[' save_lineno optional_variable_list expression_list ']' { 
+    $$ = new_codeblock(parser_memory, $3, $4, filename, $2);
   } ;
 
 optional_variable_list :
@@ -634,5 +687,8 @@ optional_variable_list :
 variable_list :
   variable_list ',' variable_name { $$ = new_vlist(parser_memory, $3, stype_none, $1); } |
   variable_name { $$ = new_vlist(parser_memory, $1, stype_none, NULL); } ;
+
+save_lineno:
+  { if (yychar == YYEMPTY) yychar = YYLEX; $$ = lineno; } ;
 
 %%

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,11 +23,15 @@
 #include <string.h>
 #include <stddef.h>
 
+#define AFTER_SKIP_FRAMES 16
+#define BEFORE_SKIP_FRAMES 32
+
 #include "runtime/runtime.h"
 #include "mudio.h"
 #include "print.h"
 #include "alloc.h"
 #include "error.h"
+#include "ins.h"
 
 const char *mudlle_errors[last_runtime_error] = {
   "bad function",
@@ -43,7 +47,8 @@ const char *mudlle_errors[last_runtime_error] = {
   "security violation",
   "value is read only",
   "user interrupt",
-  "pattern not matched"
+  "pattern not matched",
+  "compilation error"
 };
 
 static void print_error(int error)
@@ -57,18 +62,22 @@ static void print_error(int error)
 
 static void print_bytecode_frame(struct call_stack *frame, int onstack)
 {
-  int i;
   struct code *fcode = frame->u.mudlle.fn->code;
+  struct gcpro gcpro1;
+  int i;
+
+  GCPRO1(fcode);
 
   if (fcode->filename->str[0])
     {
+      int offset;
+
       if (fcode->varname)
 	mprint(muderr, prt_display, fcode->varname);
-      else mputs("<fn>", muderr);
+      else
+	mputs("<fn>", muderr);
 
-      mputs("[", muderr);
-      mprint(muderr, prt_display, fcode->filename);
-      mprintf(muderr, ":%d](", fcode->lineno);
+      mputs("(", muderr);
 
       /* Warning: This is somewhat intimate with the
 	 implementation of the compiler */
@@ -90,13 +99,20 @@ static void print_bytecode_frame(struct call_stack *frame, int onstack)
 	  mprint(muderr, prt_print, v);
 	}
 
-      mputs(")" EOL, muderr);
+      mputs(") at ", muderr);
+      mprint(muderr, prt_display, fcode->filename);
+      offset = (frame->u.mudlle.offset - 1 -
+		((instruction *)(&frame->u.mudlle.code->constants[frame->u.mudlle.code->nb_constants]) -
+		 (instruction *)frame->u.mudlle.code));
+      mprintf(muderr, ":%d" EOL, get_code_line_number(fcode, offset));
     }
+
+  UNGCPRO();
 }
 
 static void print_c_frame(struct call_stack *frame)
 {
-  mprintf(muderr, "%s(", frame->u.c.op->name);
+  mprintf(muderr, "%s(", frame->u.c.prim->op->name);
 
 #define C_ARG(n) frame->u.c.arg ## n
 
@@ -130,7 +146,7 @@ static void print_c_frame_stack(struct call_stack *frame)
 {
   int i;
 
-  mprintf(muderr, "%s(", frame->u.c.op->name);
+  mprintf(muderr, "%s(", frame->u.c.prim->op->name);
 
   for (i = 0; i < frame->u.c.nargs; i++)
     {
@@ -140,6 +156,7 @@ static void print_c_frame_stack(struct call_stack *frame)
   mputs(")" EOL, muderr);
 }
 
+#ifndef NOCOMPILER
 static void print_mcode(struct mcode *base)
 {
   struct gcpro gcpro1;
@@ -147,12 +164,15 @@ static void print_mcode(struct mcode *base)
   GCPRO1(base);
   if (base->varname)
     mprint(muderr, prt_display, base->varname);
-  else mputs("<fn>", muderr);
-  mputs("[", muderr);
+  else
+    mputs("<fn>", muderr);
+
+  mputs("(<compiled>) at ", muderr);
   mprint(muderr, prt_display, base->filename);
-  mprintf(muderr, ":%d](<compiled>)" EOL, base->lineno);
+  mprintf(muderr, ":%d" EOL, base->lineno);
   UNGCPRO();
 }
+#endif /* !NOCOMPILER */
 
 #ifdef sparc
 static void print_pc(ulong _pc)
@@ -175,8 +195,11 @@ static void print_pc(ulong _pc)
     }
 }
 
+#ifndef NOCOMPILER
 static struct ccontext *print_cc_frame(struct ccontext *cc)
 {
+  iterate_cc_frame(cc, print_mcode_frame);
+
   ulong *frame = cc->frame_end, *start = cc->frame_start;
   static struct ccontext next;
 
@@ -198,10 +221,11 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
   next.frame_end = (ulong *)frame[2];
   return &next;
 }
-#endif
+#endif /* !NOCOMPILER */
+#endif /* sparc */
 
-#ifdef i386
-static int print_pc(ulong _pc)
+#if defined(i386) && !defined(NOCOMPILER)
+static int find_mcode(ulong _pc, void (*func)(struct mcode *))
 {
   ulong *pc = (ulong *)ALIGN(_pc, 4);
 
@@ -216,15 +240,17 @@ static int print_pc(ulong _pc)
 	 pc[-1] != 0xffffffff) pc--;
 
   /* Print it */
-  print_mcode((struct mcode *)((char *)pc - 4 -
-			       offsetof(struct mcode, magic)));
+  func((struct mcode *)((char *)pc - 4 -
+			offsetof(struct mcode, magic)));
 
   return TRUE;
 }
 
-static struct ccontext *print_cc_frame(struct ccontext *cc)
+static struct ccontext *iterate_cc_frame(struct ccontext *cc,
+					 void (*func)(struct mcode *))
 {
   ulong *sp, *bp;
+  int count = 0;
 
   assert(cc->frame_start);
 
@@ -233,18 +259,44 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
   assert(bp >= sp && cc->frame_start > sp && bp != cc->frame_start);
 
   /* The return address is sometimes in retadr, sometimes at sp[-1] */
-  if (!print_pc(sp[-1]))
-    print_pc(cc->retadr);
+  if (!find_mcode(sp[-1], func))
+    find_mcode(cc->retadr, func);
 
   while (bp < cc->frame_start)
     {
+      if (count++ == BEFORE_SKIP_FRAMES)
+	{
+	  ulong *frames[AFTER_SKIP_FRAMES];
+	  int i = 0;
+
+	  while (bp < cc->frame_start && i < AFTER_SKIP_FRAMES)
+	    {
+	      frames[i++] = bp;
+	      bp = (ulong *)bp[0];
+	    }
+	  if (bp >= cc->frame_start)
+	    bp = frames[0];
+	  else
+	    {
+	      i = 0;
+	      while (bp < cc->frame_start)
+		{
+		  frames[i++ % AFTER_SKIP_FRAMES] = bp;
+		  bp = (ulong *)bp[0];
+		}
+	      mprintf(muderr, "   *** %d frame%s skipped ***" EOL, i,
+		      i == 1 ? "" : "s");
+	      bp = frames[i % AFTER_SKIP_FRAMES];
+	    }
+	}
+
       /* bp[-1] is caller's closure
        * bp[0] is previous bp
        * bp[1] is return address
        * sp[0] -> bp[-2] is mudlle values
        */
       /* Not using closure because plan on removing it in some cases */
-      print_pc(bp[1]);
+      find_mcode(bp[1], func);
       assert(bp[0] > (ulong)bp);
       bp = (ulong *)bp[0];
     }
@@ -253,9 +305,14 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 
   return (struct ccontext *)((char *)bp - (12 + sizeof *cc + 8));
 }
-#endif
 
-#ifndef USE_CCONTEXT
+static struct ccontext *print_cc_frame(struct ccontext *cc)
+{
+  return iterate_cc_frame(cc, print_mcode);
+}
+#endif /* i386 && !NOCOMPILER */
+
+#if !defined(USE_CCONTEXT) && !defined(NOCOMPILER)
 static struct ccontext *print_cc_frame(struct ccontext *cc)
 {
   mputs("<compiled>" EOL, muderr);
@@ -265,36 +322,180 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 
 static void basic_error(runtime_errors error, int onstack) NORETURN;
 
+static void print_call_trace(runtime_errors error, int onstack)
+{
+  struct call_stack *scan;
+  int count = 0;
+#ifndef NOCOMPILER
+  struct ccontext *cc = &ccontext;
+#endif
+
+  print_error(error);
+
+  for (scan = call_stack; scan; scan = scan->next)
+    {
+      if (count++ == BEFORE_SKIP_FRAMES)
+	{
+	  struct call_stack *scans[AFTER_SKIP_FRAMES];
+	  int i;
+	  for (i = 0; i < AFTER_SKIP_FRAMES && scan; ++i, scan = scan->next)
+	    scans[i] = scan;
+	  if (scan == NULL)
+	    scan = scans[0];
+	  else
+	    {
+	      for (i = 0; scan; scan = scan->next)
+		scans[i++ % AFTER_SKIP_FRAMES] = scan;
+	      mprintf(muderr, "   *** %d frame%s skipped ***" EOL, i,
+		      i == 1 ? "" : "s");
+	      scan = scans[i % AFTER_SKIP_FRAMES];
+	    }	  
+	}
+
+      switch (scan->type)
+	{
+	case call_c:
+	  if (onstack) print_c_frame_stack(scan);
+	  else print_c_frame(scan);
+	  break;
+	case call_bytecode:
+	  print_bytecode_frame(scan, onstack);
+	  break;
+	case call_compiled:
+#ifdef NOCOMPILER
+	  abort();
+#else
+	  cc = print_cc_frame(cc);
+	  break;
+#endif
+	}
+      /* Only the first frame can be on the stack */
+      onstack = FALSE;
+    }
+}	
+
+static long stack_depth_count;
+static struct vector *stack_trace_res;
+
+#ifndef NOCOMPILER
+static void count_stack_depth(struct mcode *mcode)
+{
+  ++stack_depth_count;
+}
+
+static void get_cc_stack_trace(struct mcode *mcode)
+{
+  stack_trace_res->data[stack_depth_count++] = mcode;
+}
+#endif
+
+struct vector *get_mudlle_call_trace(void)
+{
+  struct gcpro gcpro1;
+  
+  struct call_stack *scan;
+
+#ifndef NOCOMPILER
+  struct ccontext *cc = &ccontext;
+#endif
+
+  stack_depth_count = 0;
+
+  for (scan = call_stack; scan; scan = scan->next)
+#ifndef NOCOMPILER
+    if (scan->type == call_compiled)
+      cc = iterate_cc_frame(cc, count_stack_depth);
+    else
+#endif
+      ++stack_depth_count;
+
+  stack_trace_res = alloc_vector(stack_depth_count);
+  GCPRO1(stack_trace_res);
+
+#ifndef NOCOMPILER
+  cc = &ccontext;
+#endif
+
+  stack_depth_count = 0;
+  for (scan = call_stack; scan; scan = scan->next)
+    {
+      switch (scan->type)
+	{
+	case call_c:
+	  stack_trace_res->data[stack_depth_count++] = scan->u.c.prim;
+	  break;
+	case call_bytecode:
+	  stack_trace_res->data[stack_depth_count++] = scan->u.mudlle.fn;
+	  break;
+	case call_compiled:
+#ifndef NOCOMPILER
+	  cc = iterate_cc_frame(cc, get_cc_stack_trace);
+#endif
+	  abort();
+	  break;
+	}
+    }
+  UNGCPRO();
+
+  return stack_trace_res;
+}
+
 static void basic_error(runtime_errors error, int onstack)
 {
   if (catch_context->display_error && muderr)
     {
-      struct call_stack *scan;
-      struct ccontext *cc = &ccontext;
-
       if (mudout) mflush(mudout);
-      print_error(error);
-
-      for (scan = call_stack; scan; scan = scan->next)
-	{
-	  switch (scan->type)
-	    {
-	    case call_c:
-	      if (onstack) print_c_frame_stack(scan);
-	      else print_c_frame(scan);
-	      break;
-	    case call_bytecode:
-	      print_bytecode_frame(scan, onstack);
-	      break;
-	    case call_compiled:
-	      cc = print_cc_frame(cc);
-	      break;
-	    }
-	  /* Only the first frame can be on the stack */
-	  onstack = FALSE;
-	}
-	
+      print_call_trace(error, onstack);
     }
+
+  if (mudcalltrace)
+    {
+      struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
+      struct list *l = mudcalltrace;
+      struct list *elem = NULL, *prev = NULL;
+      Mio omuderr;
+
+      omuderr = muderr;
+      GCPRO2(omuderr, l);
+      GCPRO(gcpro3, elem);
+      GCPRO(gcpro4, prev);
+
+      while (l)
+	{
+	  elem = l->car;
+	  assert(TYPE(elem, type_pair));
+
+	  if (TYPE(elem->car, type_outputport))
+	    muderr = elem->car;
+	  else
+	    {
+	      if (prev == NULL)
+		mudcalltrace = l->cdr;
+	      else
+		prev->cdr = l->cdr;
+	      goto nevermind;
+	    }
+
+	  if (catch_context->display_error && muderr == omuderr)
+	    goto nevermind;
+
+	  if (istrue(elem->cdr) && (!catch_context->display_error || omuderr))
+	    goto nevermind;
+
+	  print_call_trace(error, onstack);
+	  mputs(EOL, muderr);
+	  pflush(muderr);
+
+	  prev = l;
+
+	nevermind:
+	  l = l->cdr;
+	}
+
+      muderr = omuderr;
+      UNGCPRO();
+    }
+
   mthrow(SIGNAL_ERROR, makeint(error));
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -28,10 +28,212 @@
 #include "types.h"
 #include "alloc.h"
 
+#ifdef ALLOC_STATS
+
+#define ALLOC_PAIR_STATS
+#define ALLOC_VARIABLE_STATS
+
+struct file_line
+{
+  struct file_line *next;
+  char *file;
+  int line;
+  unsigned key;
+  int count;
+  int size;
+};
+
+struct file_line_stats
+{
+  int size, used;
+  struct file_line **slots;
+};
+
+static struct file_line_stats closure_alloc_stats;
+static struct file_line_stats pair_alloc_stats;
+static struct file_line_stats variable_alloc_stats;
+
+static unsigned str_int_hash(const char *str, int line)
+{
+  unsigned key = line; 
+  while (*str)
+    {
+      key = (key * 31) ^ *(unsigned char *)str;
+      ++str;
+    }
+  return key;
+}
+
+struct vector *file_line_stat_vector(struct file_line_stats *stats)
+{
+  struct vector *res = alloc_vector(stats->used);
+  struct vector *vec = NULL;
+
+  struct gcpro gcpro1, gcpro2;
+  int used = 0, i;
+  
+  GCPRO2(res, vec);
+  for (i = 0; i < stats->size; ++i) {
+    struct file_line *fl;
+
+    for (fl = stats->slots[i]; fl; fl = fl->next)
+      {
+	struct string *str;
+	
+	vec = alloc_vector(4);
+	str = alloc_string(fl->file);
+	vec->data[0] = str;
+	vec->data[1] = makeint(fl->line);
+	vec->data[2] = makeint(fl->count);
+	vec->data[3] = makeint(fl->size);
+
+	fl->count = fl->size = 0;
+
+	res->data[used++] = vec;
+      }
+  }
+
+  return res;
+}
+
+struct vector *get_closure_alloc_stats(void)
+{
+  return file_line_stat_vector(&closure_alloc_stats);
+}
+
+struct vector *get_pair_alloc_stats(void)
+{
+  return file_line_stat_vector(&pair_alloc_stats);
+}
+
+struct vector *get_variable_alloc_stats(void)
+{
+  return file_line_stat_vector(&variable_alloc_stats);
+}
+
+static struct file_line *file_line_stat_lookup(struct file_line_stats *stats,
+					       const char *file,
+					       int line)
+{
+  unsigned key = str_int_hash(file, line);
+  struct file_line *fl;
+
+  if (stats->size == 0)
+    return NULL;
+
+  for (fl = stats->slots[key % stats->size]; fl; fl = fl->next)
+    if (fl->key == key && fl->line == line
+	&& !strcmp(fl->file, file))
+      return fl;
+
+  return NULL;
+}
+
+static void inc_file_line(struct file_line_stats *stats, const char *file,
+			  int line, int size)
+{
+  struct file_line *data = file_line_stat_lookup(stats, file, line);
+
+  if (data == NULL)
+    {
+      unsigned key = str_int_hash(file, line);
+
+      if (stats->used * 3 >= stats->size * 2)
+	{
+	  struct file_line **new;
+	  int i, osize = stats->size;
+
+	  stats->size = osize ? osize * 2 : 16;
+	  new = malloc(sizeof *new * stats->size);
+	  memset(new, 0, sizeof *new * stats->size);
+	  
+	  for (i = 0; i < osize; ++i)
+	    {
+	      struct file_line *fl = stats->slots[i];
+	      while (fl)
+		{
+		  struct file_line *next = fl->next;
+		  
+		  fl->next = new[fl->key % stats->size];
+		  new[fl->key % stats->size] = fl;
+
+		  fl = next;
+		}
+	    }
+
+	  free(stats->slots);
+	  stats->slots = new;
+	}
+
+      data = malloc(sizeof *data);
+      data->key = key;
+      data->file = strdup(file);
+      data->line = line;
+      data->count = 1;
+      data->size = size;
+
+      data->next = stats->slots[key % stats->size];
+      stats->slots[key % stats->size] = data;
+
+      ++stats->used;
+
+      return;
+    }
+
+  ++data->count;
+  data->size += size;
+}
+
+static void record_allocation(struct file_line_stats *stats, long size)
+{
+  struct call_stack *cs = call_stack;
+
+  if (cs == NULL)
+    {
+      inc_file_line(stats,
+		    "<nowhere>", 0,
+		    size);
+      return;
+    }
+
+  while (cs->next && cs->type == call_c)
+    cs = cs->next;
+  
+  switch (cs->type) {
+  case call_bytecode:
+    inc_file_line(stats,
+		  cs->u.mudlle.fn->code->filename->str,
+		  cs->u.mudlle.fn->code->lineno,
+		  size);
+    break;
+  case call_c:
+    inc_file_line(stats,
+		  cs->u.c.op->name,
+		  -1,
+		  size);
+    break;
+  case call_compiled:
+    inc_file_line(stats,
+		  "<compiled>",
+		  0,
+		  size);
+    break;
+  default:
+    assert(0);
+  }
+}
+
+#endif /* ALLOC_STATS */
+
 struct closure *unsafe_alloc_closure(ulong nb_variables)
 {
-  struct closure *newp = (struct closure *)unsafe_allocate_record(type_closure, nb_variables + 1);
+  struct closure *newp;
 
+#ifdef ALLOC_CLOSURE_STATS
+  record_allocation(&closure_alloc_stats, sizeof(struct obj) + (nb_variables + 1) * sizeof(value));
+#endif
+
+  newp = (struct closure *)unsafe_allocate_record(type_closure, nb_variables + 1);
   newp->o.flags |= OBJ_READONLY;
 
   return newp;
@@ -42,8 +244,12 @@ struct closure *alloc_closure0(struct code *code)
   struct closure *newp;
   struct gcpro gcpro1;
 
-  GCCHECK(code);
   GCPRO1(code);
+
+#ifdef ALLOC_CLOSURE_STATS
+  record_allocation(&closure_alloc_stats, sizeof(struct obj) + sizeof(value));
+#endif
+
   newp = (struct closure *)allocate_record(type_closure, 1);
   newp->code = code;
   newp->o.flags |= OBJ_READONLY;
@@ -76,6 +282,9 @@ struct variable *alloc_variable(value val)
 
   GCCHECK(val);
   GCPRO1(val);
+#ifdef ALLOC_VARIABLE_STATS
+  record_allocation(&variable_alloc_stats, sizeof(struct obj) + sizeof(value));
+#endif
   newp = (struct variable *)unsafe_allocate_record(type_variable, 1);
   newp->vvalue = val;
   UNGCPRO();
@@ -154,6 +363,9 @@ struct list *alloc_list(value car, value cdr)
   GCCHECK(car);
   GCCHECK(cdr);
   GCPRO2(car, cdr);
+#ifdef ALLOC_PAIR_STATS
+  record_allocation(&pair_alloc_stats, sizeof(struct list));
+#endif
   newp = (struct list *)unsafe_allocate_record(type_pair, 2);
   newp->car = car;
   newp->cdr = cdr;
@@ -200,7 +412,7 @@ int mudlle_strtoint(const char *sp, int *i)
   int lim, limrad;
   int sign, radix;
 
-  while (isspace(*sp)) 
+  while (isspace(*(unsigned char *)sp)) 
     ++sp;
 
   if (*sp == '+' || *sp == '-')
@@ -274,7 +486,7 @@ int mudlle_strtofloat(const char *sp, double *d)
 
       sp += 2;
       for (i = 0; i < 16; ++i)
-	if (!isxdigit(sp[++i]))
+	if (!isxdigit((unsigned char)sp[++i]))
 	  return 0;
       if (sp[16]) 
 	return 0;

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,7 +25,7 @@ requires compiler, vars, flow, ins3,
 defines mc:optimise_function, mc:recompute_vars
 reads mc:verbose
 [
-  | fold, compute_ops, trap_ops, branch_ops, useless_instructions,
+  | fold, compute_ops, branch_ops, useless_instructions,
     remove_instruction, fold_constants, propagate_copies,
     eliminate_dead_code, change, fold_branch, pfoldbranch, partialfold |
 
@@ -78,7 +78,7 @@ reads mc:verbose
      fn (x, y) if (integer?(x) && integer?(y)) true . x - y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x * y else false,
      fn (x, y) if (!integer?(x) || !integer?(y) || y == 0) false else true . x / y,
-     fn (x, y) if (integer?(x) || !integer?(y) || y == 0) false else true . x % y,
+     fn (x, y) if (!integer?(x) || !integer?(y) || y == 0) false else true . x % y,
      fn (x) if (integer?(x)) true . -x else false,
      fn (x) if (integer?(x)) true . not x else false,
      fn (x) if (integer?(x)) true . ~x else false,
@@ -95,6 +95,7 @@ reads mc:verbose
            if (y >= 0 && y < string_length(x)) true . x[y]
 	   else false
          else false
+       else if (string?(y) && table?(x)) true . x[y]
        else false,
      false,
      fn (x, y) false, // cons's are mutable
@@ -502,10 +503,9 @@ reads mc:verbose
   
   remove_instruction = fn (f, ilpos)
     [
-      | il, ins, block, first, nblock, olabel |
+      | il, block, first, nblock, olabel |
       
       il = dget(ilpos);
-      ins = il[mc:il_ins];
       il[mc:il_ins] = null; // note removal of instruction
       block = il[mc:il_node];
       first = graph_node_get(block)[mc:f_ilist];
@@ -550,7 +550,7 @@ reads mc:verbose
   
   eliminate_dead_code = fn (f)
     [
-      | fg, entry, rem, useless, fval |
+      | fg, entry, useless, fval |
       
       // assumes that edges removed because of branch changes
       // have already been handled

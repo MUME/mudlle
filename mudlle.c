@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -39,6 +39,8 @@
 #ifdef USE_READLINE
 #  include <readline/history.h>
 #  include <readline/readline.h>
+
+#  define HISTORY_FILE (char *)".mudlle-history"
 #endif
 
 extern FILE *yyin;
@@ -104,6 +106,8 @@ int main(int argc, char **argv)
   struct oport *out;
 
 #ifdef USE_READLINE
+  using_history();
+  read_history(HISTORY_FILE);
   rl_bind_key('\t', rl_insert);
 #endif
 
@@ -147,6 +151,10 @@ int main(int argc, char **argv)
 #endif
     }
   session_end();
+
+#ifdef USE_READLINE
+  write_history(HISTORY_FILE);
+#endif
 
   return 0;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -37,6 +37,7 @@
 #include "call.h"
 #include "runtime/bigint.h"
 #include "table.h"
+#include "compile.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -185,12 +186,12 @@ value make_constant(constant c)
 
 typedef void (*gencode)(void *data, fncode fn);
 
-struct code *generate_function(function f, int toplevel, fncode fn);
-void generate_component(component comp, fncode fn);
-void generate_condition(component condition,
-			label slab, gencode scode, void *sdata,
-			label flab, gencode fcode, void *fdata,
-			fncode fn);
+static struct code *generate_function(function f, int toplevel, fncode fn);
+static void generate_component(component comp, fncode fn);
+static void generate_condition(component condition,
+			       label slab, gencode scode, void *sdata,
+			       label flab, gencode fcode, void *fdata,
+			       fncode fn);
 
 struct andordata
 {
@@ -211,10 +212,10 @@ static void andorcode(void *_data, fncode fn)
 		     fn);
 }
 
-void generate_condition(component condition,
-			label slab, gencode scode, void *sdata,
-			label flab, gencode fcode, void *fdata,
-			fncode fn)
+static void generate_condition(component condition,
+			       label slab, gencode scode, void *sdata,
+			       label flab, gencode fcode, void *fdata,
+			       fncode fn)
 {
   struct andordata data;
 
@@ -297,8 +298,8 @@ static void iff_code(void *_data, fncode fn)
   adjust_depth(-1, fn);
 }
 
-void generate_if(component condition, component success, component failure,
-		 fncode fn)
+static void generate_if(component condition, component success, 
+			component failure, fncode fn)
 {
   struct ifdata ifdata;
 
@@ -335,9 +336,10 @@ static void wexit_code(void *_data, fncode fn)
   set_label(wdata->exitlab, fn);
   generate_component(component_undefined, fn);
   branch(op_branch1, wdata->endlab, fn);
+  adjust_depth(-1, fn);
 }
 
-void generate_while(component condition, component iteration, fncode fn)
+static void generate_while(component condition, component iteration, fncode fn)
 {
   struct whiledata wdata;
 
@@ -351,6 +353,7 @@ void generate_while(component condition, component iteration, fncode fn)
   generate_condition(condition, wdata.mainlab, wmain_code, &wdata,
 		     wdata.exitlab, wexit_code, &wdata, fn);
   set_label(wdata.endlab, fn);
+  adjust_depth(1, fn);
 }
 
 void generate_args(clist args, fncode fn, uword *_count)
@@ -366,9 +369,10 @@ void generate_args(clist args, fncode fn, uword *_count)
   *_count = count;
 }
 
-void generate_block(block b, fncode fn)
+static void generate_block(block b, fncode fn)
 {
   clist cc = b->sequence;
+  vlist vl;
 
   env_block_push(b->locals);
 
@@ -378,16 +382,25 @@ void generate_block(block b, fncode fn)
       generate_component(cc->c, fn);
       if (cc->next) ins0(op_discard, fn);
     }
+
+  for (vl = b->locals; vl; vl = vl->next)
+    if (!vl->was_written)
+      if (!vl->was_read)
+	warning_line(b->filename, b->lineno, "local variable %s is unused", vl->var);
+      else
+	warning_line(b->filename, b->lineno, "local variable %s is never written", vl->var);
+    else if (!vl->was_read)
+      warning_line(b->filename, b->lineno, "local variable %s is never read", vl->var);
   env_block_pop();
 }
 
-void generate_execute(component acall, int count, fncode fn)
+static void generate_execute(component acall, int count, fncode fn)
 {
   /* Optimise main case: calling a given global function */
   if (acall->vclass == c_recall)
     {
       ulong offset;
-      variable_class vclass = env_lookup(acall->u.recall, &offset);
+      variable_class vclass = env_lookup(acall->u.recall, &offset, 1, 0);
 
       if (vclass == global_var)
 	{
@@ -399,16 +412,18 @@ void generate_execute(component acall, int count, fncode fn)
   ins1(op_execute, count, fn);
 }
 
-void generate_component(component comp, fncode fn)
+static void generate_component(component comp, fncode fn)
 {
   clist args;
+
+  set_lineno(comp->lineno, fn);
 
   switch (comp->vclass)
     {
     case c_assign:
       {
 	ulong offset;
-	variable_class vclass = env_lookup(comp->u.assign.symbol, &offset);
+	variable_class vclass = env_lookup(comp->u.assign.symbol, &offset, 0, 1);
 	component val = comp->u.assign.value;
 
 	if (val->vclass == c_closure)
@@ -425,6 +440,9 @@ void generate_component(component comp, fncode fn)
 	      }
 	  }
 	generate_component(comp->u.assign.value, fn);
+
+	set_lineno(comp->lineno, fn);
+
 	if (vclass == global_var)
 	  massign(offset, comp->u.assign.symbol, fn);
 	else
@@ -437,7 +455,7 @@ void generate_component(component comp, fncode fn)
     case c_recall:
       {
 	ulong offset;
-	variable_class vclass = env_lookup(comp->u.recall, &offset);
+	variable_class vclass = env_lookup(comp->u.recall, &offset, 1, 0);
 
 	if (vclass == global_var) mrecall(offset, comp->u.recall, fn);
 	else ins1(op_recall + vclass, offset, fn);
@@ -477,6 +495,7 @@ void generate_component(component comp, fncode fn)
 	uword count;
 
 	generate_args(comp->u.execute->next, fn, &count);
+	set_lineno(comp->lineno, fn);
 	generate_execute(comp->u.execute->c, count, fn);
 	break;
       }
@@ -489,8 +508,10 @@ void generate_component(component comp, fncode fn)
 	  generate_if(args->c,
 		      new_component(fnmemory(fn), c_block,
 				    new_codeblock(fnmemory(fn), NULL,
-				    new_clist(fnmemory(fn), args->next->c,
-				    new_clist(fnmemory(fn), component_undefined, NULL)))),
+						  new_clist(fnmemory(fn), args->next->c,
+							    new_clist(fnmemory(fn), component_undefined, NULL)),
+						  NULL,
+						  -1)),
 		      component_undefined,
 		      fn);
 	  break;
@@ -529,6 +550,7 @@ void generate_component(component comp, fncode fn)
 
 	    assert(comp->u.builtin.fn < last_builtin);
 	    generate_args(args, fn, &count);
+	    set_lineno(comp->lineno, fn);
 	    ins0(builtin_ops[comp->u.builtin.fn], fn);
 	    break;
 	  }
@@ -538,6 +560,7 @@ void generate_component(component comp, fncode fn)
 
 	    assert(comp->u.builtin.fn < last_builtin);
 	    generate_args(args, fn, &count);
+	    set_lineno(comp->lineno, fn);
 	    mexecute(builtin_functions[comp->u.builtin.fn], NULL, count, fn);
 	    break;
 	  }
@@ -547,7 +570,7 @@ void generate_component(component comp, fncode fn)
     }
 }
 
-struct code *generate_function(function f, int toplevel, fncode fn)
+static struct code *generate_function(function f, int toplevel, fncode fn)
 {
   struct code *c;
   struct string *help, *filename, *varname;
@@ -576,6 +599,9 @@ struct code *generate_function(function f, int toplevel, fncode fn)
   GCPRO(gcpro3, filename);
 
   newfn = new_fncode(toplevel);
+
+  set_lineno(f->lineno, newfn);
+
   if (f->varargs)
     /* varargs makes a vector from the first nargs entries of the stack and
        stores it in local value 0 */
@@ -634,12 +660,13 @@ struct code *generate_function(function f, int toplevel, fncode fn)
   return c;
 }
 
-static struct closure *compile_code(block b, int seclev)
+struct closure *compile_code(mfile f, int seclev)
 {
   struct code *cc;
   struct gcpro gcpro1;
   uword dummy;
   fncode top;
+  block b = f->body;
 
   compile_level = seclev;
   erred = FALSE;
@@ -655,8 +682,9 @@ static struct closure *compile_code(block b, int seclev)
   delete_fncode(top);
   UNGCPRO();
 
-  if (erred) return NULL;
-  else return alloc_closure0(cc);
+  if (erred)
+    return NULL;
+  return alloc_closure0(cc);
 }
 
 int interpret(value *result, int seclev, int reload)
@@ -668,23 +696,29 @@ int interpret(value *result, int seclev, int reload)
   parser_block = new_block();
   if ((f = parse(parser_block)))
     {
-      if (f->name && !reload && module_status(f->name) != module_unloaded)
+      enum module_status status;
+
+      if (f->name && !reload
+	  && (status = module_status(f->name)) != module_unloaded)
 	{
 	  free_block(parser_block);
-	  return TRUE;
+	  return status == module_loaded;
 	}
 
-      if (mstart(parser_block, f))
+      if (mstart(parser_block, f, seclev))
 	{
-	  value closure = compile_code(f->body, seclev);
+	  struct closure *closure = compile_code(f, seclev);
 
 	  if (closure)
 	    {
+	      mwarn_module();
+
 	      *result = mcatch_call0(closure);
 
 	      ok = exception_signal == 0;
 	    }
-	  if (f->name) module_set(f->name, ok ? module_loaded : module_error);
+	  if (f->name)
+	    module_set(f->name, ok ? module_loaded : module_error, seclev);
 	}
     }
 

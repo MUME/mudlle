@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -21,6 +21,7 @@
 
 #ifndef SYMBOL_H
 #define SYMBOL_H
+
 
 value code_table_ref(struct table *tab, struct string *s);
 value code_table_set(struct table *tab, struct string *s, value c);

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -92,46 +92,54 @@ writes mc:this_module, mc:erred, mc:linkrun
   map = lmap;
   foreach = lforeach;
 
+  // false - failed linking
+  // null  - failed running
+  // true  - ok
   mc:linkrun = fn (prelinked_module, seclev, reload)
     [
-      | ok, mname |
+      | res, mname |
 
       mname = prelinked_module[pmodule_name];
       if (!reload && mname && module_status(mname) != module_unloaded)
 	exit<function> true;
 
-      ok = false;
+      res = false;
       mc:erred = false;
       mc:this_module = prelinked_module;
-      if (mstart(prelinked_module))
+      if (mstart(prelinked_module, seclev))
 	[
 	  if (!mc:erred) // run only if no errors
 	    [
 	      | code |
 	  
 	      code = make_code(prelinked_module[pmodule_body], seclev);
-	      ok = true;
-	      catch_error(fn () make_closure(code)(), false);
+	      res = null;
+	      catch_error(fn () [
+		make_closure(code)();
+		res = true;
+	      ], false);
 	    ];
 
 	  if (mname)
-	    if (ok && prelinked_module[pmodule_protect])
+	    if (res == true && prelinked_module[pmodule_protect])
 	      [
-		module_set!(mname, module_protected);
+		module_set!(mname, module_protected, seclev);
 		// check immutability, otherwise dependencies on immutable
 		// symbols of the loaded module might fail
 		detect_immutability();
 	      ]
 	    else
-	      module_set!(mname, if (ok) module_loaded else module_error);
+	      module_set!(mname, 
+			  if (res == true) module_loaded else module_error,
+			  seclev);
 	];
 
       mc:this_module = null;
 
-      ok
+      res
     ];
 
-  mstart = fn (m)
+  mstart = fn (m, seclev)
     [
       | mname |
 
@@ -139,12 +147,20 @@ writes mc:this_module, mc:erred, mc:linkrun
       if (mname)
 	[
 	  // unload it
-	  if (!module_unload(mname)) exit<function> false; // can't unload, stop
-	  module_set!(mname, module_loading);
+	  if (module_seclevel(mname) > seclev)
+	    [
+	      display(format("cannot unload module %s (seclevel %s vs %s)%n",
+			     mname,
+			     module_seclevel(mname), seclev));
+	      exit<function> false;
+	    ];
+	  if (!module_unload(mname))
+	    exit<function> false; // can't unload, stop
+	  module_set!(mname, module_loading, seclev);
 	];
 
       // load & check imported modules
-      foreach
+      table_foreach
 	(fn (mod)
 	 [
 	   | mstatus, iname, minfo, erred |
@@ -171,7 +187,7 @@ writes mc:this_module, mc:erred, mc:linkrun
 	     else
 	       check_dependencies(cdr(minfo), iname);
 	 ],
-	 table_list(m[pmodule_imports]));
+	 m[pmodule_imports]);
 
       // Change status of variables
       foreach
@@ -226,7 +242,7 @@ writes mc:this_module, mc:erred, mc:linkrun
 		   
   make_code = fn (prelinked_fn, seclev)
     [
-      | csts, info |
+      | csts |
 
       // make code for all sub-functions
       csts =
@@ -271,7 +287,7 @@ writes mc:this_module, mc:erred, mc:linkrun
     //   on the current state of the symbols from the modules that it
     //   required.
     [
-      lforeach
+      table_foreach
 	(fn (imp)
 	 [
 	   | minfo |
@@ -285,7 +301,7 @@ writes mc:this_module, mc:erred, mc:linkrun
 	     // strong dependencies: may depend on type, value, etc of symbol
 	     set_cdr!(minfo, lmap(fn (v) dependency(v), cdr(minfo)));
 	 ],
-	 table_list(imports));
+	 imports);
 
       imports
     ];

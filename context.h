@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -65,11 +65,13 @@ context (in that case the current value is in global variable x).
 /* ---------------- */
 
 #ifndef USE_CCONTEXT
+
 struct ccontext 
 {
   int dummy;
 };
-#endif
+
+#else  /* USE_CCONTEXT */
 
 #ifdef i386
 struct ccontext {
@@ -90,6 +92,8 @@ struct ccontext {
 };
 #endif
 
+#endif /* USE_CCONTEXT */
+
 extern struct ccontext ccontext;
 
 extern uword seclevel;		/* Security level of the function */
@@ -108,10 +112,11 @@ struct call_stack
       struct code *code;	/* Code for this function */
       struct vector *locals;	/* Local vars */
       int nargs;		/* -1 = don't know yet */
+      int offset;		/* Instr. offset called from */
     } mudlle;
 
     struct {
-      struct primitive_ext *op;
+      struct primitive *prim;
       value arg1, arg2, arg3, arg4, arg5;
       int nargs;
     } c;
@@ -183,12 +188,20 @@ struct session_context
   uword old_minlevel;
   ulong old_xcount;
   ulong call_count;
+  ulong recursion_count;
+#ifdef i386
+  ulong old_stack_limit;
+#endif
 };
 
 extern struct session_context *session_context;
 
 extern ulong xcount;			/* Loop detection */
 extern uword minlevel;			/* Minimum security level */
+
+#ifdef i386
+extern ulong hard_mudlle_stack_limit, mudlle_stack_limit;
+#endif
 
 void session_start(struct session_context *newp,
 		   uword new_minlevel,
@@ -211,5 +224,10 @@ void reset_context(void);
 
 void context_init(void);
 /* Effects: Initialises module */
+
+extern struct list *mudcalltrace;
+
+void remove_call_trace(value v);
+void add_call_trace(value v, int unhandled_only);
 
 #endif

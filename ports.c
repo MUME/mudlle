@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -32,8 +32,11 @@
 #include "utils.h"
 #include "utils.charset.h"
 
+
 /* The various types of input & output ports */
 
+static struct string_oport *string_oport_cache;
+static int string_oport_cache_used;
 
 #define STRING_BLOCK_SIZE 512	/* Size of each block */
 
@@ -93,6 +96,23 @@ static struct string_oport_block *new_string_block(void)
   return newp;
 }
 
+void empty_string_oport(struct oport *_p)
+{
+  struct string_oport *p = (struct string_oport *)_p;
+
+  assert(p->first);
+  assert(p->current);
+
+  if (p->first != p->current) {
+    p->current->next = free_blocks;
+    free_blocks = p->first->next;
+    p->first->next = NULL;
+    p->current = p->first;
+  }
+
+  p->pos = makeint(0);
+}
+
 static void output_string_close(struct oport *_p)
 {
   struct string_oport *p = (struct string_oport *)_p;
@@ -110,6 +130,13 @@ static void output_string_close(struct oport *_p)
   p->current->next = free_blocks;
   free_blocks = p->first;
   p->first = p->current = NULL;
+
+  if (string_oport_cache_used < 1024)
+    {
+      p->first = (void *)string_oport_cache;
+      string_oport_cache = p;
+      ++string_oport_cache_used;
+  }
 }
 
 static void string_flush(struct oport *_p)
@@ -197,16 +224,29 @@ static struct oport_methods string_port_methods = {
   string_flush
 };
 
+static struct string_oport *get_string_oport(void)
+{
+  if (string_oport_cache)
+    {
+      struct string_oport *p = string_oport_cache;
+      string_oport_cache = (void *)p->first;
+      --string_oport_cache_used;
+      return p;
+    }
+  return (struct string_oport *) allocate_record(type_outputport, 4);
+}
+
+static struct gtemp *mstring_port_methods, *mstring_7bit_port_methods;
+static struct gtemp *mfile_port_methods;
+
 value make_string_outputport(void)
 {
-  struct string_oport *p = (struct string_oport *) allocate_record(type_outputport, 4);
+  struct string_oport *p = get_string_oport();
   struct gcpro gcpro1;
-  struct gtemp *m;
   struct string_oport_block *blk;
 
   GCPRO1(p);
-  m = allocate_temp(type_internal, &string_port_methods);
-  p->p.methods = m;
+  p->p.methods = mstring_port_methods;
   blk = new_string_block();
   p->first = p->current = blk;
   p->pos = makeint(0);
@@ -267,14 +307,12 @@ static struct oport_methods string_7bit_port_methods = {
 
 value make_string_7bit_outputport(void)
 {
-  struct string_oport *p = (struct string_oport *) allocate_record(type_outputport, 4);
+  struct string_oport *p = get_string_oport();
   struct gcpro gcpro1;
-  struct gtemp *m;
   struct string_oport_block *blk;
 
   GCPRO1(p);
-  m = allocate_temp(type_internal, &string_7bit_port_methods);
-  p->p.methods = m;
+  p->p.methods = mstring_7bit_port_methods;
   blk = new_string_block();
   p->first = p->current = blk;
   p->pos = makeint(0);
@@ -336,13 +374,12 @@ value make_file_outputport(FILE *f)
 {
   struct file_oport *p = (struct file_oport *) allocate_record(type_outputport, 2);
   struct gcpro gcpro1;
-  struct gtemp *m;
+  struct gtemp *mf;
 
   GCPRO1(p);
-  m = allocate_temp(type_internal, &file_port_methods);
-  p->p.methods = m;
-  m = allocate_temp(type_internal, f);
-  p->file = m;
+  p->p.methods = mfile_port_methods;
+  mf = allocate_temp(type_internal, f);
+  p->file = mf;
   UNGCPRO();
 
   return p;
@@ -435,6 +472,7 @@ void port_append(struct oport *p1, struct oport *_p2)
   UNGCPRO();
 }
 
+
 /* C I/O routines for use with the ports */
 /* ------------------------------------- */
 
@@ -468,7 +506,7 @@ char *int2str(char *str, int base, ulong n, int is_signed)
 	{
 	  /* this is to take care of LONG_MIN */
 	  *--pos = basechars[abs((long)n % base)];
-	  (long)n /= base;
+	  n = (long)n / base;
 	}
       n = -(long)n;
     }
@@ -564,17 +602,26 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	  fmt++;
 	}
 
-      while (isdigit(*fmt))
+      if (*fmt == '*')
 	{
-	  fsize = fsize * 10 + *fmt - '0';
-	  fmt++;
+	  fsize = va_arg(args, int);
+	  ++fmt;
 	}
+      else
+	while (isdigit(*(unsigned char *)fmt))
+	  fsize = fsize * 10 + *fmt++ - '0';
 
       if (*fmt == '.')
 	{
 	  fprec = 0;
-	  while (isdigit(*++fmt))
-	    fprec = fprec * 10 + *fmt - '0';
+	  if (*++fmt == '*')
+	    {
+	      fprec = va_arg(args, int);
+	      ++fmt;
+	    }
+	  else
+	    while (isdigit(*(unsigned char *)fmt))
+	      fprec = fprec * 10 + *fmt++ - '0';
 	}
 
       if (*fmt == 'l')
@@ -629,12 +676,10 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	case 's':
 	  add = va_arg(args, const char *);
 	  if (!add) add = "(null)";
-	  if (fprec > 0 &&
-	      strlen(add) > fprec)
+	  if (fprec >= 0 && !memchr(add, 0, fprec))
 	    {
-	      strncpy(buf, add, fprec);
-	      buf[fprec] = 0;
-	      add = buf;
+	      addlen = fprec;
+	      goto have_addlen;
 	    }
 	  break;
 	case 'c':
@@ -643,16 +688,24 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	  break;
 	case 'f':
 	  if (fprec >= 0)
-	    sprintf(buf, "%.*f", fprec, va_arg(args, double));
+	    {
+	      char *abuf = alloca(fprec + 16);
+	      sprintf(abuf, "%.*f", fprec, va_arg(args, double));
+	      add = abuf;
+	    }
 	  else
-	    sprintf(buf, "%f", va_arg(args, double));
-	  add = buf;
+	    {
+	      sprintf(buf, "%f", va_arg(args, double));
+	      add = buf;
+	    }
 	  break;
 	default: assert(0);
 	}
+      addlen = strlen(add);
+    have_addlen:
+
       fmt++;
 
-      addlen = strlen(add);
       if (fsize > 0 && !padright)
 	{
 	  int i = fsize - addlen;
@@ -689,4 +742,15 @@ void pprintf(struct oport *p, const char *fmt, ...)
 void ports_init(void)
 {
   staticpro((value *)&free_blocks);
+
+  mstring_port_methods = allocate_temp(type_internal, &string_port_methods);
+  staticpro((value *)&mstring_port_methods);
+
+  mstring_7bit_port_methods = allocate_temp(type_internal, &string_7bit_port_methods);
+  staticpro((value *)&mstring_7bit_port_methods);
+
+  mfile_port_methods = allocate_temp(type_internal, &file_port_methods);
+  staticpro((value *)&mfile_port_methods);
+
+  staticpro((value *)&string_oport_cache);
 }

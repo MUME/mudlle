@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,11 +22,34 @@
 #ifndef TYPES_H
 #define TYPES_H
 
-#include <alloca.h>
-
-#include "mvalues.h"
-
 /* The different types */
+
+#include "options.h"
+
+#ifdef __sparc__
+#include <sys/types.h>
+#endif
+
+#ifndef HAVE_ULONG
+#ifndef __sparc__
+typedef unsigned long ulong;
+#endif
+#endif
+typedef signed short word;
+typedef unsigned short uword;
+typedef signed char byte;
+typedef unsigned char ubyte;
+
+/* The basic classes of all objects, as seen by the garbage collector */
+enum garbage_type {
+  garbage_string,		/* contains binary, non-GCed data */
+  garbage_record,		/* container for other GCed data  */
+  garbage_code,			/* special for code 		  */
+  garbage_forwarded,		/* temporarily used during GCs 	  */
+  garbage_permanent,		/* primitives 			  */
+  garbage_temp,			/* container for C pointer 	  */
+  garbage_mcode			/* special for mcode 		  */
+};
 
 typedef enum 
 {
@@ -55,13 +78,26 @@ typedef enum
   last_synthetic_type
 } mtype;
 
-#define TYPE(v, want_type) \
-  (integerp((v)) ? (want_type) == type_integer : \
-   		   ((v) && ((struct obj *)(v))->type == (want_type)))
+/* The basic structure of all values */
+typedef void *value;
 
-#define TYPEOF(v) \
-  (integerp((v)) ? type_integer : \
-   !v ? type_null : ((struct obj *)(v))->type)
+struct obj 
+{
+  ulong size;			/* Total size in bytes, including header */
+  enum garbage_type garbage_type : 8;
+  mtype type : 8;
+  short flags;			/* Eg read-only */
+#ifdef GCDEBUG
+  ulong generation;
+#endif
+};
+
+#define TYPEOF(v)				\
+  (integerp(v) ? type_integer			\
+   : (v) == NULL ? type_null			\
+   : ((struct obj *)(v))->type)
+
+#define TYPE(v, want_type) ((want_type) == TYPEOF(v))
 
 /* Code is defined in values (it is known to the gc) */
 
@@ -88,8 +124,10 @@ struct mudlle_float
 struct bigint
 {
   struct obj	o;
+#ifdef USE_GMP
   mpz_t		mpz;
   mp_limb_t	limbs[1];
+#endif
 };
 
 struct variable			/* Is a record */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -62,9 +62,9 @@ TYPEDOP(vector_fill, "v x -> . Set all elements of v to x",
   undefined();
 }
 
-TYPEDOP(vector_ref, "v n -> x. Return the n'th element of v",
-	2, (struct vector *vec, value c),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
+EXT_TYPEDOP(vector_ref, "v n -> x. Return the n'th element of v",
+	    2, (struct vector *vec, value c),
+	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
 {
   long idx;
 
@@ -76,9 +76,9 @@ TYPEDOP(vector_ref, "v n -> x. Return the n'th element of v",
   return (vec->data[idx]);
 }
 
-TYPEDOP(vector_set, "v n x -> x. Set the n'th element of v to x",
-	3, (struct vector *vec, value i, value c),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.")
+EXT_TYPEDOP(vector_set, "v n x -> x. Set the n'th element of v to x",
+	    3, (struct vector *vec, value i, value c),
+	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.")
 {
   long idx;
 

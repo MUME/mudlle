@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,8 +20,8 @@
  */
 
 library phase4 // Phase 4: code generation
-requires system, sequences, dlist, misc, graph, 
-  compiler, vars, ins3, mp, flow, phase3, optimise
+requires system, sequences, misc, graph, compiler, vars, ins3, mp, 
+  flow, phase3, optimise
 defines mc:phase4
 reads mc:verbose
 [

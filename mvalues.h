@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,34 +22,23 @@
 #ifndef VALUES_H
 #define VALUES_H
 
-/* The basic structure of all values */
-typedef void *value;
+#include "types.h"
 
 /* Objects are either integers or pointers to more complex things (like variables)
    The low order bit differentiates between the 2, 0 for pointers, 1 for integers
    If the object is a pointer, it is directly valid, if an integer the low order
    bit must be ignored */
 
-#define pointerp(obj) ((obj) && ((long)obj & 1) == 0)
-#define integerp(obj) (((long)obj & 1) == 1)
+#define pointerp(obj) ((obj) && ((long)(obj) & 1) == 0)
+#define integerp(obj) (((long)(obj) & 1) == 1)
 
 /* Make & unmake integers */
-#define intval(obj) ((long)(obj) >> 1)
-#define makeint(i) ((value)(((i) << 1) + 1))
+#define intval(obj)  ((long)(obj) >> 1)
+#define uintval(obj) ((unsigned long)(obj) >> 1)
+#define makeint(i)   ((value)(((i) << 1) + 1))
 
 #define MAX_TAGGED_INT ((1 << 30) - 1)
 #define MIN_TAGGED_INT (-(1 << 30))
-
-struct obj 
-{
-  ulong size;			/* Total size in bytes, including header */
-  ubyte garbage_type;
-  ubyte type;
-  short flags;			/* Eg read-only */
-#ifdef GCDEBUG
-  ulong generation;
-#endif
-};
 
 #define OBJ_READONLY 1		/* Used for some values */
 #define OBJ_IMMUTABLE 2		/* Contains only pointers to other immutable
@@ -66,10 +55,6 @@ struct obj
 /* True if x is readonly */
 #define readonlyp(x) \
   (!pointerp((x)) || (((struct obj *)(x))->flags & OBJ_READONLY) != 0)
-
-/* The basic classes of all objects, as seen by the garbage collector */
-enum { garbage_string, garbage_record, garbage_code, garbage_forwarded,
-       garbage_permanent, garbage_temp, garbage_mcode };
 
 /* How each class of object is structured */
 
@@ -114,7 +99,7 @@ struct gpermanent
 
 /* The code structures are somewhat machine-dependent */
 
-#ifdef i386
+#if defined(i386) && !defined(NOCOMPILER)
 struct code
 {
   struct obj o;
@@ -129,7 +114,7 @@ struct code
   struct string *varname;
   struct string *filename;
   struct string *help;
-  ubyte filler1[4];
+  struct string *lineno_data;
   ubyte magic_dispatch[7];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
@@ -175,6 +160,7 @@ struct code
   struct string *varname;
   struct string *filename;
   struct string *help;
+  struct string *lineno_data;
   ubyte magic_dispatch[16];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
@@ -192,6 +178,7 @@ struct mcode /* machine-language code object */
   struct string *filename;
   struct string *varname;
   struct string *help;
+  void *filler;
   ubyte *myself;		/* Self address, for relocation */
   ubyte magic[8];		/* A magic pattern that doesn't occur in code */
   ulong mcode[1/*code_length*/];
@@ -245,12 +232,13 @@ struct code
   uword nb_locals;
   uword stkdepth;
   uword seclevel;
+  uword lineno;
   ulong call_count;		/* Profiling */
   ulong instruction_count;
   struct string *varname;
   struct string *filename;
   struct string *help;
-  uword lineno;
+  struct string *lineno_data;
   struct obj *constants[1/*nb_constants*/];
   /* instructions follow the constants array */
 };
@@ -263,6 +251,7 @@ struct mcode /* machine-language code object */
   struct string *help;
   struct string *varname;
   uword lineno;
+  uword seclevel;
   ubyte mcode[1];
 };
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -322,6 +322,16 @@ INLINE value invoke3(struct closure *c, value arg1, value arg2, value arg3)
   return NULL;
 }
 
+INLINE value invoke4(struct closure *c, value arg1, value arg2, value arg3, value arg4)
+/* Requires: c be a closure whose code is in machine code, i.e.
+     TYPEIS(c->code, type_mcode);
+   Effects: Executes c(arg1, arg2, arg3, arg4)
+   Returns: c()'s result
+*/
+{
+  return NULL;
+}
+
 INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
@@ -343,6 +353,23 @@ INLINE value invoke(struct closure *c, struct vector *args)
 }
 #endif
 
+int seclevel_violator(value c)
+{
+  struct obj *o = c;
+
+  switch (o->type)
+    {
+    case type_closure:
+      return seclevel_violator(((struct closure *)o)->code);
+    case type_code:
+      return ((struct code *)o)->seclevel < minlevel;
+    case type_mcode:
+      return ((struct mcode *)o)->seclevel < minlevel;
+    default:
+      return FALSE;
+    }
+}
+
 int callablep(value c, int nargs)
 /* Returns: FALSE if c is not something that can be called with
      nargs arguments.
@@ -363,6 +390,8 @@ int callablep(value c, int nargs)
 	  if (((struct primitive *)o)->op->nargs == nargs) return TRUE;
 	  break;
 	case type_varargs: return TRUE;
+	default:
+	  break;
 	}
     }
   return FALSE;
@@ -388,6 +417,8 @@ void callable(value c, int nargs)
 	  if (((struct primitive *)o)->op->nargs == nargs) return;
 	  break;
 	case type_varargs: return;
+	default:
+	  break;
 	}
     }
   runtime_error(error_wrong_parameters);
@@ -427,6 +458,7 @@ INLINE value call0(value c)
 	    result = ((struct primitive *)o)->op->op(args, 0);
 	    return result;
 	  }
+	default: break;
 	}
     }
   abort();
@@ -476,6 +508,7 @@ value call1(value c, value arg)
 	UNGCPRO();
 	result = ((struct primitive *)o)->op->op(args, 1);
       }
+    default: break;
     }
   abort();
 }
@@ -527,6 +560,7 @@ value call2(value c, value arg1, value arg2)
 	result = ((struct primitive *)o)->op->op(args, 2);
 	return result;
       }
+    default: break;
     }
   abort();
 }
@@ -579,6 +613,7 @@ value call3(value c, value arg1, value arg2, value arg3)
 	UNGCPRO();
 	result = ((struct primitive *)o)->op->op(args, 3);
       }
+    default: break;
     }
   abort();
 }
@@ -633,6 +668,7 @@ value call4(value c, value arg1, value arg2, value arg3, value arg4)
 	UNGCPRO();
 	result = ((struct primitive *)o)->op->op(args, 4);
       }
+    default: break;
     }
   abort();
 }
@@ -712,6 +748,7 @@ value call1plus(value c, value arg, struct vector *args)
 	result = ((struct primitive *)o)->op->op(args, nargs);
 	return result;
       }
+    default: break;
     }
   abort();
 }
@@ -781,6 +818,8 @@ value call(value c, struct vector *args)
       ((struct primitive *)o)->call_count++;
       result = ((struct primitive *)o)->op->op(args, nargs);
       return result;
+
+    default: break;
     }
   abort();
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -34,6 +34,7 @@
 #include "runtime/basic.h"
 #include "builtins.h"
 #include "context.h"
+
 
 #undef INLINE
 #define INLINE 
@@ -98,7 +99,12 @@ struct gcpro_list *gcpro_list;	/* List of values which need protection */
 
 static struct dynpro first, last;
 #define MAXROOTS 100
-static value *roots[MAXROOTS];
+static struct {
+  const char *desc, *file;
+  int line;
+  value *data;
+} roots[MAXROOTS];
+
 static ulong last_root;
 
 /* machine code roots */
@@ -114,10 +120,46 @@ void flush_icache(ubyte *from, ubyte *to);
 static void *permanent_obj[MAX_PERMANENT];
 #endif
 
-void staticpro(value *pro)
+void _staticpro(value *pro, const char *desc, const char *file, int line)
 {
   assert (last_root < MAXROOTS);
-  roots[last_root++] = pro;
+
+  if (strncmp(desc, "(value *)", 9) == 0)
+    desc += 9;
+  if (*desc == '&')
+    ++desc;
+  roots[last_root].data = pro;
+  roots[last_root].desc = desc;
+  roots[last_root].file = file;
+  roots[last_root].line = line;
+  ++last_root;
+}
+
+struct vector *get_staticpro_data(void)
+{
+  struct vector *res = alloc_vector(last_root);
+  struct gcpro gcpro1;
+  int i;
+
+  GCPRO1(res);
+  for (i = 0; i < last_root; ++i)
+    {
+      struct vector *v = alloc_vector(4);
+      struct string *str;
+      res->data[i] = v;
+
+      str = alloc_string(roots[i].desc);
+      ((struct vector *)res->data[i])->data[0] = str;
+
+      str = alloc_string(roots[i].file);
+      ((struct vector *)res->data[i])->data[1] = str;
+
+      ((struct vector *)res->data[i])->data[2] = makeint(roots[i].line);
+      ((struct vector *)res->data[i])->data[3] = *roots[i].data;
+    }
+  UNGCPRO();
+
+  return res;
 }
 
 void dynpro(struct dynpro *what, value obj)
@@ -204,7 +246,11 @@ static ulong newminorgen, newmajorgen;
 #ifdef GCSTATS
 struct gcstats gcstats;
 #endif
-ulong maxobjsize = 1024; /* biggest object created (ignores stuff done by compiler, but those aren't big) */
+
+#if defined(GCQDEBUG)
+ulong maxobjsize = 1024;        /* biggest object created (ignores stuff done
+				   by compiler, but those aren't big) */
+#endif
 
 /* Range affected by current GC */
 ubyte *gcrange_start, *gcrange_end;
@@ -291,6 +337,7 @@ INLINE static ubyte *scan(ubyte *ptr)
       if (pointerp(code->help)) special_forward((struct obj **)&code->help);
       if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
       if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
+      if (pointerp(code->lineno_data)) special_forward((struct obj **)&code->lineno_data);
       c = code->constants;
       cend = code->constants + code->nb_constants;
       while (c < cend)
@@ -304,10 +351,11 @@ INLINE static ubyte *scan(ubyte *ptr)
       saw_mcode = TRUE;
       scan_mcode((struct mcode *)obj);
       break;
+    case garbage_permanent: case garbage_temp:
+    case garbage_string: case garbage_forwarded:
+      break;
 #if 0
     /* Sanity checks */
-    case garbage_permanent: case garbage_temp: case garbage_string: 
-      break;
     default:
       fprintf(stderr, "gc: unknown garbage type %d\n",
 	      obj->garbage_type);
@@ -319,7 +367,7 @@ INLINE static ubyte *scan(ubyte *ptr)
 }
 
 #define MOVE_PAST_ZERO(data, endpos)					\
-  while (*(ulong *)data == 0 && data < endpos) data += sizeof(ulong)
+  while (data < endpos && *(ulong *)data == 0) data += sizeof(ulong)
 
 static ubyte *major_scan(ubyte *data)
 {
@@ -362,7 +410,6 @@ static void forward_roots(void)
   struct gcpro_list *protect_list;
   struct dynpro *dyn;
   ulong i;
-  value **root;
   struct call_stack *stk;
   struct session_context *sc;
 
@@ -370,7 +417,8 @@ static void forward_roots(void)
   forward_registers();
 
   /* Static roots */
-  for (root = roots, i = 0; i < last_root; root++, i++) safe_forward(*root);
+  for (i = 0; i < last_root; i++)
+    safe_forward(roots[i].data);
 
   /* Dynamic roots */
   for (dyn = first.next; dyn->next; dyn = dyn->next)
@@ -395,6 +443,8 @@ static void forward_roots(void)
       switch (stk->type)
 	{
 	case call_c:
+	  if (pointerp(stk->u.c.prim))
+	    special_forward((struct obj **)&stk->u.c.prim);
 	  switch (stk->u.c.nargs) {
 	  case 5:
 	  if (pointerp(stk->u.c.arg5)) special_forward((struct obj **)&stk->u.c.arg5);
@@ -438,8 +488,10 @@ static void forward_roots(void)
       if (sc->data) special_forward((struct obj **)&sc->data);
     }
 
+
   /* Static roots */
-  for (root = roots, i = 0; i < last_root; root++, i++) unmark_safe(*root);
+  for (i = 0; i < last_root; i++)
+    unmark_safe(roots[i].data);
 
   /* Forward protected C vars */
   for (aprotect = gcpro; aprotect; aprotect = aprotect->next)
@@ -587,6 +639,7 @@ INLINE static ubyte *minor_scan(ubyte *ptr)
   return ptr;
 }
 
+
 static void minor_collection(void)
 {
   ubyte *unscanned0, *oldstart0, *data;
@@ -594,6 +647,7 @@ static void minor_collection(void)
 #ifdef GCSTATS
   int i;
 #endif
+
 
   saw_mcode = FALSE;
   special_forward = minor_forward;
@@ -661,6 +715,7 @@ static void minor_collection(void)
   gcstats.usage_minor = endgen0 - posgen0;
   gcstats.usage_major = endgen1 - startgen1;
 #endif
+
 }
 
 static void scan_temp(ubyte *data)
@@ -946,6 +1001,7 @@ void garbage_collect(long n)
 
   /* No space, try a minor collection */
   minor_collection();
+
 #if 0
   fprintf(stderr, "minor\n"); fflush(stderr);
 #endif
@@ -1056,14 +1112,18 @@ void garbage_collect(long n)
   assert(posgen0 - n >= startgen0);
 }
 
-static INLINE void reserve(long n)
+long gc_reserve(long x)
 /* The basic allocation routine. Makes sure that n bytes can be allocated */
 /* Requires: n == ALIGN(n, sizeof(value))
 */
 {
-  if (posgen0 - n >= startgen0) return;
+  const long len = ALIGN(x, sizeof(value));
 
-  garbage_collect(n);
+  if (posgen0 - len >= startgen0)
+    return posgen0 - startgen0;
+
+  garbage_collect(len);
+  return -(posgen0 - startgen0);
 }
 
 INLINE static value fast_gc_allocate(long n)
@@ -1096,7 +1156,7 @@ value gc_allocate(long n)
   if (n > maxobjsize) maxobjsize = n;
 #endif
 
-  reserve(aligned);
+  gc_reserve(aligned);
   return fast_gc_allocate(aligned);
 }
 
@@ -1145,7 +1205,7 @@ struct gstring *allocate_string(ubyte type, ulong bytes)
   newp->o.flags = OBJ_IMMUTABLE;
 #ifdef GCSTATS
   gcstats.anb[type]++;
-  gcstats.asizes[type] += size;
+  gcstats.asizes[type] += ALIGN(size, sizeof(long));
 #endif
 
   return newp;
@@ -1202,7 +1262,7 @@ struct vector *allocate_locals(ulong n)
   struct vector *locals;
   value *var;
 
-  reserve(vecsize + n * varsize);
+  gc_reserve(vecsize + n * varsize);
 
   locals = fast_gc_allocate(vecsize);
   locals->o.size = vecsize;
@@ -1217,14 +1277,17 @@ struct vector *allocate_locals(ulong n)
   var = locals->data;
   while (n--)
     {
+#ifdef ALLOC_STATS
+      struct variable *v = alloc_variable(NULL);
+#else
       struct variable *v = fast_gc_allocate(varsize);
-
-      *var++ = v;
       v->o.size = varsize;
       v->o.garbage_type = garbage_record;
       v->o.type = type_variable;
       v->o.flags = 0;
       v->vvalue = NULL;
+#endif
+      *var++ = v;
 #ifdef GCSTATS
       gcstats.anb[type_variable]++;
       gcstats.asizes[type_variable] += varsize;
@@ -1332,6 +1395,7 @@ void save_restore(struct obj *obj)
 	  save_restore((struct obj *)code->help);
 	  save_restore((struct obj *)code->filename);
 	  save_restore((struct obj *)code->varname);
+	  save_restore((struct obj *)code->lineno_data);
 	  i = code->nb_constants;
 	  c = (value *)&code->constants;
 	  while (i) { --i; save_restore(*c++); }
@@ -1339,6 +1403,9 @@ void save_restore(struct obj *obj)
 	}
 	case garbage_mcode:
 	  save_restore_mcode((struct mcode *)obj);
+	  break;
+	case garbage_permanent: case garbage_temp:
+	case garbage_string: case garbage_forwarded:
 	  break;
 	}
     }
@@ -1386,7 +1453,7 @@ unsigned long gc_size(value x, unsigned long *mutble)
 	{
 	  /* Be really sure that there is enough space for the header */
 	  GCPRO1(x);
-	  reserve(gcsize);
+	  gc_reserve(gcsize);
 	  UNGCPRO();
 
 	  major_offset = 0;
@@ -1523,7 +1590,7 @@ void *gc_save(value x, unsigned long *size)
 	{
 	  /* Be really sure that there is enough space for the header */
 	  GCPRO1(x);
-	  reserve(gcsize);
+	  gc_reserve(gcsize);
 	  UNGCPRO();
 
 	  major_offset = 0;
@@ -1538,7 +1605,7 @@ void *gc_save(value x, unsigned long *size)
 	  gone.size = htonl(sizeof gone);
 	  gone.garbage_type = garbage_string;
 	  gone.type = type_gone;
-	  gone.flags = htons(0);
+	  gone.flags = htons(OBJ_READONLY | OBJ_IMMUTABLE);
 #ifdef GCDEBUG
 	  gone.generation = minorgen;
 #endif
@@ -1608,17 +1675,30 @@ INLINE static ubyte *load_scan(ubyte *ptr)
 
   ptr += ALIGN(obj->size, sizeof(value));
 
+#ifdef GCSTATS
+  gcstats.anb[obj->type]++;
+  gcstats.asizes[obj->type] += ALIGN(obj->size, sizeof(value));
+#endif
+
   if (obj->garbage_type == garbage_record)
     {
       struct grecord *rec = (struct grecord *)obj;
       struct obj **o, **recend;
+
+      if (obj->flags & OBJ_IMMUTABLE)
+	assert(obj->flags & OBJ_READONLY);
 
       recend = (struct obj **)((ubyte *)rec + rec->o.size);
       o = rec->data;
       while (o < recend)
 	{
 	  *o = (struct obj *)ntohl((long)*o);
-	  if (pointerp(*o)) special_forward(o);
+	  if (pointerp(*o))
+	    {
+	      special_forward(o);
+	      if (obj->flags & OBJ_IMMUTABLE)
+		assert((*o)->flags & OBJ_IMMUTABLE);
+	    }
 	  o++;
 	}
     }
@@ -1638,7 +1718,7 @@ static value _gc_load(int (*forwarder)(struct obj **ptr),
   /* Data is loaded into generation 0 */
 
   /* Make sure there is enough place for the value */
-  reserve(size - sizeof(ubyte *) - sizeof(value));
+  gc_reserve(size - sizeof(ubyte *) - sizeof(value));
 
   from_offset = load - (ubyte *)ntohl((long)*(ubyte **)load);
   major_offset = 0;
@@ -1930,7 +2010,7 @@ static INLINE void scan_mcode(struct mcode *code)
     {
       if (*mcode >> 30 == 1)	/* call instruction */
 	/* adjust offset by delta */
-	*mcode = 1 << 30 | (*mcode + delta) & (1 << 30) - 1;
+	*mcode = 1 << 30 | ((*mcode + delta) & ((1 << 30) - 1));
       mcode++;
     }
 }
@@ -2128,7 +2208,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
 
 #endif
 
-#ifdef i386
+#if defined(i386) && !defined(NOCOMPILER)
 void flush_icache(ubyte *from, ubyte *to)
 {
   /* No work */
@@ -2155,7 +2235,7 @@ static void forward_pc(ulong *pcreg)
 			      offsetof(struct mcode, magic));
       oldbase = base;
       GCCHECK(base);
-      special_forward((struct obj **)&base);
+      special_forward((struct obj **)((char *)&base)); /* type punning */
 
       /* And adjust the pc value for the new base location */
       *pcreg = (ulong)base + (*pcreg - (ulong)oldbase);
@@ -2367,3 +2447,72 @@ static INLINE void save_restore_mcode(struct mcode *code)
 }
 #endif
 
+#if 0
+
+static int what_generation(value o)
+{
+  if ((ubyte *)o >= startgen0 && (ubyte *)o < endgen0)
+    return 0;
+  if ((ubyte *)o >= startgen1 && (ubyte *)o < endgen1)
+    return 1;
+  assert(0);
+}
+
+void gc_verify(value _o, int start, int gen, int immut)
+{
+  struct obj *o = _o;
+
+  if (_o == NULL || (unsigned)_o & 1)
+    return;
+
+  if (start ? o->garbage_type & 0x80 : ~o->garbage_type & 0x80)
+    return;
+
+  if (gen < 0)
+    gen = what_generation(o);
+  else if (gen == 1)
+    assert(what_generation(o) == 1);
+  else
+    gen = what_generation(o);
+
+  if (immut == 1)
+    assert(immutablep(o));
+
+  immut = !!immutablep(o);
+
+  if (!start)
+    o->garbage_type &= ~0x80;
+
+  switch (o->garbage_type)
+    {
+    case garbage_string:
+      assert(o->type == type_string
+	     || o->type == type_gone);
+      break;
+    case garbage_record:
+      {
+	value *recend = (void *)o + o->size;
+	value *rec = (void *)(o + 1);
+
+	if (immut)
+	  assert(o->flags & OBJ_READONLY);
+
+	assert(o->type == type_vector
+	       || o->type == type_pair
+	       || o->type == type_table
+	       || o->type == type_symbol);
+
+	while (rec < recend)
+	  gc_verify(*rec++, start, gen, immut);
+
+	break;
+      }
+    default:
+      assert(0);
+    }
+ 
+  if (start)
+    o->garbage_type |= 0x80;
+}
+
+#endif /* 0 */

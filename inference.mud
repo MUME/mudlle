@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -693,7 +693,9 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	      | types |
 
 	      if ((types = primitive_type(prim)) != null)
-		new = lmap(fn (sig) instantiate_constraint(sig, args, dest), types);
+		new = lmap(fn (sig) instantiate_constraint(sig, args, dest), types)
+	      else
+		new = sequence(null, ndest, make_condition0(itype_any)) . null;
 	      if (primitive_flags(prim) & OP_NOESCAPE) escapes = FALSE;
 	    ]
 	  else
@@ -775,7 +777,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
       type = mc:itypemap[type];
       ctrue = sequence(make_condition1(type, var) . null, false, null);
       ctrue = build_iconstraint(lastil, ctrue . null);
-      cfalse = sequence(make_condition1(itype_any & ~type, var) . null,
+      cfalse = sequence(make_condition1((itype_any & ~type) | itype_other, var) . null,
 			false, null);
       cfalse = build_iconstraint(lastil, cfalse . null);
 

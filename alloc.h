@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,6 +23,12 @@
 #define ALLOC_H
 #include "mvalues.h"
 #include "types.h"
+
+#undef ALLOC_STATS
+
+#ifdef ALLOC_STATS
+struct vector *get_closure_alloc_stats(void);
+#endif
 
 void garbage_cleanup(void);
 void garbage_init(void);
@@ -70,15 +76,26 @@ struct gcpro
     value *obj;
 };
 
-#define GCPRO1(var) do { GCCHECK(var); gcpro1.next = gcpro; gcpro = &gcpro1; \
-		         gcpro1.obj = (value *)&var; } while(0)
+#define GCPRO(gc, var) do {			\
+  GCCHECK(var);					\
+  (gc).next = gcpro;				\
+  gcpro = &(gc);				\
+  (gc).obj = (value *)(void *)&(var);		\
+} while(0)
 
-#define GCPRO2(var1, var2) do { GCCHECK(var1); GCCHECK(var2); gcpro1.next = gcpro; gcpro1.obj = (value *)&var1; \
-			        gcpro2.next = &gcpro1; gcpro2.obj = (value *)&var2; \
-				gcpro = &gcpro2; } while(0)
-
-#define GCPRO(gc, var) do { GCCHECK(var); gc.next = gcpro; gcpro = &gc; \
-			    gc.obj = (value *)&var; } while(0)
+#define GCPRO1(var) GCPRO(gcpro1, var)
+#define GCPRO2(var1, var2) do {			\
+  GCPRO1(var1);					\
+  GCPRO(gcpro2, var2);				\
+} while (0)
+#define GCPRO3(var1, var2, var3) do { 		\
+  GCPRO2(var1, var2); 				\
+  GCPRO(gcpro3, var3);				\
+} while (0)
+#define GCPRO4(var1, var2, var3, var4) do {	\
+  GCPRO3(var1, var2, var3);			\
+  GCPRO(gcpro4, var4);				\
+} while (0)
 
 #define UNGCPRO() (gcpro = gcpro1.next)
 #define UNGCPRO1(gc) (gcpro = gc.next)
@@ -116,8 +133,10 @@ struct dynpro *protect(value v);
 value unprotect(struct dynpro *pro);
 
 /* Protection of global variables */
-void staticpro(value *pro);
+void _staticpro(value *pro, const char *desc, const char *file, int line);
+#define staticpro(ptr) _staticpro(ptr, #ptr, __FILE__, __LINE__)
 
+struct vector *get_staticpro_data(void);
 
 /* Values below are integer fractions (A/B) */
 
@@ -252,5 +271,10 @@ extern int registers_valid;		/* TRUE if static area is being used */
 #ifdef i386
 void patch_globals_stack(value oldglobals, value newglobals);
 #endif
+
+long gc_reserve(long n); /* Make sure n bytes are available,
+			    return x >= 0 if x bytes are available,
+			    and x >= n, otherwise return
+			    -N number of bytes available after gc. */
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,15 +19,17 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
+#include <alloca.h>
 #include <ctype.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <sys/param.h>
 #include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/param.h>
 #include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "runtime/runtime.h"
 #include "runtime/basic.h"
@@ -41,6 +43,10 @@
 #include "symbol.h"
 #include "call.h"
 #include "table.h"
+#include "mparser.h"
+#include "lexer.h"
+#include "compile.h"
+
 
 TYPEDOP(codep, "x -> b. TRUE if x is a function", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
@@ -56,6 +62,39 @@ TYPEDOP(apply, "fn v -> x. Excutes fn with arguments v, returns its result",
   TYPEIS(args, type_vector);
   callable(f, vector_len(args));
   return call(f, args);
+}
+
+SECOP(eval, "s -> x. Excute the expression in s and return its result. "
+      "On compile error, the message is display()'ed and error_compile "
+      "is caused.",
+      1, (struct string *str), 1, 0)
+{
+  block_t parser_block;
+  value closure;
+  char *scopy;
+  mfile f;
+
+  TYPEIS(str, type_string);
+  LOCALSTR(scopy, str);
+  read_from_string(scopy);
+
+  parser_block = new_block();
+  if (!(f = parse(parser_block)))
+    runtime_error(error_compile);
+
+  if (f->vclass != f_plain)
+    runtime_error(error_bad_value);
+
+  if (!(closure = compile_code(f, seclevel)))
+    runtime_error(error_compile);
+
+  return call0(closure);
+}
+
+OPERATION(call_trace, " -> v. Returns current call trace", 0, (void),
+	  OP_NOESCAPE)
+{
+  return get_mudlle_call_trace();
 }
 
 OPERATION(error, "n -> . Causes error n", 1, (value errno),
@@ -132,7 +171,7 @@ static typing tref = { "vn.x", "sn.n", "ts.x", "os.x", "ns.x", NULL };
 
 FULLOP(ref, "x1 x2 -> x3. Generic interface to lookup operations: x1[x2] -> x3",
        2, (value x1, value x2),
-       0, OP_LEAF | OP_NOALLOC | OP_NOESCAPE, tref)
+       0, OP_LEAF | OP_NOALLOC | OP_NOESCAPE, tref, /* extern */)
 {
   if (!pointerp(x1)) runtime_error(error_bad_type);
   switch (((struct obj *)x1)->type)
@@ -152,7 +191,7 @@ static typing tset = { "vnx.3", "snn.n", "tsx.3", "osx.3", "nsx.3", NULL };
 
 FULLOP(set, "x1 x2 x3 -> . Generic interface to set operations: x1[x2] = x3",
        3, (value x1, value x2, value x3),
-       0, OP_LEAF | OP_NOESCAPE, tset)
+       0, OP_LEAF | OP_NOESCAPE, tset, /* extern */)
 {
   if (!pointerp(x1)) runtime_error(error_bad_type);
   switch (((struct obj *)x1)->type)
@@ -185,7 +224,10 @@ UNSAFEOP(obj_save, "s x -> . Writes mudlle value x to file s",
   unsigned long size, magic, nsize;
   char tmp_file[PATH_MAX];
 
+
   TYPEIS(file, type_string);
+
+
   GCPRO1(file);
   data = gc_save(x, &size);
   UNGCPRO();
@@ -194,34 +236,45 @@ UNSAFEOP(obj_save, "s x -> . Writes mudlle value x to file s",
 	   file->str, getpid(), time(NULL));
 
   fd = creat(tmp_file, 0666);
-  if (fd < 0) runtime_error(error_bad_value);
+
+  if (fd < 0)
+    goto failed;
 
   magic = htonl(OBJ_MAGIC);
   nsize = htonl(size);
-  ok = write(fd, &magic, sizeof magic) == sizeof magic &&
-    write(fd, &nsize, sizeof nsize) == sizeof nsize &&
-      write(fd, data, size) == size;
+  ok = (write(fd, &magic, sizeof magic) == sizeof magic &&
+	write(fd, &nsize, sizeof nsize) == sizeof nsize &&
+	write(fd, data, size) == size);
+
   close(fd);
   
   if (!ok || rename(tmp_file, file->str)) 
     {
       unlink(tmp_file);
-      runtime_error(error_bad_value);
+      goto failed;
     }
 
+
   undefined();
+
+ failed:
+  runtime_error(error_bad_value);
 }
 
-static value _obj_load(value (*fgc_load)(void *_load, unsigned long size),
+static value _load_data(value (*fgc_load)(void *_load, unsigned long size),
 		       struct string *file)
 {
   int fd;
   unsigned long magic, size;
   void *data;
 
+
   TYPEIS(file, type_string);
+
+
   fd = open(file->str, O_RDONLY);
-  if (fd < 0) runtime_error(error_bad_value);
+  if (fd < 0)
+    goto failed;
   
   if (read(fd, &magic, sizeof magic) == sizeof magic &&
       ntohl(magic) == OBJ_MAGIC &&
@@ -231,28 +284,36 @@ static value _obj_load(value (*fgc_load)(void *_load, unsigned long size),
       data = alloca(size);
       if (read(fd, data, size) == size)
 	{
+	  value res;
+
 	  close(fd);
-	  return fgc_load(data, size);
+
+	  res = fgc_load(data, size);
+	  return res;
 	}
     }
   close(fd);
+
+failed:
+
+
   runtime_error(error_bad_value);
-  NOTREACHED;
+  
 }
 
-UNSAFEOP(obj_load, "s -> x. Loads a value from a mudlle save file",
+UNSAFEOP(load_data, "s -> x. Loads a value from a mudlle save file",
 	 1, (struct string *file),
 	 OP_LEAF | OP_NOESCAPE)
 {
-  return _obj_load(gc_load, file);
+  return _load_data(gc_load, file);
 }
 
 #ifndef GCDEBUG
-UNSAFEOP(obj_load_debug, "s -> x. Loads a value from a GCDEBUG mudlle save file",
+UNSAFEOP(load_data_debug, "s -> x. Loads a value from a GCDEBUG mudlle save file",
 	 1, (struct string *file),
 	 OP_LEAF | OP_NOESCAPE)
 {
-  return _obj_load(gc_load_debug, file);
+  return _load_data(gc_load_debug, file);
 }
 #endif
 
@@ -264,6 +325,12 @@ OPERATION(obj_sizep, "x -> (n1 . n2) Returns object's size n1 (in bytes) (of whi
 
   size = gc_size(x, &mutble);
   return alloc_list(makeint(size), makeint(mutble));
+}
+
+UNSAFEOP(staticpro_data, " -> v. Returns a vector of all statically "
+	 "protected data", 0, (void), OP_LEAF | OP_NOESCAPE)
+{
+  return get_staticpro_data();
 }
 
 TYPEDOP(immutablep, "x -> b. Returns true if x is an immutable value",
@@ -310,12 +377,41 @@ TYPEDOP(typeof, "x -> n. Return type of x",
   return makeint(TYPEOF(x));
 }
 
+TYPEDOP(seclevel, " -> n. Returns security level of your caller", 0, (void),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
+{
+  return makeint(seclevel);
+}
+
 UNSAFEOP(unlimited_execution, " -> . Disables execution-time limits", 0, (void),
 	 OP_NOESCAPE)
 {
   unlimited_execution();
   undefined();
 }
+
+#ifdef ALLOC_STATS
+
+UNSAFEOP(closure_alloc_stats, "  -> v", 0, (void), OP_LEAF)
+{
+  return get_closure_alloc_stats();
+}
+
+struct vector *get_pair_alloc_stats(void);
+
+UNSAFEOP(pair_alloc_stats, "  -> v", 0, (void), OP_LEAF)
+{
+  return get_pair_alloc_stats();
+}
+
+struct vector *get_variable_alloc_stats(void);
+
+UNSAFEOP(variable_alloc_stats, "  -> v", 0, (void), OP_LEAF)
+{
+  return get_variable_alloc_stats();
+}
+
+#endif
 
 void basic_init(void)
 {
@@ -327,6 +423,9 @@ void basic_init(void)
 
   DEFINE("session", session);
   DEFINE("apply", apply);
+  DEFINE("ieval", eval);
+
+  DEFINE("call_trace", call_trace);
 
   DEFINE("typeof", typeof);
   DEFINE("immutable?", immutablep);
@@ -335,15 +434,23 @@ void basic_init(void)
   DEFINE("detect_immutability", detect_immutability);
 
   DEFINE("size_data", obj_sizep);
+  DEFINE("staticpro_data", staticpro_data);
   DEFINE("save_data", obj_save);
-  DEFINE("load_data", obj_load);
+  DEFINE("load_data", load_data);
 
 #ifndef GCDEBUG
-  DEFINE("load_data_debug", obj_load_debug);
+  DEFINE("load_data_debug", load_data_debug);
 #endif
 
   DEFINE("ref", ref);
   DEFINE("set!", set);
 
   DEFINE("unlimited_execution", unlimited_execution);
+  DEFINE("seclevel", seclevel);
+
+#ifdef ALLOC_STATS
+  DEFINE("closure_alloc_stats", closure_alloc_stats);
+  DEFINE("pair_alloc_stats", pair_alloc_stats);
+  DEFINE("variable_alloc_stats", variable_alloc_stats);
+#endif
 }

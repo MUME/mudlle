@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -30,8 +30,19 @@
 #include "utils.charset.h"
 #include "call.h"
 
+
 #ifdef USE_PCRE
-#  include <pcre/pcre.h>
+#  ifdef HAVE_PCRE_PCRE_H
+#    include <pcre/pcre.h>
+#  elif HAVE_PCRE_H
+#    include <pcre.h>
+#  else
+#    error "Do not know where to find pcre.h"
+#  endif
+#endif
+
+#if HAVE_CRYPT_H
+#include <crypt.h>
 #endif
 
 TYPEDOP(stringp, "x -> b. TRUE if x is a string", 1, (value v),
@@ -101,6 +112,7 @@ TYPEDOP(upcase, "s -> s. Returns a copy of s with all characters upper case",
   return newp;
 }  
 
+
 TYPEDOP(string_fill, "s n -> . Set all characters of s to character whose code is n",
 	2, (struct string *str, value c),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
@@ -133,9 +145,9 @@ TYPEDOP(strto7bit, "s -> s. Returns a copy of s with all characters converted to
   return newp;
 }  
 
-TYPEDOP(string_ref, "s n1 -> n2. Return the code (n2) of the n1'th character of s",
-	2, (struct string *str, value c),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
+EXT_TYPEDOP(string_ref, "s n1 -> n2. Return the code (n2) of the n1'th character of s",
+	    2, (struct string *str, value c),
+	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
 {
   long idx;
 
@@ -147,9 +159,10 @@ TYPEDOP(string_ref, "s n1 -> n2. Return the code (n2) of the n1'th character of 
   return (makeint((unsigned char)str->str[idx]));
 }
 
-TYPEDOP(string_set, "s n1 n2 -> n2. Set the n1'th character of s to the character whose code is n2",
-	3, (struct string *str, value i, value c),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "snn.n")
+EXT_TYPEDOP(string_set, "s n1 n2 -> n2. Set the n1'th character of s to the "
+	    "character whose code is n2",
+	    3, (struct string *str, value i, value c),
+	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "snn.n")
 {
   long idx;
 
@@ -385,9 +398,9 @@ value string_append(struct string *s1, struct string *s2)
   return (newp);
 }
 
-TYPEDOP(string_append, "s1 s2 -> s. Concatenate s1 and s2",
-	  2, (struct string *s1, struct string *s2),
-	  OP_LEAF | OP_NOESCAPE, "ss.s")
+EXT_TYPEDOP(string_append, "s1 s2 -> s. Concatenate s1 and s2",
+	    2, (struct string *s1, struct string *s2),
+	    OP_LEAF | OP_NOESCAPE, "ss.s")
 {
   TYPEIS(s1, type_string);
   TYPEIS(s2, type_string);
@@ -400,50 +413,62 @@ TYPEDOP(split_words, "s -> l. Split string s into words in list l",
 {
   struct list *l = NULL, *last = NULL;
   struct string *wrd;
-  int len;
-  char *scan, *end, missing;
-  struct gcpro gcpro1, gcpro2;
+  char missing;
+  struct gcpro gcpro1, gcpro2, gcpro3;
+  int idx;
 
   TYPEIS(s, type_string);
 
-  scan = s->str;
-  GCPRO2(l, last);
+  GCPRO3(l, last, s);
 
-  do {
-    while (*scan == ' ') scan++;
+  idx = 0;
+
+  for (;;) {
+    int len, end;
+
+    while (s->str[idx] == ' ')
+      ++idx;
 
     missing = 0;
-    if (*scan == '\'' || *scan == '"') /* Quoted words */
+    if (s->str[idx] == '\'' || s->str[idx] == '"') /* quoted words */
       {
-	end = scan + 1;
-	while (*end && *end != *scan) end++;
-	/* Be nice: add missing quote */
-	if (!*end) missing = *scan;
-	else end++;
+	end = idx + 1;
+	while (s->str[end] && s->str[end] != s->str[idx])
+	  ++end;
+	/* be nice: add missing quote */
+	if (!s->str[end])
+	  missing = s->str[idx];
+	else
+	  ++end;
       }
     else
       {
-	end = scan;
-	while (*end && *end != ' ') end++;
+	end = idx;
+	while (s->str[end] && s->str[end] != ' ')
+	  ++end;
 
-	if (end == scan) break;
+	if (end == idx)
+	  break;
       }
 
-    len = end - scan + (missing != 0);
+    len = end - idx + (missing != 0);
     wrd = (struct string *)allocate_string(type_string, len + 1);
-    memcpy(wrd->str, scan, len);
-    if (missing) wrd->str[len - 1] = missing;
+    memcpy(wrd->str, s->str + idx, len);
+    if (missing)
+      wrd->str[len - 1] = missing;
     wrd->str[len] = '\0';
     
-    scan = end;
+    idx = end;
 
-    if (!l) l = last = alloc_list(wrd, NULL);
+    if (!l)
+      l = last = alloc_list(wrd, NULL);
     else 
       {
-	last->cdr = alloc_list(wrd, NULL);
-	last = last->cdr;
+	value v = alloc_list(wrd, NULL);
+	last->cdr = v;
+	last = v;
       }
-  } while (1);
+  }
 
   UNGCPRO();
 
@@ -507,6 +532,7 @@ TYPEDOP(cto7bit, "n -> n. Return n's 7 bit variant", 1, (value n),
   ISINT(n);
   return makeint(TO_7PRINT(intval(n)));
 }
+
 
 #ifdef USE_PCRE
 
@@ -641,7 +667,33 @@ TYPEDOP(regexp_exec, "r s n -> v. Tries to match the string s with regexp "
 
 #endif /* USE_PCRE */
 
-static void define_strings()
+#if HAVE_CRYPT_H
+TYPEDOP(crypt, "s1 s2 -> s. Encrypt s1 using s2 as salt",
+	2, (struct string *s, struct string *salt),
+	OP_LEAF | OP_NOESCAPE, "ss.s")
+{
+  unsigned char buffer[9];
+  int i;
+  char *p;
+
+  TYPEIS(s, type_string);
+  TYPEIS(salt, type_string);
+
+  /* Use all the characters in the string, rather than the first 8. */
+  memset(buffer, 0, sizeof buffer);
+
+  for (p = s->str, i = 0; *p; ++p, i = (i + 1) & 7)
+    buffer[i] += *p;
+
+  for (i = 0; i < 8; ++i)
+    if (!buffer[i])
+      buffer[i] = ' ';
+
+  return alloc_string(crypt(buffer, salt->str));
+}
+#endif /* HAVE_CRYPT_H */
+
+static void define_strings(void)
 {
   struct string *s = 0;
   struct gcpro gcpro1;
@@ -706,6 +758,9 @@ void string_init(void)
   def(PCRE_NOTEOL);
   def(PCRE_UNGREEDY);
 
+#endif
+#if HAVE_CRYPT_H
+  DEFINE("crypt", crypt);
 #endif
   
 #undef def

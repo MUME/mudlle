@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -76,6 +76,12 @@ static struct lkeyword keywords[] = {
 };
 #define NKEYWORDS (sizeof keywords / sizeof(struct lkeyword))
 
+#define MAKE_OP(oper, ret) do {			\
+  yylval.operator.op = (oper);			\
+  yylval.operator.lineno = lineno;		\
+  return (ret);					\
+} while (0)
+
 %}
 
 DIGIT           [0-9]
@@ -130,19 +136,19 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 "^"	{ return '^'; }
 ","     { return ','; }
 "."	{ return '.'; }
-"+="	{ yylval.operator = b_add; return OP_ASSIGN; }
-"-="	{ yylval.operator = b_subtract; return OP_ASSIGN; }
-"*="	{ yylval.operator = b_multiply; return OP_ASSIGN; }
-"/="	{ yylval.operator = b_divide; return OP_ASSIGN; }
-"%="	{ yylval.operator = b_remainder; return OP_ASSIGN; }
-"^="	{ yylval.operator = b_bitxor; return OP_ASSIGN; }
-"&="	{ yylval.operator = b_bitand; return OP_ASSIGN; }
-"|="	{ yylval.operator = b_bitor; return OP_ASSIGN; }
-"&&="	{ yylval.operator = b_sc_and; return OP_ASSIGN; }
-"^^="	{ yylval.operator = b_xor; return OP_ASSIGN; }
-"||="	{ yylval.operator = b_sc_or; return OP_ASSIGN; }
-">>="	{ yylval.operator = b_shift_right; return OP_ASSIGN; }
-"<<="	{ yylval.operator = b_shift_left; return OP_ASSIGN; }
+"+="	{ MAKE_OP(b_add, OP_ASSIGN); }
+"-="	{ MAKE_OP(b_subtract, OP_ASSIGN); }
+"*="	{ MAKE_OP(b_multiply, OP_ASSIGN); }
+"/="	{ MAKE_OP(b_divide, OP_ASSIGN); }
+"%="	{ MAKE_OP(b_remainder, OP_ASSIGN); }
+"^="	{ MAKE_OP(b_bitxor, OP_ASSIGN); }
+"&="	{ MAKE_OP(b_bitand, OP_ASSIGN); }
+"|="	{ MAKE_OP(b_bitor, OP_ASSIGN); }
+"&&="	{ MAKE_OP(b_sc_and, OP_ASSIGN); }
+"^^="	{ MAKE_OP(b_xor, OP_ASSIGN); }
+"||="	{ MAKE_OP(b_sc_or, OP_ASSIGN); }
+">>="	{ MAKE_OP(b_shift_right, OP_ASSIGN); }
+"<<="	{ MAKE_OP(b_shift_left, OP_ASSIGN); }
 "="	{ return ASSIGN; }
 "=="	{ return EQ; }
 "!="	{ return NE; }
@@ -152,8 +158,8 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 ">="	{ return GE; }
 "<<"	{ return SHIFT_LEFT; }
 ">>"	{ return SHIFT_RIGHT; }
-"++"    { yylval.operator = b_add; return INCREMENTER; }
-"--"    { yylval.operator = b_subtract; return INCREMENTER; }
+"++"    { MAKE_OP(b_add, INCREMENTER); }
+"--"    { MAKE_OP(b_subtract, INCREMENTER); }
 "'"	{ return QUOTE; }
 "@"	{ return '@'; }
 "=>"    { return PATTERN_MATCH; }
@@ -175,7 +181,10 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 
 -?({DIGIT}+|0[xX]{HEXDIGIT}+) {
 	  if (!mudlle_strtoint(yytext, &yylval.integer))
-	    compile_error("integer constant out of bounds");
+            { 
+	      compile_error("integer constant out of bounds");
+              yyterminate();
+            }
 	  else
             return INTEGER; 
 	}
@@ -187,6 +196,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 	    compile_error("illegal floating point number");
 	  else
 	    return FLOAT; 
+          yyterminate();
 	}
 
 [#][bB]-?(0{OCTDIGIT}*|{NONZERODIGIT}{DIGIT}*|0[xX]{HEXDIGIT}+) {
@@ -197,7 +207,10 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 
 -?{DIGIT}+(({DECIM}{EXP}?)|{EXP}) {
           if (!mudlle_strtofloat(yytext, &yylval.mudlle_float))
-	    compile_error("illegal floating point number");
+            {
+	      compile_error("illegal floating point number");
+              yyterminate();
+            }
 	  else
             return FLOAT;
 	}
@@ -246,6 +259,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
             compile_error("bad character %c (%#02x)", c, c);
           else
             compile_error("bad character %#02x", c);
+          yyterminate();
         }
                       
 
@@ -290,4 +304,8 @@ void read_from_string(const char *str)
   length = strlen(line);
   lineno = 0;
   filename = "<string>";
+}
+void dummy_function_lexer_l() {
+  volatile void *x = yyunput;
+  (void)x;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -29,6 +29,7 @@
 #include <assert.h>
 #include "options.h"
 
+
 #ifndef UNUSED
 #ifdef __GNUC__
 #define UNUSED __attribute__((unused))
@@ -46,14 +47,6 @@ typedef char mp_limb_t;
 #define mpz_cmp(b1, b2) 1
 #endif
 
-#ifndef HAVE_ULONG
-typedef unsigned long ulong;
-#endif
-typedef signed short word;
-typedef unsigned short uword;
-typedef signed char byte;
-typedef unsigned char ubyte;
-#define NEW_STRCPY strcpy
 
 #ifdef HAVE_ALLOCA_H
 #include <alloca.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,6 +25,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include "mvalues.h"
+#include "types.h"
 
 struct oport;
 
@@ -75,6 +76,9 @@ int port_empty(struct oport *p);
 /* Return: true if the port is empty
    Requires: p be a string-type output port
 */
+
+void empty_string_oport(struct oport *_p);
+
 
 void port_append(struct oport *p1, struct oport *p2);
 /* Effects: The characters of port p2 are appended to the end of port p1.

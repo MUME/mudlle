@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,6 +27,7 @@
 #include "builtins.h"
 #include <string.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 /* Instruction lists are stored in reverse order, to simplify creation.
    They are reversed before use ...
@@ -40,6 +41,7 @@ typedef struct _ilist		/* Instruction list */
 				   All other labels are aliases of this one. */
   label to;			/* Destination of branches */
   ulong offset;			/* Offset from end of code ... */
+  int lineno;
 } *ilist;
 
 typedef struct _blocks
@@ -62,6 +64,7 @@ struct _fncode
   blocks blks;			/* Stack of named blocks */
   int toplevel;
   block_t memory;
+  int lineno;
 };
 
 struct _label			/* A pointer to an instruction */
@@ -71,7 +74,7 @@ struct _label			/* A pointer to an instruction */
 				   another label ... */
 };
 
-int bc_length; /* For statistical purposes */
+static int bc_length; /* For statistical purposes */
 
 static void add_ins(instruction ins, fncode fn)
 {
@@ -83,8 +86,16 @@ static void add_ins(instruction ins, fncode fn)
   newp->ins = ins;
   newp->to = NULL;
   newp->lab = fn->next_label;
-  if (fn->next_label) fn->next_label->ins = newp;
+  newp->lineno = fn->lineno;
+  if (fn->next_label)
+    fn->next_label->ins = newp;
   fn->next_label = NULL;
+}
+
+void set_lineno(int line, fncode fn)
+{
+  if (line)
+    fn->lineno = line;
 }
 
 void adjust_depth(int by, fncode fn)
@@ -116,6 +127,7 @@ fncode new_fncode(int toplevel)
   newp->cstpro.cl = &newp->csts;
   init_list(&newp->csts);
   newp->cstindex = 0;
+  newp->lineno = 0;
 
   return newp;
 }
@@ -368,6 +380,8 @@ static int resolve_offsets(fncode fn)
 		  /* Make a 2 byte branch */
 		  ilist newp = allocate(fn->memory, sizeof *newp);
 
+		  memset(newp, 0, sizeof *newp);
+
 		  scan->ins++;	/* he he */
 		  newp->next = scan;
 		  newp->lab = newp->to = NULL;
@@ -397,6 +411,144 @@ void peephole(fncode fn)
 
   do number_instructions(fn);
   while (!resolve_offsets(fn));
+}
+
+static void reverse_ilist(ilist *head)
+{
+  ilist prev = NULL;
+  ilist ins = *head;
+
+  if (ins == NULL)
+    return;
+
+  for (;;)
+    {
+      ilist next = ins->next;
+      ins->next = prev;
+      prev = ins;
+      if (next == NULL)
+	break;
+      ins = next;
+    }
+
+  *head = ins;
+}
+
+/*
+  line information encoding:
+
+    bytes on current line
+    delta lines
+
+  if the value to be encoded is < 0 or >= 255, a 255 byte is used,
+  followed by the new number (not a delta)
+*/
+static struct string *build_lineno_data(fncode fn)
+{
+  int size = 64, used = 0;
+  ubyte *data = malloc(size);
+
+  struct string *res;
+
+#define ADD(n) do {				\
+  if (used == size) {				\
+    size *= 2;					\
+    data = realloc(data, size);			\
+  }						\
+  data[used++] = (n);				\
+} while (0)
+
+  ilist ins = fn->instructions;
+  int last_line, start_offset, last_offset;
+
+  if (ins == NULL)
+    return NULL;
+
+  last_line = 0, start_offset = ins ? ins->offset : 0;
+  last_offset = start_offset;
+
+  for (; ins; ins = ins->next)
+    {
+      if (ins->lineno == 0 || ins->lineno == last_line)
+	continue;
+
+      if (ins->offset + 255 < last_offset)
+	{
+	  int i;
+	  ADD(255);
+	  for (i = 0; i < 4; ++i)
+	    ADD(((start_offset - ins->offset) >> (8 * i)) & 0xff);
+	}
+      else
+	ADD(last_offset - ins->offset);
+      last_offset = ins->offset;
+
+      if (last_line > ins->lineno || (ins->lineno >= last_line + 255))
+	{
+	  int i;
+	  ADD(255);
+	  for (i = 0; i < 4; ++i)
+	    ADD((ins->lineno >> (8 * i)) & 0xff);
+	}
+      else
+	ADD(ins->lineno - last_line);
+      last_line = ins->lineno;
+    }
+
+  res = (struct string *)allocate_string(type_string, used + 1);
+  memcpy(res->str, data, used);
+  res->str[used] = 0;
+  res->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
+
+  free(data);
+
+  return res;
+}
+
+int get_code_line_number(struct code *code, int offset)
+{
+  int line = 0;
+  int dlen;
+  int pos = 0;
+  ubyte *data;
+  int cofs = 0;
+
+  if (code->lineno_data == NULL)
+    return -1;
+
+  dlen = string_len(code->lineno_data);
+  data = code->lineno_data->str;
+
+  for (;;)
+    {
+      if (pos >= dlen)
+	return line;
+
+      if (data[pos] == 255)
+	{
+	  int i;
+	  cofs = 0;
+	  ++pos;
+	  for (i = 0; i < 4; ++i)
+	    cofs |= data[pos++] << (8 * i);
+	}
+      else
+	cofs += data[pos++];
+      
+      if (cofs > offset)
+	return line;
+
+      if (data[pos] == 255)
+	{
+	  int i;
+	  line = 0;
+	  ++pos;
+	  for (i = 0; i < 4; ++i)
+	    line |= data[pos++] << (8 * i);
+	}
+      else
+	line += data[pos++];
+    }
 }
 
 struct code *generate_fncode(fncode fn,
@@ -447,11 +599,14 @@ struct code *generate_fncode(fncode fn,
   gencode->varname = varname;
 
   gencode->call_count = gencode->instruction_count = 0;
+  gencode->lineno_data = NULL;
+
+  reverse_ilist(&fn->instructions);
 
   /* Copy the sequence (which is reversed) */
-  codeins = (instruction *)(gencode->constants + fn->cstindex) + sequence_length;
+  codeins = (instruction *)(gencode->constants + fn->cstindex);
   for (scanins = fn->instructions; scanins; scanins = scanins->next)
-    *--codeins = scanins->ins;
+    *codeins++ = scanins->ins;
 
   /* Copy the constants */
   for (i = 0, scancst = fn->csts.first; i < fn->cstindex; i++, scancst = scancst->next)
@@ -460,6 +615,9 @@ struct code *generate_fncode(fncode fn,
       GCCHECK(scancst->lvalue);
     }
 
+  GCPRO1(gencode);
+  gencode->lineno_data = build_lineno_data(fn);
+  UNGCPRO();
   /* Jump to interpreter to execute interpreted code - machine specific */
 
 #ifdef AMIGA
@@ -482,24 +640,34 @@ struct code *generate_fncode(fncode fn,
     
     dispatch[0] = 4 << 22 | 2 << 25 | (ulong)interpreter_invoke >> 10;
     dispatch[1] = 2 << 30 | 2 << 25 | 2 << 19 | 2 << 14 | 1 << 13 |
-      (ulong)interpreter_invoke & (1 << 10) - 1;
+      ((ulong)interpreter_invoke & ((1 << 10) - 1));
     dispatch[2] = 2 << 30 | 56 << 19 | 2 << 14;
     dispatch[3] = 4 << 22;
   }
 #endif
 
-#ifdef i386
+#if defined(i386) && !defined(NOCOMPILER)
   /* jmp interpreter_invoke */
   gencode->magic_dispatch[0] = 0xea;
   *(ulong *)(gencode->magic_dispatch + 1) = (ulong)interpreter_invoke;
   /* segment */
   asm("mov %%cs,%0" : "=r" (*(short *)(gencode->magic_dispatch + 5)));
-  
+#if 0
+  /* this is for valgrind */
+  /*
+    mov interpreter_invoke,%edi
+    jmp *%edi
+   */
+  gencode->magic_dispatch[0] = 0xbf;
+  *(ulong *)(gencode->magic_dispatch + 1) = (ulong)interpreter_invoke;
+  gencode->magic_dispatch[5] = 0xff;
+  gencode->magic_dispatch[6] = 0xd7;
+#endif
 #endif
 
 #ifdef GCSTATS
   gcstats.anb[type_code]++;
-  gcstats.asizes[type_code] += size;
+  gcstats.asizes[type_code] += ALIGN(size, sizeof (long));
 #endif
 
   return gencode;

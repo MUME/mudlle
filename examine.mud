@@ -19,23 +19,21 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-// Load inferring, compiled sparc compiler
-// Bootstrap via interpreter (load minimum for linker)
-garbage_collect(700000);
-load("lib.mud");
-load("link.mud");
-load("interface.mud");
+// Display sizes of global variables (after specified offset)
 
-load_library = fn (s) [ display(format("loading %s", s)); newline(); fload(s + ".obj") ];
-// reload compiled modules
-fload("dlist.obj");
-fload("sequences.obj");
-fload("misc.obj");
-fload("vars.obj");
-fload("compiler.obj");
-fload("link.obj");
+gsize = fn (from)
+  foreach(fn (gsym)
+	  [
+	    | n |
+	    n = symbol_get(gsym);
+	    if (n >= from)
+	      [
+		| size |
+		size = obj_size(global_value(n)) - 4;
 
-fload("inference.obj");
-fload("sparc.obj");
-fload("compile.obj");
-mc:verbose = 0;
+		display(format("%s: %s\n", symbol_name(gsym), size))
+	      ]			     
+	  ], lqsort(fn (s1, s2) string_cmp(symbol_name(s1), symbol_name(s2)) <= 0, table_list(global_table())));
+
+gfind = fn (n)
+  table_exists?(fn (gs) symbol_get(gs) == n, global_table());

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,28 +23,28 @@
 mc:verbose = 0;
 x86:reset_counters();
 start = ctime();
-pcompile("ihash.mud");
-pcompile("compiler.mud");
-pcompile("link.mud");
-pcompile("misc.mud");
-pcompile("sequences.mud");
-pcompile("dlist.mud");
-pcompile("graph.mud");
-pcompile("ax86.mud");
-pcompile("vars.mud");
-pcompile("flow.mud");
-pcompile("optimise.mud");
-pcompile("ins3.mud");
-pcompile("mx86.mud");
-pcompile("phase1.mud");
-pcompile("phase2.mud");
-pcompile("phase3.mud");
-pcompile("phase4.mud");
-pcompile("genx86.mud");
-pcompile("x86.mud");
-pcompile("compile.mud");
-pcompile("noinf.mud");
-pcompile("inference.mud");
+pcompile("compiler/ihash.mud");
+pcompile("compiler/compiler.mud");
+pcompile("compiler/link.mud");
+pcompile("compiler/misc.mud");
+pcompile("compiler/sequences.mud");
+pcompile("compiler/dlist.mud");
+pcompile("compiler/graph.mud");
+pcompile("compiler/ax86.mud");
+pcompile("compiler/vars.mud");
+pcompile("compiler/flow.mud");
+pcompile("compiler/optimise.mud");
+pcompile("compiler/ins3.mud");
+pcompile("compiler/mx86.mud");
+pcompile("compiler/phase1.mud");
+pcompile("compiler/phase2.mud");
+pcompile("compiler/phase3.mud");
+pcompile("compiler/phase4.mud");
+pcompile("compiler/genx86.mud");
+pcompile("compiler/x86.mud");
+pcompile("compiler/compile.mud");
+pcompile("compiler/noinf.mud");
+pcompile("compiler/inference.mud");
 display(format("cpu time: %s ms", ctime() - start)); newline();
 display(format("nins: %s", nins)); newline();
 

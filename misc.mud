@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,80 +27,126 @@ defines caar, cadr, cdar, cddr, caaar, caadr, cadar, caddr, cdaar, cdadr,
   vequal?, equal?, lqsort, vqsort!, mapstr, assq, assoc, nth, concat_words,
   nth_pair, nth_element, random_element, last_pair, last_element, mappend,
   list_first_n!, nth_element_cond, list_to_vector, list_index, string_tail,
-  string_head?, abbrev?, string_index, string_rindex, find_word?, upper_first,
+  string_head?, abbrev?, string_index, string_rindex, find_word?,
   str2int, unquote, char_white?, skip_white, vector_to_list, memq, member, for,
   repeat, table_copy, vector_exists_index, string_ljustify, string_ljustify_cut,
-  string_rjustify, string_rjustify_cut, sorted_table_list, rprotect, lprotect,
-  vector_rindex, failMessage, assertMessage
+  string_rjustify, string_rjustify_cut, sorted_table_list, sorted_table_vector,
+  rprotect, lprotect, vector_rindex, fail_message, assert_message
 reads random // hack to avoid problems w/ standalone version
 [
 
-repeat = fn "n fn -> . Execute fn n times" (n, f)
-  while ((n = n - 1) >= 0) f();
+repeat = fn "n fn -> . Execute fn n times" (int n, f)
+  while (--n >= 0) f();
 
 for = fn "n1 n2 fn -> . For i = n1 to n2 do: fn(i)" (int s, int e, f)
-  [
-    | i |
+  while (s <= e) 
+    [
+      f(s);
+      ++s
+    ];
 
-    i = s;
-    while (i <= e) 
-      [
-	f(i);
-	i = i + 1;
-      ];
-  ];
-
-equal? = fn "x1 x2 -> b. Compares x1 to x2 for equality, recursively for strings, vectors and lists" (x1, x2)
-  if (string?(x1))
-    string?(x2) && string_cmp(x1, x2) == 0
-  else if (pair?(x1))
-    pair?(x2) && equal?(car(x1), car(x2)) && equal?(cdr(x1), cdr(x2))
-  else if (vector?(x1))
-    vector?(x2) &&
-      [
-	| l |
-	l = vector_length(x1);
-	if (l != vector_length(x2)) false
+[
+  | recurse |
+  
+  recurse = fn (x1, stack1, x2, stack2)
+    if (null?(x1) || null?(x2) || integer?(x1) || integer?(x2))
+      x1 == x2
+    else if (string?(x1))
+      string?(x2) && string_cmp(x1, x2) == 0
+    else if (float?(x1))
+      if (float?(x2))
+	if (fnan?(x1) || fnan?(x2))
+	  x1 == x2
 	else
-	  [
-	    while ((l = l - 1) >= 0)
-	      if (!equal?(x1[l], x2[l])) exit<function> false;
-	    true
-	  ]
-      ]
-  else if (float?(x1))
-    if (float?(x2))
-      if (fnan?(x1) || fnan?(x2))
-	x1 == x2
+	  fcmp(x1, x2) == 0
       else
-	fcmp(x1, x2) == 0
+	false
+    else if (bigint?(x1))
+      bigint?(x2) && bicmp(x1, x2) == 0
+    else if (x1 == x2)
+      true
     else
-      0
-  else if (bigint?(x1))
-    bigint?(x2) && bicmp(x1, x2) == 0
-  else if (symbol?(x1))
-    (symbol?(x2) && equal?(symbol_name(x1), symbol_name(x2)) &&
-     equal?(symbol_get(x1), symbol_get(x2)))
-  else if (table?(x1))
-    table?(x2) &&
       [
-	| l, y |
-	y = table_copy(x2);
-	l = table_list(x1);
-	while (l != null && equal?(symbol_get(car(l)), y[symbol_name(car(l))]))
-	  [
-	    y[symbol_name(car(l))] = null;
-	    l = cdr(l);
-	  ];
-	if (l == null)
-	  table_list(y) == null
-	else
-	  0
-      ]
-  else
-    x1 == x2;
+	| i, s1 |
 
-rprotect = fn "x -> x. Protect x and it's contents (vectors, pairs) recursively" (x)
+	// If we find x1 in stack1, check that x2 is at the same position
+	// in stack2. stack1 and stack2 are guaranteed to be of the same
+	// length.
+
+	i = 0;
+	s1 = stack1;
+	loop
+	  [
+	    if (s1 == null)
+	      exit null;
+	    if (car(s1) == x1)
+	      [
+		| s2 |
+		s2 = stack2;
+		while (i--)
+		  s2 = cdr(s2);
+		exit<function> car(s2) == x2;
+	      ];
+	    s1 = cdr(s1);
+	    ++i;
+	  ];
+	stack1 = x1 . stack1;
+	stack2 = x2 . stack2;
+
+	if (pair?(x1))
+	  (pair?(x2)
+	   && recurse(car(x1), stack1, car(x2), stack2)
+	   && recurse(cdr(x1), stack1, cdr(x2), stack2))
+	else if (vector?(x1))
+	  vector?(x2) &&
+	    [
+	      | l |
+	      l = vector_length(x1);
+	      if (l != vector_length(x2)) false
+	      else
+		[
+		  while ((l = l - 1) >= 0)
+		    if (!recurse(x1[l], stack1, x2[l], stack2))
+		      exit<function> false;
+		  true
+		]
+	    ]
+	else if (symbol?(x1))
+	  (symbol?(x2)
+	   && string_icmp(symbol_name(x1), symbol_name(x2)) == 0
+	   && recurse(symbol_get(x1), stack1, symbol_get(x2), stack2))
+	else if (table?(x1))
+	  table?(x2) &&
+	    [
+	      | y |
+	      y = table_copy(x2);
+	      
+	      if (table_exists?(fn (sym) [
+		| sname |
+		if (recurse(symbol_get(sym), stack1,
+			    table_ref(y, sname = symbol_name(sym)), stack2))
+		  [
+		    table_set!(y, sname, null);
+		    false
+		  ]
+		else
+		  true
+	      ], x1))
+		false
+	      else if (table_exists?(fn (sym) true, y))
+		false
+	      else
+		true
+	    ]
+	else
+	  false;
+      ];
+
+  equal? = fn "x1 x2 -> b. Compares x1 to x2 for equality, recursively for strings, vectors and lists" (x1, x2)
+    recurse(x1, null, x2, null);
+];
+
+rprotect = fn "x -> x. Protect x and its contents (vectors, pairs) recursively" (x)
   [
     | pro, seen |
 
@@ -133,7 +179,7 @@ rprotect = fn "x -> x. Protect x and it's contents (vectors, pairs) recursively"
 	  else if (table?(x))
 	    [
 	      seen = x . seen;
-	      lforeach(pro, table_list(x))
+	      table_foreach(pro, x)
 	    ]
 	];
 
@@ -173,9 +219,9 @@ cddar = fn (x) cdr(cdr(car(x)));
 cdddr = fn (x) cdr(cdr(cdr(x)));
 
 assert = fn "b -> . Fail if b is false" (b) if (!b) fail();
-assertMessage = fn "b s-> . Fail with message s if b is false" (b, s) if (!b) failMessage(s);
+assert_message = fn "b s-> . Fail with message s if b is false" (b, s) if (!b) fail_message(s);
 fail = fn " -> . Fail." () 1/0;
-failMessage = fn "s -> . Fail with message s." (s) [ display(format("%s%n", s)); 1/0 ];
+fail_message = fn "s -> . Fail with message s." (s) [ display(format("%s%n", s)); 1/0 ];
 
 union = fn "l1 l2 -> l3. Set union of l1 and l2" (l1, l2)
   // Types: l1, l2: set
@@ -251,9 +297,9 @@ vector_index = fn "x v -> n. Finds index of x in v, or -1 if none" (x, v)
 
 vector_rindex = fn "x v -> n. Finds index of last x in v, or -1 if none" (x, v)
   [
-    | check, max |
+    | check |
 
-    check = max = vector_length(v);
+    check = vector_length(v);
     loop
       if (check == 0) exit -1
       else if (v[check = check - 1] == x) exit check
@@ -468,17 +514,20 @@ vector_to_list = fn "v -> l. Makes a vector into a list" (v)
     l
   ];
 
+sorted_table_vector = fn "table -> v. Returns the elements of a table, sorted by name" (table)
+  vqsort!(fn (s1, s2) string_icmp(symbol_name(s1), symbol_name(s2)) < 0,
+	  table_vector(table));
+
 sorted_table_list = fn "table -> l. Returns the elements of a table, sorted by name" (table)
-  lqsort(fn (s1, s2) string_icmp(symbol_name(s1), symbol_name(s2)) < 0,
-	 table_list(table));
+  vector_to_list(sorted_table_vector(table));
 
 table_copy = fn "table1 -> table2. Makes a copy of table1" (table)
   [
     | new |
 
     new = make_table();
-    lforeach(fn (sym) new[symbol_name(sym)] = symbol_get(sym),
-	    table_list(table));
+    table_foreach(fn (sym) new[symbol_name(sym)] = symbol_get(sym),
+		  table);
     new
   ];
 
@@ -576,15 +625,6 @@ abbrev? = fn "s1 s2 -> b. Returns true if s1 is an abbreviation of s2" (a, b)
 
 find_word? = fn "s1 s2 -> b. True if s1 is a word in the s2 sentence" (word, sent)
   lexists?(fn (x) !string_icmp(word, x), split_words(sent)) != false;
-
-upper_first = fn "s -> s. Sets first letter to upper case" (str) 
-   if (string_length (str) > 0) [
-      |first|
-      first = str[0];
-      if (first >= ?a && first <= ?z)
-	str[0] = first - 32;
-      str
-    ] else "";
 
 str2int = fn "s -> n. Returns some value of s for int2word" 
    (str) [

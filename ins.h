@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -139,5 +139,12 @@ int exit_block(const char *name, fncode fn);
    Returns: FALSE if the named block doesn't exist
    Modifies: fn
 */
+
+void set_lineno(int line, fncode fn);
+/* Effects: Sets line number for upcoming instructions
+   Modifies: fn
+*/
+
+int get_code_line_number(struct code *code, int offset);
 
 #endif

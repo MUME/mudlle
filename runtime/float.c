@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -165,8 +165,8 @@ OPERATION(format_float, "f s0 -> s1. Format float f using string s0 (printf form
 {
   double d = floatval(f);
   char *sp, buf[128];
-  static char flags[] = "#0- +";
-  static char formats[] = "eEfgG";
+  const char flags[] = "#0- +";
+  const char formats[] = "eEfgG";
 
   TYPEIS(s, type_string);
 
@@ -175,9 +175,11 @@ OPERATION(format_float, "f s0 -> s1. Format float f using string s0 (printf form
   if (*sp++ != '%') 
     runtime_error(error_bad_value);
 
-  while(strchr(flags, *sp)) ++sp;
+  while(strchr(flags, *sp))
+    ++sp;
 
-  while(*sp >= '0' && *sp <= '9') ++sp;
+  while(*sp >= '0' && *sp <= '9')
+    ++sp;
   if (*sp == '.')
     {
       ++sp;
@@ -195,21 +197,6 @@ OPERATION(fpow, "f1 f2 -> f3. Returns f1 raised to the power of f2",
 	  2, (value f1, value f2), OP_LEAF | OP_NOESCAPE)
 {
   double d1 = floatval(f1), d2 = floatval(f2);
-
-#if (defined(__GLIBC__) && defined(i386))
-  if (d1 == 1.0 && finite(d2))
-    return makefloat(1.0);
-  if (d1 == -1.0 && finite(d2))
-    {
-      double frac, integ;
-      frac = modf(d2, &integ);
-      if (frac == 0.0)
-	{
-	  double rem = fabs(fmod(integ, 2));
-	  return makefloat(rem < 0.5 ? 1.0 : -1.0);
-	}
-    }
-#endif
   return makefloat(pow(d1, d2));
 }
 

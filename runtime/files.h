@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -21,6 +21,23 @@
 
 #ifndef FILES_H
 #define FILES_H
+
+enum {
+  FS_DEV     = 0,
+  FS_INO     = 1,
+  FS_MODE    = 2,
+  FS_NLINK   = 3,
+  FS_UID     = 4,
+  FS_GID     = 5,
+  FS_RDEV    = 6,
+  FS_SIZE    = 7,
+  FS_ATIME   = 8,
+  FS_MTIME   = 9,
+  FS_CTIME   = 10,
+  FS_BLKSIZE = 11,
+  FS_BLOCKS  = 12,
+  FILE_STAT_FIELDS
+};
 
 void files_init(void);
 

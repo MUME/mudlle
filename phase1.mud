@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -506,8 +506,13 @@ writes mc:this_function
   
   mc:phase1 = fn (m)
     [
-      | components |
-      
+      | components, name |
+
+      if (!(name = m[mc:m_name]))
+	name = "top-level"
+      else
+	name = "top-level of " + name;
+
       mstart(m);
       env_init();
       env_enter_function(vector(mc:c_closure,
@@ -517,7 +522,7 @@ writes mc:this_function
 				false,
 				null,
 				-1,
-				"top-level",
+				name,
 				null,
 				false));
       components = resolve_component(m[mc:m_body]);
@@ -533,7 +538,7 @@ writes mc:this_function
 	       false,
 	       components,
 	       -1,
-	       "top-level",
+	       name,
 	       null,
 	       false,
 	       null, null, null, null, null, null, // var lists

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -78,4 +78,4 @@ mprofile_show = fn (name)
   ];
 
 mprofile_show_all = fn ()
-  foreach(fn (sym) mprofile_show(symbol_name(sym)), table_list(profile_table));
+  table_foreach(fn (sym) mprofile_show(symbol_name(sym)), profile_table);

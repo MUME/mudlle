@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,17 +19,20 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/param.h>
-#include <ctype.h>
+#include <unistd.h>
+
 #include "runtime/runtime.h"
 #include "runtime/basic.h"
 #include "mudio.h"
 #include "global.h"
 #include "alloc.h"
 #include "interpret.h"
+
 
 static void show_function(struct closure *c);
 
@@ -80,40 +83,89 @@ TYPEDOP(defined_in, "fn -> v. Returns information on where fn is defined (filena
 	1, (value fn),
 	OP_LEAF | OP_NOESCAPE, "f.v")
 {
-  if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
-      TYPE(fn, type_secure))
-    return makebool(FALSE);
+  struct gcpro gcpro1;
+  struct vector *v;
+  struct string *filename;
+  uword lineno;
+
   if (TYPE(fn, type_closure)) 
+    fn = ((struct closure *)fn)->code;
+
+  if (TYPE(fn, type_code))
+    {
+      struct code *code = fn;
+      filename = code->filename;
+      lineno = code->lineno;
+    }
+  else if (TYPE(fn, type_mcode))
+    {
+      struct mcode *mcode = fn;
+      filename = mcode->filename;
+      lineno = mcode->lineno;
+    }
+  else if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
+	   TYPE(fn, type_secure))
+    return makebool(FALSE);
+  else
+    runtime_error(error_bad_type);
+
+  GCPRO1(filename);
+  v = alloc_vector(2);
+  UNGCPRO();
+  v->data[0] = filename;
+  v->data[1] = makeint(lineno);
+
+  return v;
+}
+
+UNSAFEOP(closure_variables,
+	 "fn -> v. Returns a vector of the closure variable values of function fn",
+	 1, (struct closure *fn),
+	 OP_LEAF | OP_NOESCAPE)
+{
+  ulong nbvar, i;
+  struct gcpro gcpro1;
+  struct vector *res;
+
+  TYPEIS(fn, type_closure);
+
+  nbvar = (fn->o.size - offsetof(struct closure, variables)) / sizeof(value);
+  
+  GCPRO1(fn);
+  res = alloc_vector(nbvar);
+  for (i = 0; i < nbvar; ++i)
+    res->data[i] = fn->variables[i];
+  UNGCPRO();
+
+  return res;
+}
+
+OPERATION(variable_value, "v -> x. Returns the value in variable v",
+	  1, (struct variable *v),
+	  OP_LEAF)
+{
+  TYPEIS(v, type_variable);
+  return v->vvalue;
+}
+
+TYPEDOP(function_seclevel, "f -> n. Returns the security level of the function f",
+	1, (value fn), OP_LEAF | OP_NOESCAPE, "f.n")
+{
+  if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs))
+    return makeint(0);
+
+  if (TYPE(fn, type_secure))
+    return makeint(((struct primitive *)fn)->op->seclevel);
+
+  if (TYPE(fn, type_closure))
     {
       struct closure *c = fn;
-      struct vector *v;
-      struct string *filename;
-      uword lineno;
-      struct gcpro gcpro1;
-
-      if (c->code->o.type == type_code) 
-	{
-	  filename = c->code->filename;
-	  lineno = c->code->lineno;
-	}
-      else if (c->code->o.type == type_mcode)
-	{
-	  struct mcode *code = (struct mcode *)c->code;
-
-	  filename = code->filename;
-	  lineno = code->lineno;
-	}
-      else
-	return makebool(FALSE);
-
-      GCPRO1(filename);
-      v = alloc_vector(2);
-      UNGCPRO();
-      v->data[0] = filename;
-      v->data[1] = makeint(lineno);
-
-      return v;
+      if (TYPE(c->code, type_code))
+	return makeint(((struct code *)c->code)->seclevel);
+      if (TYPE(c->code, type_mcode))
+	return makeint(((struct mcode *)c->code)->seclevel);
     }
+
   runtime_error(error_bad_type);
   NOTREACHED;
 }
@@ -122,16 +174,29 @@ TYPEDOP(function_name, "fn -> s. Returns name of fn if available, false otherwis
 	1, (value fn),
 	OP_LEAF | OP_NOESCAPE, "f.x")
 {
+  struct string *name = NULL;
+
+  if (TYPE(fn, type_mcode))
+    {
+      name = ((struct mcode *)fn)->varname;
+      goto got_name;
+    }
+
+  if (TYPE(fn, type_code))
+    {
+      name = ((struct code *)fn)->varname;
+      goto got_name;
+    }
+
   if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
       TYPE(fn, type_secure))
     {
       struct primitive *op = fn;
-
       return alloc_string(op->op->name);
     }
+
   if (TYPE(fn, type_closure)) 
     {
-      struct string *name = NULL;
       struct closure *c = fn;
 
       if (c->code->o.type == type_code) 
@@ -143,13 +208,13 @@ TYPEDOP(function_name, "fn -> s. Returns name of fn if available, false otherwis
 	  name = code->varname;
 	}
 
-      if (name)
-	return name;
-      else
-	return makebool(FALSE);
+      goto got_name;
     }
   runtime_error(error_bad_type);
   NOTREACHED;
+
+got_name:
+  return name ? name : makebool(FALSE);
 }
 
 static void show_function(struct closure *c)
@@ -295,18 +360,16 @@ OPERATION(gcstats, " -> l. Returns GC statistics", 0, (void),
 	  OP_LEAF)
 {
   struct gcstats stats;
-  struct vector *gen0, *gen1, *last, *v;
+  struct vector *gen0, *gen1 = NULL, *last = NULL, *v;
   int i;
   struct gcpro gcpro1, gcpro2, gcpro3;
 
   stats = gcstats;
 
   gen0 = alloc_vector(2 * last_type);
-  GCPRO(gcpro1, gen0);
+  GCPRO3(gen0, gen1, last);
   gen1 = alloc_vector(2 * last_type);
-  GCPRO(gcpro2, gen1);
   last = alloc_vector(2 * last_type);
-  GCPRO(gcpro3, last);
   for (i = 0; i < last_type; i++)
     {
       last->data[2 * i] = makeint(stats.lnb[i]);
@@ -373,7 +436,10 @@ void debug_init(void)
   DEFINE("help", help);
   DEFINE("help_string", help_string);
   DEFINE("defined_in", defined_in);
+  DEFINE("closure_variables", closure_variables);
+  DEFINE("variable_value", variable_value);
   DEFINE("function_name", function_name);
+  DEFINE("function_seclevel", function_seclevel);
   DEFINE("profile", profile);
   DEFINE("dump_memory", dump_memory);
   DEFINE("apropos", apropos);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,6 +22,7 @@
 #include <string.h>
 #include "runtime/runtime.h"
 #include "table.h"
+#include "call.h"
 
 TYPEDOP(symbolp, "x -> b. TRUE if x is a symbol", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
@@ -78,6 +79,112 @@ TYPEDOP(table_list,
   return table_list(table);
 }
 
+static struct {
+  struct vector *buckets;
+  int used;
+} copied_table;
+
+static void copy_table_entry(struct symbol *sym)
+{
+  if (sym->data)
+    copied_table.buckets->data[copied_table.used++] = sym;
+}
+
+static struct vector *make_table_copy(struct table *table, int *used)
+{
+  struct gcpro gcpro1;
+
+  TYPEIS(table, type_table);
+
+  GCPRO1(table);
+  copied_table.buckets = alloc_vector(table_entries(table));
+  UNGCPRO();
+
+  copied_table.used = 0;
+  
+  table_foreach(table, copy_table_entry);
+
+  *used = copied_table.used;
+  return copied_table.buckets;
+}
+
+TYPEDOP(table_foreach, "c table -> . Runs c(x) for each element x in table",
+	2, (value f, struct table *table),
+	0, "ft.")
+{
+  struct gcpro gcpro1, gcpro2;
+  struct vector *buckets = NULL;
+  int i, used;
+
+  callable(f, 1);
+  GCPRO2(f, buckets);
+
+  buckets = make_table_copy(table, &used);
+
+  for (i = 0; i < used; ++i)
+    if (buckets->data[i])
+      call1(f, buckets->data[i]);
+
+  UNGCPRO();
+
+  undefined();
+}
+
+TYPEDOP(table_existsp, "c table -> x. Returns the first element x in table "
+	"for which c(x) is true, or false",
+	2, (value f, struct table *table),
+	0, "ft.x")
+{
+  struct gcpro gcpro1, gcpro2;
+  struct vector *buckets = NULL;
+  value res = makebool(0);
+  int i, used;
+
+  callable(f, 1);
+  GCPRO2(f, buckets);
+
+  buckets = make_table_copy(table, &used);
+
+  for (i = 0; i < used; ++i)
+    if (buckets->data[i]
+	&& istrue(call1(f, buckets->data[i])))
+      {
+	res = buckets->data[i];
+	break;
+      }
+
+  UNGCPRO();
+
+  return res;
+}
+
+TYPEDOP(table_vector, "table -> v. Returns a vector of the entries in table",
+	1, (struct table *table),
+	OP_LEAF | OP_NOESCAPE, "t.v")
+{
+  struct gcpro gcpro1;
+  struct vector *res, *buckets = NULL;
+  int used;
+
+  GCPRO1(buckets);
+
+  buckets = make_table_copy(table, &used);
+
+  if (used == vector_len(buckets))
+    res = buckets;
+  else
+    {
+      res = alloc_vector(used);
+      memcpy(res->data,
+	     buckets->data,
+	     sizeof res->data[0] * used);
+    }
+
+  UNGCPRO();
+
+  return res;
+}
+
 TYPEDOP(table_prefix, "table s -> l. Returns list of symbols in table whose value isn't null, and whose name starts with s",
 	  2, (struct table *table, struct string *name),
 	  OP_LEAF | OP_NOESCAPE, "ts.l")
@@ -88,9 +195,9 @@ TYPEDOP(table_prefix, "table s -> l. Returns list of symbols in table whose valu
   return table_prefix(table, name);
 }
 
-TYPEDOP(table_ref, "table s -> x. Returns the value of s in symbol table",
-	  2, (struct table *table, struct string *s),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
+EXT_TYPEDOP(table_ref, "table s -> x. Returns the value of s in symbol table",
+	    2, (struct table *table, struct string *s),
+	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
 {
   struct symbol *sym;
 
@@ -153,9 +260,10 @@ static value table_mset(struct table *table, struct string *s, value x)
   return x;
 }
 
-TYPEDOP(table_set, "table s x -> x. Sets the value of entry s in symbol table to x",
-	3, (struct table *table, struct string *s, value x),
-	OP_LEAF | OP_NOESCAPE, "tsx.")
+EXT_TYPEDOP(table_set, "table s x -> x. Sets the value of entry s in symbol "
+	    "table to x",
+	    3, (struct table *table, struct string *s, value x),
+	    OP_LEAF | OP_NOESCAPE, "tsx.")
 {
   TYPEIS(table, type_table);
   return table_mset(table, s, x);
@@ -164,7 +272,7 @@ TYPEDOP(table_set, "table s x -> x. Sets the value of entry s in symbol table to
 TYPEDOP(table_remove, "table s -> b. Removes the entry for s in the table x. "
 	"Returns true if such an entry was found.",
 	2, (struct table *table, struct string *s),
-	OP_LEAF | OP_NOESCAPE, "tsx.")
+	OP_LEAF | OP_NOESCAPE, "ts.n")
 {
   struct gcpro gcpro1;
   int r;
@@ -179,6 +287,7 @@ TYPEDOP(table_remove, "table s -> b. Removes the entry for s in the table x. "
   return makebool(r);
 }
 
+
 void symbol_init(void)
 {
   DEFINE("table?", tablep);
@@ -189,10 +298,13 @@ void symbol_init(void)
   DEFINE("table_remove!", table_remove);
 
   DEFINE("table_list", table_list);
+  DEFINE("table_vector", table_vector);
   DEFINE("table_prefix", table_prefix);
+  DEFINE("table_foreach", table_foreach);
+  DEFINE("table_exists?", table_existsp);
+
   DEFINE("symbol?", symbolp);
   DEFINE("symbol_name", symbol_name);
   DEFINE("symbol_get", symbol_get);
   DEFINE("symbol_set!", symbol_set);
 }
-

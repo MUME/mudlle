@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -75,6 +75,10 @@ void callable(value c, int nargs);
 int callablep(value c, int nargs);
 /* Returns: FALSE if c is not something that can be called with
      nargs arguments.
+*/
+
+int seclevel_violator(value c);
+/* Returns: TRUE is calling c will cause a seclevel runtime error
 */
 
 /* as above, but trap errors */

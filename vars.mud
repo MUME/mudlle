@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,7 +20,7 @@
  */
 
 library vars
-requires system, misc
+requires misc
 defines
   mc:v_class, mc:v_name, mc:v_number, mc:v_indirect, mc:v_uses, mc:svar,
   mc:v_neighbours, mc:v_alias, mc:v_location, mc:v_lclass, mc:v_lregister,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -32,32 +32,39 @@
 
 void runtime_init(void);
 
-#define FULLOP(x, helpmsg, nargs, args, seclevel, flags, type) \
-value code_ ## x args; \
+#define FULLOP(x, helpmsg, nargs, args, seclevel, flags, type, static_func) \
+static_func value code_ ## x args; \
 static struct primitive_ext op_ ## x = { NULL, helpmsg, code_ ## x, nargs, flags, type, seclevel }; \
 \
-value code_ ## x args
+static_func value code_ ## x args
 
 #define TYPEDOP(x, helpmsg, nargs, args, flags, type) \
   MTYPE(type_ ## x, type); \
-  FULLOP(x, helpmsg, nargs, args, 0, flags, type_ ## x)
+  FULLOP(x, helpmsg, nargs, args, 0, flags, type_ ## x, static)
+
+#define EXT_TYPEDOP(x, helpmsg, nargs, args, flags, type) \
+  MTYPE(type_ ## x, type); \
+  FULLOP(x, helpmsg, nargs, args, 0, flags, type_ ## x, /* extern */)
 
 #define OPERATION(x, helpmsg, nargs, args, flags) \
-  FULLOP(x, helpmsg, nargs, args, 0, flags, NULL)
+  FULLOP(x, helpmsg, nargs, args, 0, flags, NULL, static)
+
+#define EXT_OPERATION(x, helpmsg, nargs, args, flags) \
+  FULLOP(x, helpmsg, nargs, args, 0, flags, NULL, /* extern */)
 
 #define VAROP(x, helpmsg, flags) \
-  FULLOP(x, helpmsg, -1, (struct vector *args, ulong nargs), 0, flags, NULL)
+  FULLOP(x, helpmsg, -1, (struct vector *args, ulong nargs), 0, flags, NULL, static)
 
 #define SECOP(x, helpmsg, nargs, args, seclevel, flags) \
-  FULLOP(x, helpmsg, nargs, args, seclevel, flags, NULL)
+  FULLOP(x, helpmsg, nargs, args, seclevel, flags, NULL, static)
 
-#define LVL_IMPLEMENTOR 1
+#  define LVL_IMPLEMENTOR 1
 
 #define UNSAFEOP(x, helpmsg, nargs, args, flags) \
   SECOP(x, "UNSAFE:" helpmsg, nargs, args, LVL_IMPLEMENTOR, flags)
 
 #define UNIMPLEMENTED(x, helpmsg, nargs, args, flags) \
-  FULLOP(x, "UNIMPLEMENTED: " helpmsg, nargs, args, 0, flags, NULL) \
+  FULLOP(x, "UNIMPLEMENTED: " helpmsg, nargs, args, 0, flags, NULL, static) \
 { \
   runtime_error(error_bad_function); \
   undefined(); \
@@ -122,4 +129,6 @@ extern value undefined_value;
 
 #define MTYPE(name, sig) static typing name = { sig, NULL }
 
+
 #endif
+

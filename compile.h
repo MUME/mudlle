@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -29,6 +29,7 @@ extern component component_undefined, component_true, component_false;
 value make_constant(constant c);
 struct string *make_filename(const char *fname);
 int interpret(value *result, int seclev, int reload);
+struct closure *compile_code(mfile f, int seclev);
 
 void compile_init(void);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -35,6 +35,7 @@ typedef struct _vlist {
   struct _vlist *next;
   const char *var;
   mtype type;
+  int was_read, was_written;
 } *vlist;
 
 typedef struct _clist {
@@ -65,6 +66,8 @@ typedef struct {
 typedef struct {
   vlist locals;
   clist sequence;
+  const char *filename;
+  int lineno;
 } *block;
 
 enum constant_class {
@@ -96,6 +99,7 @@ enum pattern_class {
 
 struct _pattern {
   enum pattern_class vclass;
+  int lineno;
   union {
     constant constval;
     component expr;
@@ -137,6 +141,7 @@ enum component_class {
 
 struct _component {
   enum component_class vclass;
+  int lineno;
   union {
     struct {
       const char *symbol;
@@ -178,10 +183,12 @@ function new_function(block_t heap, mtype type, const char *help, vlist args,
 function new_vfunction(block_t heap, mtype type, const char *help,
 		       const char *arg, component val,
 		       int lineno, const char *filename);
-block new_codeblock(block_t heap, vlist locals, clist sequence);
+block new_codeblock(block_t heap, vlist locals, clist sequence, 
+		    const char *filename, int lineno);
 clist new_clist(block_t heap, component c, clist next);
 cstpair new_cstpair(block_t heap, constant cst1, constant cst2);
 cstlist new_cstlist(block_t heap, constant cst, cstlist next);
+const char *cstlist_has_symbol(cstlist list, const char *needle);
 vlist new_vlist(block_t heap, const char *var, mtype type, vlist next);
 constant new_constant(block_t heap, enum constant_class vclass, ...);
 component new_component(block_t heap, enum component_class vclass, ...);

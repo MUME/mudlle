@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,14 +22,13 @@
 /* Warning: don't change order of ops without looking at runtime.c
    (catchsegv).
 */
-.section	.rodata
 
 #include "options.h"
-#ifdef MUME
-#include "config.h"
-#include "def.char.h"
-#endif	
 
+.section	.rodata
+
+#ifndef NOCOMPILER
+	
 #define N(x) x
 	
 /* Important constants ... */
@@ -154,6 +153,18 @@
 	.globl	N(interpreter_start)
 	.globl	N(call_stack)
 
+#ifdef GCSTATS
+	.global N(gcstats)
+
+#define GCSTAT_ADD(type, size)					\
+	incl	N(gcstats) + 4 * (5 + 22 * 6 + type);		\
+	add	size,N(gcstats) + 4 * (5 + 22 * 7 + type)
+
+#else  /* !GCSTATS */
+#define GCSTAT_ADD(type, size)
+#endif /* !GCSTATS */
+
+	
 /* Call C function (CCALL_SECURE needs %eax) */
 
 #define END_FRAME_NOPC \
@@ -244,6 +255,10 @@
 #define ISUNALIGNED(x) \
 	testl	$3,x
 
+#define ARG0_IS_READ_WRITE				\
+	testl	$flag_readonly,object_flags(arg0);	\
+	jne	E(error_value_read_only)
+
 #ifdef GCDEBUG_CHECK
 #define GCCHECK(reg) \
 	cmp	null,%reg; \
@@ -273,6 +288,11 @@
 #define GCCHECK(reg)
 #endif
 	
+#define CHECK_LOOP				\
+	decl	N(xcount);			\
+	je	E(error_loop);			\
+	cmpl    (N(mudlle_stack_limit)),%esp;	\
+	jb	E(error_recurse)
 
 	.globl	N(abort)
 
@@ -454,6 +474,7 @@ vectorset:
 	je	E(error_bad_type)
 	add	arg1,arg1
 	js	E(error_bad_index)
+	ARG0_IS_READ_WRITE
 	add	$object_offset-2,arg1
 	cmp	object_size(arg0),arg1
 	jae	E(error_bad_index)
@@ -467,6 +488,7 @@ stringset:
 	je	E(error_bad_type)
 	INTVAL(arg1)
 	js	E(error_bad_index)
+	ARG0_IS_READ_WRITE
 	add	$object_offset+1,arg1
 	cmp	object_size(arg0),arg1
 	jae	E(error_bad_index)
@@ -504,8 +526,7 @@ N(bwglobal):
 
 N(bcleargc):
 	jne	E(error_wrong_parameters)
-	decl	N(xcount)
-	je	E(error_loop)
+	CHECK_LOOP
 	mov	object_offset(closure_in),%eax
 	movw	object_offset+mcode_seclevel(%eax),%ax
 	cmpw	N(minlevel),%ax
@@ -526,8 +547,7 @@ N(bcleargc):
 
 N(bcleargc0):
 	jne	E(error_wrong_parameters)
-	decl	N(xcount)
-	je	E(error_loop)
+	CHECK_LOOP
 	mov	object_offset(closure_in),%eax
 	movw	object_offset+mcode_seclevel(%eax),%ax
 	cmpw	N(minlevel),%ax
@@ -538,8 +558,7 @@ N(bcleargc0):
 
 N(bcleargc1):
 	jne	E(error_wrong_parameters)
-	decl	N(xcount)
-	je	E(error_loop)
+	CHECK_LOOP
 	mov	object_offset(closure_in),%eax
 	movw	object_offset+mcode_seclevel(%eax),%ax
 	cmpw	N(minlevel),%ax
@@ -551,8 +570,7 @@ N(bcleargc1):
 
 N(bcleargc2):
 	jne	E(error_wrong_parameters)
-	decl	N(xcount)
-	je	E(error_loop)
+	CHECK_LOOP
 	mov	object_offset(closure_in),%eax
 	movw	object_offset+mcode_seclevel(%eax),%ax
 	cmpw	N(minlevel),%ax
@@ -565,8 +583,7 @@ N(bcleargc2):
 
 /* Build varargs vector & count */
 N(bvarargs):
-	decl	N(xcount)
-	je	E(error_loop)
+	CHECK_LOOP
 	mov	object_offset(closure_in),%ecx
 	movw	object_offset+mcode_seclevel(%ecx),%cx
 	cmpw	N(minlevel),%cx
@@ -596,12 +613,13 @@ valloc:	lea	object_offset(,%ecx,4),%edi
 	/* success */
 	mov	arg0,N(posgen0)
 	mov	%edi,object_size(arg0)
+	GCSTAT_ADD(type_vector, %edi)
 #ifdef GCDEBUG
 	mov	N(minorgen),%edi
 	mov	%edi,object_gen(arg0)
 #endif
 	movl	$garbage_record | type_vector << 8,object_info(arg0)
-
+	
 	/* Copy %ecx args from bp+argstart */
 	push	%esi
 	lea	argstart(%ebp),%esi
@@ -639,6 +657,7 @@ N(balloc_variable):
 	/* success */
 	mov	arg1,N(posgen0)
 	movl	$object_offset + 4,object_size(arg1)
+	GCSTAT_ADD(type_variable, $object_offset + 4)
 #ifdef GCDEBUG
 	mov	N(minorgen),arg0
 	mov	arg0,object_gen(arg1)
@@ -666,6 +685,7 @@ N(balloc_closure):
 	/* success */
 	mov	arg0,N(posgen0)
 	mov	arg1,object_size(arg0)
+	GCSTAT_ADD(type_closure, arg1)
 #ifdef GCDEBUG
 	mov	N(minorgen),arg1
 	mov	arg1,object_gen(arg0)
@@ -695,6 +715,7 @@ N(balloc_cons):
 	/* success */
 	mov	arg1,N(posgen0)
 	movl	$pair_size,object_size(arg1)
+	GCSTAT_ADD(type_list, $pair_size)
 #ifdef GCDEBUG
 	mov	N(minorgen),arg0
 	mov	arg0,object_gen(arg1)
@@ -788,6 +809,7 @@ valloc2:
 	/* success */
 	mov	arg0,N(posgen0)
 	mov	%edx,object_size(arg0)
+	GCSTAT_ADD(type_vector, %edx)
 #ifdef GCDEBUG
 	mov	N(minorgen),%ecx
 	mov	%ecx,object_gen(arg0)
@@ -1026,3 +1048,5 @@ ERRORSTUB(error_wrong_parameters)
 ERRORSTUB(error_security_violation)
 ERRORSTUB(error_value_read_only)
 ERRORSTUB(error_user_interrupt)
+
+#endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -41,6 +41,7 @@ typedef enum {
   error_value_read_only,
   error_user_interrupt,
   error_no_match,
+  error_compile,
   last_runtime_error
 } runtime_errors;
 
@@ -64,6 +65,8 @@ void runtime_error(runtime_errors error) NORETURN;
      and the error code in exception_value.
    Note: Never returns
 */
+
+struct vector *get_mudlle_call_trace(void);
 
 #endif
 

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -182,7 +182,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
       change = false;
       dforeach(fn (il)
 	       [
-		 | ins, delta, size, op |
+		 | ins, delta, op |
 
 		 ins = il[x86:il_ins];
 		 op = ins[x86:i_op];
@@ -626,7 +626,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
       if (!register?(a1))
 	[
 	  | t |
-	  t = a1; a1 = a2; a2 = a1;
+	  t = a1; a1 = a2; a2 = t;
 	];
       code[o] = 0x87;
       setea1(code, o + 1, regval(a1), a2, info);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -38,7 +38,11 @@
 #include "runtime/files.h"
 #include "call.h"
 
-OPERATION(load, "s -> . Loads file s", 1, (struct string *name), 0)
+#ifdef GLOB_TILDE
+#endif
+
+OPERATION(load, "s -> b. Loads file s. Returns true if successful",
+	  1, (struct string *name), 0)
 {
   char *fname;
 
@@ -46,6 +50,7 @@ OPERATION(load, "s -> . Loads file s", 1, (struct string *name), 0)
   LOCALSTR(fname, name);
   return makebool(load_file(name->str, fname, 1, TRUE));
 }
+
 
 UNSAFEOP(mkdir, "s n1 -> n2. Make directory s (mode n1)",
 	 2, (struct string *name, value mode),
@@ -101,8 +106,10 @@ UNSAFEOP(glob_files, "s n -> l. Returns a list of all files matched by the "
 #ifdef _GNU_GLOB_
   if (flags & ~(GLOB_TILDE | GLOB_BRACE | GLOB_MARK | GLOB_NOCHECK |
 		GLOB_NOESCAPE | GLOB_PERIOD | GLOB_NOMAGIC | GLOB_ONLYDIR))
+#elif defined(GLOB_NOESCAPE)
+  if (flags & ~(GLOB_MARK | GLOB_NOCHECK | GLOB_NOESCAPE))
 #else
-  if (flags & ~( GLOB_MARK | GLOB_NOCHECK | GLOB_NOESCAPE ))
+  if (flags & ~(GLOB_MARK | GLOB_NOCHECK))
 #endif
     runtime_error(error_bad_value);
 
@@ -128,21 +135,21 @@ UNSAFEOP(glob_files, "s n -> l. Returns a list of all files matched by the "
 
 static value build_file_stat(struct stat *sb)
 {
-  struct vector *info = alloc_vector(13);
+  struct vector *info = alloc_vector(FILE_STAT_FIELDS);
   
-  info->data[0] = makeint((int)sb->st_dev);
-  info->data[1] = makeint(sb->st_ino);
-  info->data[2] = makeint(sb->st_mode);
-  info->data[3] = makeint(sb->st_nlink);
-  info->data[4] = makeint(sb->st_uid);
-  info->data[5] = makeint(sb->st_gid);
-  info->data[6] = makeint((int)sb->st_rdev);
-  info->data[7] = makeint(sb->st_size);
-  info->data[8] = makeint(sb->st_atime);
-  info->data[9] = makeint(sb->st_mtime);
-  info->data[10] = makeint(sb->st_ctime);
-  info->data[11] = makeint(sb->st_blksize);
-  info->data[12] = makeint(sb->st_blocks);
+  info->data[FS_DEV]     = makeint((int)sb->st_dev);
+  info->data[FS_INO]     = makeint((int)sb->st_ino);
+  info->data[FS_MODE]    = makeint(sb->st_mode);
+  info->data[FS_NLINK]   = makeint(sb->st_nlink);
+  info->data[FS_UID]     = makeint(sb->st_uid);
+  info->data[FS_GID]     = makeint(sb->st_gid);
+  info->data[FS_RDEV]    = makeint((int)sb->st_rdev);
+  info->data[FS_SIZE]    = makeint((int)sb->st_size);
+  info->data[FS_ATIME]   = makeint(sb->st_atime);
+  info->data[FS_MTIME]   = makeint(sb->st_mtime);
+  info->data[FS_CTIME]   = makeint(sb->st_ctime);
+  info->data[FS_BLKSIZE] = makeint(sb->st_blksize);
+  info->data[FS_BLOCKS]  = makeint((int)sb->st_blocks);
   
   return info;
 }
@@ -328,19 +335,7 @@ void files_init(void)
   DEFINE("file_stat", file_stat);
   DEFINE("readlink", readlink);
   DEFINE("file_lstat", file_lstat);
-  system_define("FS_DEV", makeint(0));
-  system_define("FS_INO", makeint(1));
-  system_define("FS_MODE", makeint(2));
-  system_define("FS_NLINK", makeint(3));
-  system_define("FS_UID", makeint(4));
-  system_define("FS_GID", makeint(5));
-  system_define("FS_RDEV", makeint(6));
-  system_define("FS_SIZE", makeint(7));
-  system_define("FS_ATIME", makeint(8));
-  system_define("FS_MTIME", makeint(9));
-  system_define("FS_CTIME", makeint(10));
-  system_define("FS_BLKSIZE", makeint(11));
-  system_define("FS_BLOCKS", makeint(12));
+
   DEF(S_IFMT);
   DEF(S_IFSOCK);
   DEF(S_IFLNK);
@@ -372,7 +367,9 @@ void files_init(void)
   DEFINE("glob_files", glob_files);
   DEF(GLOB_MARK);
   DEF(GLOB_NOCHECK);
+#ifdef GLOB_NOESCAPE
   DEF(GLOB_NOESCAPE);
+#endif
 #ifdef _GNU_GLOB_
   DEF(GLOB_TILDE);
   DEF(GLOB_BRACE);

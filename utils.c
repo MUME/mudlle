@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -26,7 +26,7 @@
 #include "mudlle.h"
 #include "mudio.h"
 #include "utils.h"
-#include "options.h"
+#  include "options.h"
 
 extern int lineno;
 extern const char *filename;
@@ -61,17 +61,36 @@ void compile_error(const char *msg, ...)
   erred = 1;
 }
 
+static void vwarning(const char *fname, int line, const char *msg, va_list args)
+{
+  char err[4096];
+
+  vsprintf(err, msg, args);
+  if (mudout) mflush(mudout);
+  if (fname && line >= 0)
+    mprintf(muderr, "%s:%d: warning: %s" EOL, fname, line, err);
+  else
+    mprintf(muderr, "warning: %s" EOL, err);
+  if (muderr) mflush(muderr);
+}
+
+
 void warning(const char *msg, ...)
 {
   va_list args;
-  char err[4096];
 
   va_start(args, msg);
-  vsprintf(err, msg, args);
+  vwarning(NULL, -1, msg, args);
   va_end(args);
-  if (mudout) mflush(mudout);
-  mprintf(muderr, "warning: %s" EOL, err);
-  if (muderr) mflush(muderr);
+}
+
+void warning_line(const char *fname, int line, const char *msg, ...)
+{
+  va_list args;
+
+  va_start(args, msg);
+  vwarning(fname, line, msg, args);
+  va_end(args);
 }
 
 #ifdef DEBUG_MEMORY

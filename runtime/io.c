@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -30,6 +30,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #endif
+
 
 OPERATION(print, "x -> . Print a representation of x", 1, (value v),
 	  OP_LEAF | OP_NOESCAPE)
@@ -81,12 +82,22 @@ TYPEDOP(ctime,
 #endif
 }
 
+
 TYPEDOP(time,
 	" -> n. Returns the number of seconds since the 1st of January 1970 GMT",
 	0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return makeint(time(0));
+}
+
+TYPEDOP(time_afterp,
+	"n0 n1 -> b. Returns true if time n0 is after time n1",
+	2, (value t0, value t1),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
+{
+  ISINT(t0); ISINT(t1);
+  return makebool(uintval(t0) > uintval(t1));
 }
 
 static value _mktime(value t, struct tm *(*convert)(const time_t *time))
@@ -96,7 +107,7 @@ static value _mktime(value t, struct tm *(*convert)(const time_t *time))
   struct vector *vtm;
 
   ISINT(t);
-  timeval = intval(t);
+  timeval = uintval(t);
 
   tm = convert(&timeval);
   vtm = alloc_vector(8);
@@ -224,14 +235,56 @@ Output is restored when done",
   return result;
 }
 
+UNSAFEOP(with_output_file,
+	 "s b f -> . Evaluates fn() with output appended to file s. "
+	 "If b is false, send all call traces to the file; otherwise, "
+	 "only send unhandled ones",
+	 3, (struct string *file, value unhandled_only, value code),
+	 0)
+{
+  struct session_context newp;
+  value result, data;
+  Mio oport;
+  FILE *f;
+  struct gcpro gcpro1;
+
+  callable(code, 0);
+  TYPEIS(file, type_string);
+
+  f = fopen(file->str, "a+");
+  if (f == NULL)
+    runtime_error(error_bad_value);
+
+  oport = make_file_outputport(f);
+  GCPRO1(oport);
+
+  if (!istrue(unhandled_only))
+    add_call_trace(oport, 0);
+
+  session_start(&newp, minlevel, muduser, oport, oport);
+  session_context->data = session_context->parent->data;
+  result = mcatch_call0(code);
+  data = session_context->data;
+  session_end();
+  session_context->data = data;
+
+  UNGCPRO();
+  fclose(f);
+  oport->methods = NULL;
+
+  if (exception_signal) /* Continue with exception handling */
+    mthrow(exception_signal, exception_value);
+
+  return result;
+}
+
 static void pformat(struct oport *p, struct string *str,
 		    struct vector *args, int i, int nargs)
 {
   ulong l, spos;
   struct gcpro gcpro1, gcpro2, gcpro3;
 
-  GCPRO2(args, str);
-  GCPRO(gcpro3, p);
+  GCPRO3(args, str, p);
 
   l = string_len(str);
   spos = 0;
@@ -290,11 +343,12 @@ VAROP(pformat, "oport s x1 x2 ... -> . Outputs formatted string s to port, with 
   struct oport *p;
 
   if (nargs < 2) runtime_error(error_wrong_parameters);
-  p = args->data[0];
-  TYPEIS(p, type_outputport);
 
   str = args->data[1];
   TYPEIS(str, type_string);
+
+  p = args->data[0];
+  TYPEIS(p, type_outputport);
 
   pformat(p, str, args, 2, nargs);
 
@@ -354,6 +408,33 @@ TYPEDOP(port_string,
 }
 
 
+OPERATION(add_call_trace_oport, "x b -> . Also send call traces to x (an oport or a character). If b is TRUE, only send those not handled otherwise.",
+	  2, (value oport, value only_unhandled), OP_LEAF)
+{
+  struct gcpro gcpro1;
+
+  if (!TYPE(oport, type_outputport) && !TYPE(oport, type_character))
+    runtime_error(error_bad_type);
+
+  GCPRO1(oport);
+  remove_call_trace(oport);
+  UNGCPRO();
+
+  add_call_trace(oport, istrue(only_unhandled));
+  undefined();
+}
+
+OPERATION(remove_call_trace_oport, "x -> . Stop sending call traces to x",
+	  1, (value oport), OP_LEAF)
+{
+  if (!TYPE(oport, type_outputport) && !TYPE(oport, type_character))
+    runtime_error(error_bad_type);
+
+  remove_call_trace(oport);
+
+  undefined();
+}
+
 void io_init(void)
 {
   DEFINE("write", print);
@@ -362,13 +443,19 @@ void io_init(void)
   DEFINE("newline", newline);
   DEFINE("ctime", ctime);
   DEFINE("time", time);
+  DEFINE("time_after?", time_afterp);
   DEFINE("asctime", asctime);
   DEFINE("strftime", strftime);
   DEFINE("gmtime", gmtime);
   DEFINE("localtime", localtime);
   DEFINE("with_output", with_output);
+  DEFINE("with_output_file", with_output_file);
   DEFINE("make_string_oport", make_string_oport);
   DEFINE("port_string", port_string);
   DEFINE("pformat", pformat);
   DEFINE("format", format);
+
+  DEFINE("add_call_trace_oport!", add_call_trace_oport);
+  DEFINE("remove_call_trace_oport!", remove_call_trace_oport);
+
 }

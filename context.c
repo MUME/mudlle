@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -77,7 +77,6 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
   context.parent = catch_context;
   catch_context = &context;
 
-
   if (nosigsetjmp(context.exception)) 
     { 
       int extra_depth;
@@ -87,7 +86,7 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
       activation_stack = context.old_activation_stack;
 #endif
       ccontext = context.occontext;
-#ifdef i386
+#if defined(i386) && defined(USE_CCONTEXT)
       GCCHECK(ccontext.callee[0]);
       GCCHECK(ccontext.callee[1]);
       GCCHECK(ccontext.caller[0]);
@@ -122,11 +121,11 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
   return ok;
 }
 
-void mthrow(long signal, value val)
+void mthrow(long sig, value val)
 {
-  exception_signal = signal;
+  exception_signal = sig;
   exception_value = val;
-  nosiglongjmp(catch_context->exception, signal);
+  nosiglongjmp(catch_context->exception, sig);
 }
 
 /* Session context */
@@ -136,6 +135,10 @@ struct session_context *session_context;
 
 ulong xcount;			/* Loop detection */
 uword minlevel;			/* Minimum security level */
+
+#ifdef i386
+ulong mudlle_stack_limit, hard_mudlle_stack_limit;
+#endif
 
 void session_start(struct session_context *context,
 		   uword new_minlevel,
@@ -149,24 +152,36 @@ void session_start(struct session_context *context,
   context->_muderr = new_muderr;
   context->data = NULL;
   context->call_count = MAX_CALLS;
+  context->recursion_count = MAX_RECURSION;
 
   context->old_minlevel = minlevel;
   minlevel = new_minlevel;
   context->old_xcount = xcount;
   xcount = 0;			/* High limit with standalone version */
+
+#ifdef i386
+  context->old_stack_limit = mudlle_stack_limit;
+  asm("movl %%esp,%0" : "=rm" (mudlle_stack_limit));
+  mudlle_stack_limit -= MAX_RECURSION * 16;
+  if (mudlle_stack_limit < hard_mudlle_stack_limit)
+    mudlle_stack_limit = hard_mudlle_stack_limit;
+#endif
 }
 
 void session_end(void)
 {
   xcount = session_context->old_xcount;
   minlevel = session_context->old_minlevel;
+#ifdef i386
+  mudlle_stack_limit = session_context->old_stack_limit;
+#endif
   session_context = session_context->parent;
 }
 
 void unlimited_execution(void)
 {
   /* Effectively remove execution limits for current session */
-  session_context->call_count = 0;
+  session_context->recursion_count = session_context->call_count = 0;
   xcount = 0;
 }
 
@@ -183,9 +198,58 @@ void reset_context(void)
   memset(&ccontext, 0, sizeof ccontext);
 }
 
+struct list *mudcalltrace;	  /* list(cons(recipient, unhandled_only?)) */
+
+void add_call_trace(value v, int unhandled_only)
+{
+  assert(TYPE(v, type_outputport) || TYPE(v, type_character));
+
+  mudcalltrace = alloc_list(alloc_list(v, makebool(unhandled_only)),
+			    mudcalltrace);
+}
+
+void remove_call_trace(value v)
+{
+  struct list *prev, *this;
+  struct gcpro gcpro1, gcpro2, gcpro3;
+
+  prev = NULL;
+  this = mudcalltrace;
+
+  GCPRO2(prev, this);
+  GCPRO(gcpro3, v);
+
+  while (this)
+    {
+      struct list *elem = this->car;
+      assert(TYPE(elem, type_pair));
+
+      if (elem->car == v)
+	{
+	  if (prev == NULL)
+	    mudcalltrace = this->cdr;
+	  else
+	    prev->cdr = this->cdr;
+	  break;
+	}
+
+      prev = this;
+      this = this->cdr;
+    }
+
+  UNGCPRO();
+}
 
 void context_init(void)
 {
+#if 0
+  FILE *ctfile = fopen("mudlle-calltraces.txt", "w");
+  mudcalltrace = alloc_list(alloc_list(make_file_outputport(ctfile), 0), NULL);
+#else
+  mudcalltrace = NULL;
+#endif
+
   staticpro(&exception_value);
+  staticpro((value *)&mudcalltrace);
   reset_context();
 }

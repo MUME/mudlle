@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -60,9 +60,11 @@ varlist env_pop(uword *nb_locals);
      it it's closure as well as the number of local variables it uses.
 */
 
-variable_class env_lookup(const char *name, ulong *offset);
+variable_class env_lookup(const char *name, ulong *offset,
+			  int do_read, int do_write);
 /* Effects: Returns the class & offset of variable name for the current
-     environment. Modifies the closures appropriately.
+     environment. Modifies the closures appropriately. Marks local variables
+     as read/written according to do_read/do_write
 */
 
 #endif

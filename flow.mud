@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -91,7 +91,7 @@ reads mc:show_type_info, mc:verbose
       scan = ilist;
       loop
 	[
-	  | block, ins, il, ilnext, first, flabel |
+	  | block, ins, il, ilnext, first |
 
 	  block = dcons!(null, null); // a new block, with placeholder
 
@@ -788,11 +788,10 @@ mc:rscan_live = fn (f, x, block)
     live_out = bcopy(block[mc:f_live][mc:flow_out]);
     loop
       [
-	| ins, il, dvar, ndvar |
+	| il, ndvar |
 
 	scan = dprev(scan);
 	il = dget(scan);
-	ins = il[mc:il_ins];
 
 	live_in = bcopy(live_out);
 	// if var defined, it wasn't live going in

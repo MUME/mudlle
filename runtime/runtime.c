@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -18,6 +18,8 @@
  * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
+
+#include <stdlib.h>
 
 #include "runtime/runtime.h"
 #include "module.h"
@@ -40,6 +42,7 @@
 #ifdef AMIGA
 #include <dos.h>
 #endif
+
 
 #include <stdio.h>
 #include <string.h>
@@ -76,7 +79,7 @@ void define_string_vector(const char *name, const char **vec, int count)
   int n;
 
   if (count < 0)
-    for (count = 0; strcmp(vec[count], "\n") != 0; ++count)
+    for (count = 0; vec[count]; ++count)
       ;
 
   v = alloc_vector(count);
@@ -141,7 +144,7 @@ void runtime_define(const char *name, struct primitive_ext *op)
   system_define(name, prim);
 }
 
-#ifdef INTERRUPT
+#ifdef MUDLLE_INTERRUPT
 static int interrupted = FALSE;
 
 void check_interrupt(void)
@@ -161,11 +164,12 @@ void check_interrupt(void)
 
 void catchint(int sig)
 {
+  xcount = 1;
   interrupted = TRUE;
 }
 #endif
 
-#ifdef i386
+#if defined(i386) && !defined(NOCOMPILER)
 
 #ifdef SA_SIGINFO
 #include <asm/ucontext.h>
@@ -185,7 +189,7 @@ void catchint(int sig)
 static struct sigaction oldsegact;
 #endif
 
-static void got_real_segv(int sig)
+void got_real_segv(int sig)
 {
   /* 
    * reinstall the default handler, this will cause
@@ -206,7 +210,7 @@ static INLINE void check_segv(int sig, struct sigcontext *scp)
   /* Check if it was a cmpb $imm,object_type(reg) */
   if (eip[0] == 0x80 &&
       (eip[1] & 0xf8) == 0x78 &&
-      eip[2] == offsetof(struct obj, type))
+      eip[2] == 5)		/* offsetof(struct obj, type) */
     {
       /* mudlle code */
       if (eip  >= gcblock && eip < gcblock + gcblocksize)
@@ -395,7 +399,7 @@ void runtime_init(void)
   system_module = alloc_string("system");
   staticpro((value *)&system_module);
 
-#ifdef INTERRUPT
+#ifdef MUDLLE_INTERRUPT
 #ifdef __SVR4
   {
     struct sigaction act;
@@ -427,7 +431,7 @@ void runtime_init(void)
 #endif
 #endif
 
-#ifdef i386
+#if defined(i386) && !defined(NOCOMPILER)
 #ifdef SA_SIGINFO
   {
     static char my_signal_stack[16 * 1024];
@@ -439,7 +443,9 @@ void runtime_init(void)
     my_stack.ss_flags = SS_ONSTACK;
     my_stack.ss_size = sizeof my_signal_stack;
     if ((noaltstack = sigaltstack(&my_stack, NULL) < 0))
-      fprintf(stderr, "Inferior kernel doesn't support sigaltstack()\n");
+      {
+	;
+      }
 
     sact.sa_sigaction = catchsegv;
     sigemptyset(&sact.sa_mask);
@@ -468,7 +474,7 @@ void runtime_init(void)
   float_init();
   bigint_init();
   pattern_init();
-  module_set("system", module_protected);
+  module_set("system", module_protected, 0);
   if (ops) fclose(ops);
   if (binops) fclose(binops);
 }

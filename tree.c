@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,6 +27,7 @@
 #include "error.h"
 #include "utils.h"
 #include "env.h"
+#include "utils.charset.h"
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
@@ -81,12 +82,15 @@ function new_vfunction(block_t heap, mtype type, const char *help,
   return newp;
 }
 
-block new_codeblock(block_t heap, vlist locals, clist sequence)
+block new_codeblock(block_t heap, vlist locals, clist sequence, 
+		    const char *filename, int lineno)
 {
   block newp = allocate(heap, sizeof *newp);
 
   newp->locals = locals;
   newp->sequence = sequence;
+  newp->filename = filename;
+  newp->lineno = lineno;
 
   return newp;
 }
@@ -118,6 +122,7 @@ vlist new_vlist(block_t heap, const char *var, mtype type, vlist next)
   newp->next = next;
   newp->var = var;
   newp->type = type;
+  newp->was_read = newp->was_written = 0;
 
   return newp;
 }
@@ -165,6 +170,21 @@ constant new_constant(block_t heap, enum constant_class vclass, ...)
   return newp;
 }
 
+const char *cstlist_has_symbol(cstlist list, const char *needle)
+{
+  while (list)
+    {
+      constant car = list->cst, str;
+      assert(car->vclass == cst_symbol);
+      str = car->u.constpair->cst1;
+      assert(str->vclass == cst_string);
+      if (str8icmp(needle, str->u.string) == 0)
+	return str->u.string;
+      list = list->next;
+    }
+  return 0;
+}
+  
 static clist make_clist(block_t heap, va_list args)
 {
   int count;
@@ -177,13 +197,15 @@ static clist make_clist(block_t heap, va_list args)
     }
   return first;
 }
-  
+
 component new_component(block_t heap, enum component_class vclass, ...)
 {
   va_list args;
   component newp = allocate(heap, sizeof *newp);
 
   newp->vclass = vclass;
+  newp->lineno = 0;
+
   va_start(args, vclass);
   switch (vclass)
     {
@@ -224,6 +246,7 @@ pattern new_pattern_constant(block_t heap, constant c)
 {
   pattern ap = allocate(heap, sizeof *ap);
   ap->vclass = pat_const;
+  ap->lineno = 0;
   ap->u.constval = c;
   return ap;
 }
@@ -232,6 +255,7 @@ pattern new_pattern_expression(block_t heap, component c)
 {
   pattern ap = allocate(heap, sizeof *ap);
   ap->vclass = pat_expr;
+  ap->lineno = c->lineno;
   ap->u.expr = c;
   return ap;
 }
@@ -239,6 +263,7 @@ pattern new_pattern_expression(block_t heap, component c)
 pattern new_pattern_sink(block_t heap)
 {
   pattern ap = allocate(heap, sizeof *ap);
+  ap->lineno = 0;
   ap->vclass = pat_sink;
   return ap;
 }
@@ -247,26 +272,28 @@ pattern new_pattern_symbol(block_t heap, const char *sym, mtype type)
 {
   pattern ap = allocate(heap, sizeof *ap);
   ap->vclass = pat_symbol;
+  ap->lineno = 0;
   ap->u.sym.name = sym;
   ap->u.sym.type = type;
   return ap;
 }
 
 pattern new_pattern_compound(block_t heap, 
-					      enum pattern_class class,
-					      patternlist list,
-					      int ellipsis)
+			     enum pattern_class class,
+			     patternlist list,
+			     int ellipsis)
 {
   pattern ap = allocate(heap, sizeof *ap);
   ap->vclass = class;
+  ap->lineno = 0;
   ap->u.l.patlist = list;
   ap->u.l.ellipsis = ellipsis;
   return ap;
 }
 
 patternlist new_pattern_list(block_t heap, 
-					      pattern pat,
-					      patternlist tail)
+			     pattern pat,
+			     patternlist tail)
 {
   patternlist apl = allocate(heap, sizeof *apl);
   apl->next = tail;
@@ -797,7 +824,7 @@ static component build_unop(int op, component e)
 static component build_codeblock(vlist vl, clist code)
 {
   return new_component(build_heap, c_block, 
-		       new_codeblock(build_heap, vl, code));
+		       new_codeblock(build_heap, vl, code, NULL, -1));
 }
 
 static component build_reference(component x, component idx) UNUSED;
@@ -827,17 +854,17 @@ static component build_typecheck(component e, mtype type)
   const char *f;
 
   switch (type) {
-  case type_integer: f = ":integer?"; break;
-  case type_string: f = ":string?"; break;
-  case type_vector: f = ":vector?"; break;
-  case type_pair: f = ":pair?"; break;
-  case type_symbol: f = ":symbol?"; break;
-  case type_table: f = ":table?"; break;
-  case type_object: f = ":object?"; break;
+  case type_integer:   f = ":integer?";   break;
+  case type_string:    f = ":string?";    break;
+  case type_vector:    f = ":vector?";    break;
+  case type_pair:      f = ":pair?";      break;
+  case type_symbol:    f = ":symbol?";    break;
+  case type_table:     f = ":table?";     break;
+  case type_object:    f = ":object?";    break;
   case type_character: f = ":character?"; break;
-  case type_gone: f = ":gone?"; break;
-  case type_float: f = ":float?"; break;
-  case type_bigint: f = ":bigint?"; break;
+  case type_gone:      f = ":gone?";      break;
+  case type_float:     f = ":float?";     break;
+  case type_bigint:    f = ":bigint?";    break;
   case type_null: 
     return build_binop(b_eq, e,
 		       new_component(build_heap, c_constant, 
@@ -855,6 +882,8 @@ static component build_typecheck(component e, mtype type)
 static component build_match_block(pattern pat, component e,
 				   int level)
 {
+  component res;
+
   switch (pat->vclass) {
   case pat_sink:
     return component_true;
@@ -873,15 +902,17 @@ static component build_match_block(pattern pat, component e,
       apc_symbols = new_vlist(build_heap, pat->u.sym.name, stype_any, 
 			      apc_symbols);
 
-      return build_codeblock
+      res = build_codeblock
 	(NULL,
 	 build_clist(2,
 		     build_assign(pat->u.sym.name, e),
 		     build_typecheck(build_recall(pat->u.sym.name),
 				     pat->u.sym.type)));
+      break;
     }
   case pat_const:
-    return build_const_comparison(pat->u.constval, e);
+    res = build_const_comparison(pat->u.constval, e);
+    break;
   case pat_array:
     {
       /*
@@ -942,88 +973,98 @@ static component build_match_block(pattern pat, component e,
 
       code = new_clist(build_heap, check, code);
 
-      return build_codeblock(build_vlist(1, tmpname, stype_any),
-			     reverse_clist(code));
+      res = build_codeblock(build_vlist(1, tmpname, stype_any),
+			    reverse_clist(code));
+      break;
     }
   case pat_list:
-    if (pat->u.l.patlist == NULL)
-      return build_const_comparison
-	(new_constant(build_heap, cst_list, NULL), e);
-    else
-      {
-	/*
-	 *  [
-	 *    | tmp |
-	 *    tmp = <expression>;
-	 *    pair?(tmp) &&
-	 *    car(tmp) == car(<pattern>) &&
-	 *      [
-	 *        tmp = cdr(tmp); <pattern> = cdr(<pattern>);
-	 *        pair?(tmp) &&
-	 *        car(tmp) == car(<pattern>) &&
-	 *          :
-	 *          [                              \  this is done at
-	 *            cdr(tmp) == cdr(<pattern>);  +- the last pair
-	 *          ]                              /
-	 *      ]
-	 *  ]
-	 */
-	patternlist apl = pat->u.l.patlist;
-	component check, getcdr;
-	clist code;
-	char buf[16], *tmpname;
-	int first = TRUE;
+    {
+      patternlist apl = pat->u.l.patlist;
+      component check, getcdr;
+      clist code;
+      char buf[16], *tmpname;
+      int first = TRUE;
 
-	sprintf(buf, "~%d", level);
-	tmpname = heap_allocate_string(build_heap, buf);
+      if (pat->u.l.patlist == NULL)
+	{
+	  res = build_const_comparison(new_constant(build_heap, cst_list, NULL), e);
+	  break;
+	}
 
-	code = build_clist(1, build_assign(tmpname, e));
-	
-	/* ~tmp = cdr(~tmp) */
-	getcdr = build_exec(build_recall(GLOBAL_ENV_PREFIX "cdr"), 1, 
-			    build_recall(tmpname));
-	
-	/* this will go last: compare the tail */
-	if (apl->pat == NULL)
-	  check = build_const_comparison
-	    (new_constant(build_heap, cst_list, NULL), getcdr);
-	else
-	  check = build_match_block(apl->pat, getcdr, level + 1);
-	
-	for (apl = apl->next; apl; apl = apl->next)
-	  {
-	    component c = build_binop
-	      (b_sc_and,
-	       build_exec(build_recall(GLOBAL_ENV_PREFIX "pair?"), 1, 
-			  build_recall(tmpname)),
-	       build_match_block
-	       (apl->pat, 
-		build_exec(build_recall(GLOBAL_ENV_PREFIX "car"), 1, 
-			   build_recall(tmpname)),
-		level + 1));
-	    if (first)
-	      first = FALSE;
-	    else
-	      {
-		component movecdr;
-		getcdr = build_exec(build_recall(GLOBAL_ENV_PREFIX "cdr"), 1, 
-				    build_recall(tmpname));
-		movecdr = build_assign(tmpname, getcdr);
-		check = build_codeblock(NULL, build_clist(2, movecdr, check));
-	      }
-	    check = build_binop(b_sc_and, c, check);
-	  }
-
-	code = new_clist(build_heap, check, code);
-
-	return build_codeblock(build_vlist(1, tmpname, stype_any),
-			       reverse_clist(code));
-      }
+      /*
+       *  [
+       *    | tmp |
+       *    tmp = <expression>;
+       *    pair?(tmp) &&
+       *    car(tmp) == car(<pattern>) &&
+       *      [
+       *        tmp = cdr(tmp); <pattern> = cdr(<pattern>);
+       *        pair?(tmp) &&
+       *        car(tmp) == car(<pattern>) &&
+       *          :
+       *          [                              \  this is done at
+       *            cdr(tmp) == cdr(<pattern>);  +- the last pair
+       *          ]                              /
+       *      ]
+       *  ]
+       */
+      sprintf(buf, "~%d", level);
+      tmpname = heap_allocate_string(build_heap, buf);
+      
+      code = build_clist(1, build_assign(tmpname, e));
+      
+      /* ~tmp = cdr(~tmp) */
+      getcdr = build_exec(build_recall(GLOBAL_ENV_PREFIX "cdr"), 1, 
+			  build_recall(tmpname));
+      getcdr->lineno = pat->lineno;
+      
+      /* this will go last: compare the tail */
+      if (apl->pat == NULL)
+	check = build_const_comparison
+	  (new_constant(build_heap, cst_list, NULL), getcdr);
+      else
+	check = build_match_block(apl->pat, getcdr, level + 1);
+      
+      for (apl = apl->next; apl; apl = apl->next)
+	{
+	  component c = build_binop
+	    (b_sc_and,
+	     build_exec(build_recall(GLOBAL_ENV_PREFIX "pair?"), 1, 
+			build_recall(tmpname)),
+	     build_match_block
+	     (apl->pat, 
+	      build_exec(build_recall(GLOBAL_ENV_PREFIX "car"), 1, 
+			 build_recall(tmpname)),
+	      level + 1));
+	  
+	  if (first)
+	    first = FALSE;
+	  else
+	    {
+	      component movecdr;
+	      getcdr = build_exec(build_recall(GLOBAL_ENV_PREFIX "cdr"), 1, 
+				  build_recall(tmpname));
+	      movecdr = build_assign(tmpname, getcdr);
+	      check = build_codeblock(NULL, build_clist(2, movecdr, check));
+	    }
+	  check = build_binop(b_sc_and, c, check);
+	  check->lineno = apl->pat->lineno;
+	}
+      
+      code = new_clist(build_heap, check, code);
+      
+      res = build_codeblock(build_vlist(1, tmpname, stype_any),
+			    reverse_clist(code));
+      break;
+    }
   case pat_expr:
-    return build_exec(build_recall("=>"), 2, pat->u.expr, e);
+    res = build_exec(build_recall("=>"), 2, pat->u.expr, e);
+    break;
   default:
     assert(0);
   }
+  res->lineno = pat->lineno;
+  return res;
 }
 
 static component build_error(int error)
@@ -1034,6 +1075,8 @@ static component build_error(int error)
 
 component new_pattern_component(block_t heap, pattern pat, component e)
 {
+  component res;
+
   build_heap = heap;
   apc_symcount = 0;
   apc_symbols = NULL;
@@ -1042,10 +1085,12 @@ component new_pattern_component(block_t heap, pattern pat, component e)
    *  Warning: if the match fails, this might leave only some of the variables 
    *  in the pattern filled. But it's a feature, right?
    */
-  return new_component(build_heap, c_builtin, b_ifelse, 3,
-		       build_match_block(pat, e, 0),
-		       component_undefined,
-		       build_error(error_no_match));
+  res = new_component(build_heap, c_builtin, b_ifelse, 3,
+		      build_match_block(pat, e, 0),
+		      component_undefined,
+		      build_error(error_no_match));
+  res->lineno = pat->lineno;
+  return res;
 }
 
 component new_match_component(block_t heap, component e, matchnodelist matches)
@@ -1124,7 +1169,8 @@ component new_xor_component(block_t heap, component e0, component e1)
   return new_component(heap, c_block,
 		       new_codeblock(heap,
 				     vl,
-				     reverse_clist(cl)));
+				     reverse_clist(cl),
+				     NULL, -1));
 }
 
 component new_postfix_inc_component(block_t heap, const char *var, int op)
@@ -1160,5 +1206,6 @@ component new_postfix_inc_component(block_t heap, const char *var, int op)
   return new_component(heap, c_block,
 		       new_codeblock(heap,
 				     vl,
-				     reverse_clist(cl)));
+				     reverse_clist(cl),
+				     NULL, -1));
 }

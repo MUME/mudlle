@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,4 +19,11 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-load_library = fn (s) [ display(format("loading %s", s)); newline(); load(s + ".mud") ];
+load_library = fn (s)
+[ 
+  display(format("loading %s%n", s));
+  if (load(s + ".mud"))
+    display(format("loaded %s%n", s))
+  else
+    error(error_bad_value);
+];

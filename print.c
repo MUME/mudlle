@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,6 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <alloca.h>
 #include <string.h>
 #include <stddef.h>
 #include <string.h>
@@ -31,6 +32,9 @@
 #include "table.h"
 #include "objenv.h"
 #include "code.h"
+#include "ins.h"
+#include "global.h"
+
 
 #define MAX_PRINT_COUNT 400
 #define FLOATSTRLEN 20
@@ -91,11 +95,41 @@ static void write_string(struct oport *p, prt_level level, struct string *print)
     }
 }
 
-static int write_instruction(struct oport *f, instruction *i, ulong ofs)
+static int last_instr_line;
+
+static const char *global_name(int idx)
+{
+  static char buf[64], *p = NULL;
+  struct string *str;
+
+  if (idx < 0 || idx >= vector_len(global_names))
+    return "<unknown>";
+
+  str = GNAME(idx);
+  if (string_len(str) >= sizeof buf)
+    {
+      p = realloc(p, string_len(str) + 1);
+      memcpy(p, str->str, string_len(str) + 1);
+      return p;
+    }
+
+  strcpy(buf, str->str);
+  return buf;
+}
+
+static void print_global_exec(struct oport *f, const char *type, int nargs,
+			      uword uw)
+{
+  pprintf(f, "execute[%s %u %s] %d\n", type, uw, global_name(uw), nargs);
+}
+
+static int write_instruction(struct code *code, struct oport *f, 
+			     instruction *i, ulong ofs)
 {
   ubyte byte1, byte2;
   ubyte op;
   word word1;
+  int line;
 
   instruction *old_i = i;
   const char *brname[] = { "", "(loop)", "(nz)", "(z)" };
@@ -110,6 +144,14 @@ static int write_instruction(struct oport *f, instruction *i, ulong ofs)
 
   op = insubyte();
 
+  line = get_code_line_number(code, ofs);
+
+  if (line != last_instr_line)
+    pprintf(f, "%5d: ", line);
+  else
+    pputs("       ", f);
+  last_instr_line = line;
+
   pprintf(f, "%5d: ", ofs);
   if (op >= op_recall && op <= op_closure_var + closure_var)
     {
@@ -117,8 +159,11 @@ static int write_instruction(struct oport *f, instruction *i, ulong ofs)
       const char *classname[] = { "local", "closure", "global" };
 
       if ((op - op_recall) %3 == global_var)
-	pprintf(f, "%s[%s] %lu\n", opname[(op - op_recall) / 3],
-		classname[(op - op_recall) % 3], insuword());
+	{
+	  uword uw = insuword();
+	  pprintf(f, "%s[global] %lu %s\n", opname[(op - op_recall) / 3],
+		  uw, global_name(uw));
+	}
       else
 	pprintf(f, "%s[%s] %lu\n", opname[(op - op_recall) / 3],
 		classname[(op - op_recall) % 3], insubyte());
@@ -142,10 +187,10 @@ static int write_instruction(struct oport *f, instruction *i, ulong ofs)
     case op_execute_primitive: pprintf(f, "execute_primitive %u\n", insubyte()); break;
     case op_execute_secure: pprintf(f, "execute_secure %u\n", insubyte()); break;
     case op_execute_varargs: pprintf(f, "execute_varargs %u\n", insubyte()); break;
-    case op_execute_global1: pprintf(f, "execute[global %u] 1\n", insuword()); break;
-    case op_execute_global2: pprintf(f, "execute[global %u] 2\n", insuword()); break;
-    case op_execute_primitive1: pprintf(f, "execute[primitive %u] 1\n", insuword()); break;
-    case op_execute_primitive2: pprintf(f, "execute[primitive %u] 2\n", insuword()); break;
+    case op_execute_global1: print_global_exec(f, "global", 1, insuword()); break;
+    case op_execute_global2: print_global_exec(f, "global", 2, insuword()); break;
+    case op_execute_primitive1: print_global_exec(f, "primitive", 1, insuword()); break;
+    case op_execute_primitive2: print_global_exec(f, "primitive", 2, insuword()); break;
     case op_argcheck: pprintf(f, "argcheck %u\n", insubyte()); break;
     case op_varargs: pprintf(f, "varargs\n"); break;
     case op_discard: pprintf(f, "discard\n"); break;
@@ -175,6 +220,8 @@ static void write_code(struct oport *f, struct code *c)
   ulong nbins, i;
   struct gcpro gcpro1, gcpro2;
 
+  last_instr_line = -1;
+
   GCPRO2(f, c);
   ins = (instruction *)((char *)c + offsetof(struct code, constants[c->nb_constants]));
   nbins = (instruction *)((char *)c + c->o.size) - ins;
@@ -183,7 +230,7 @@ static void write_code(struct oport *f, struct code *c)
   while (i < nbins)
     {
       ins = (instruction *)((char *)c + offsetof(struct code, constants[c->nb_constants]));
-      i += write_instruction(f, ins + i, i);
+      i += write_instruction(c, f, ins + i, i);
     }
 
   pprintf(f, "\n%u locals, %u stack, seclevel %u, %u constants:\n",
@@ -264,16 +311,22 @@ static prt_level write_table_level;
 
 static void write_table_entry(struct symbol *s)
 {
+  struct gcpro gcpro1;
+  GCPRO1(s);
+
   pputc(' ', write_table_oport);
   write_string(write_table_oport, write_table_level, s->name);
   pputc('=', write_table_oport);
   _print_value(write_table_oport, write_table_level, s->data, 0);
+
+  UNGCPRO();
 }
 
 static void write_table(struct oport *f, prt_level level, struct table *t,
 			int toplev)
 {
   struct gcpro gcpro1, gcpro2;
+  struct oport *ooport = write_table_oport;
 
   if (level < prt_examine && table_entries(t) > 10)
     {
@@ -281,14 +334,19 @@ static void write_table(struct oport *f, prt_level level, struct table *t,
       return;
     }
 
-  GCPRO2(f, t);
-  if (level != prt_display && toplev) 
-    pputc('\'', f);
-  pputc('{', f);
+  GCPRO2(ooport, t);
+
   write_table_oport = f;
   write_table_level = level;
+
+  if (level != prt_display && toplev) 
+    pputc('\'', write_table_oport);
+  pputc('{', write_table_oport);
   table_foreach(t, write_table_entry);
-  pputs(" }", f);
+  pputs(" }", write_table_oport);
+
+  write_table_oport = ooport;
+
   UNGCPRO();
 }
 
@@ -426,6 +484,8 @@ void output_value(struct oport *f, prt_level level, value v)
 	  opclose(p);
 	  UNGCPRO();
 	}
+
+      write_table_oport = NULL;
     }
 }
 
@@ -437,4 +497,6 @@ void print_init(void)
   set_writable('"', FALSE);
   set_writable('\\', FALSE);
   for (c = 160; c < 256; c++) set_writable(c, TRUE); 
+
+  staticpro((value *)&write_table_oport);
 }

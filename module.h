@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -24,11 +24,13 @@
 
 #include "types.h"
 
-enum { module_unloaded, module_error, module_loading, module_loaded, module_protected };
+enum module_status { 
+  module_unloaded, module_error, module_loading, module_loaded, module_protected
+};
 
-extern struct table *modules;
+extern struct table *module_data;
 
-int module_status(const char *name);
+enum module_status module_status(const char *name);
 /* Returns: Status of module name:
      module_unloaded: module has never been loaded, or has been unloaded
      module_error: attempt to load module led to error
@@ -36,7 +38,7 @@ int module_status(const char *name);
      module_protected: module loaded & protected
 */
 
-void module_set(const char *name, int status);
+void module_set(const char *name, enum module_status status, int seclev);
 /* Requires: status != module_unloaded
    Effects: Sets module status after load attempt
 */
@@ -83,6 +85,8 @@ int module_vset(long n, int status, struct string *name);
      (ie status was already var_module)
 */
 
+int module_seclevel(const char *name);
+  
 void module_init(void);
 /* Initialise this module */
 

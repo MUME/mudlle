@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,21 +19,10 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-[
-  // Proceed as usual, but don't load any compiled code
-  load_library = fn (s)
-    [
-      basic_load("mudlle/compiler/" + s + ".mud",
-		 "compiler/" + s + ".mud", LVL_IMPLEMENTOR, true);
-      module_set!(s, module_protected);
-    ];
-  load_library("link");
-  
-  // Load compiler
-  load_library("noinf"); // no-inference version of inference library
-  load_library("sparc"); // sparc back-end
-  load_library("compile"); // hurrah!
-
-  mc:verbose = 0;
-];
-
+// Load interpreted 68k compiler (dysfunctional)
+garbage_collect(300000);
+load("lib.mud");
+load("68k.mud");
+load("compile.mud");
+load("noinf.mud");
+load("interface.mud");

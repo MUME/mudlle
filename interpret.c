@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,6 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <alloca.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -37,8 +38,8 @@
 #include "runtime/basic.h"
 
 /* As good a place as any other */
-const char *COPYRIGHT = "\
-Copyright (c) 1993-1999 David Gay and Gustav Hållberg\n\
+const char COPYRIGHT[] = "\
+Copyright (c) 1993-2004 David Gay and Gustav Hållberg\n\
 All rights reserved.\n\
 \n\
 Permission to use, copy, modify, and distribute this software for any\n\
@@ -79,6 +80,18 @@ static INLINE value invoke_stack(struct closure *c, int nargs);
 #define INSUWORD() (byte1 = *ins++, ins_index += 2, (byte1 << 8) + *ins++)
 #define INSWORD() ((word)INSUWORD())
 
+#define SAVE_OFFSET() do { me.u.mudlle.offset = ins_index; } while (0)
+
+#define IERROR(n) do {				\
+  SAVE_OFFSET();				\
+  runtime_error(n);				\
+} while (0)
+
+#define IEARLY_ERROR(n) do {			\
+  SAVE_OFFSET();				\
+  early_runtime_error(n);			\
+} while (0)
+
 void do_interpret(struct closure *fn, int nargs)
 {
   struct call_stack me, primop;
@@ -95,7 +108,16 @@ void do_interpret(struct closure *fn, int nargs)
   struct primitive *pop;
   struct primitive_ext *op;
   
-#ifdef INTERRUPT
+
+#ifdef i386
+  {
+    ulong sp;
+    asm("movl %%esp,%0" : "=rm" (sp));
+    if (sp < mudlle_stack_limit) runtime_error(error_recurse);
+  }
+#endif
+
+#ifdef MUDLLE_INTERRUPT
   check_interrupt();
 #endif
 
@@ -105,6 +127,7 @@ void do_interpret(struct closure *fn, int nargs)
   me.u.mudlle.code = fn->code;
   me.u.mudlle.locals = NULL;
   me.u.mudlle.nargs = nargs;
+  me.u.mudlle.offset = -1;
   me.next = call_stack;
   call_stack = &me;
 
@@ -191,17 +214,19 @@ void do_interpret(struct closure *fn, int nargs)
 #define C_SETARG(n, arg) C_ARG(n) = arg; GCCHECK(C_ARG(n))
 #define C_ARG(n) primop.u.c.arg ## n
 
-#define C_START_CALL(n) \
-	pop->call_count++; \
-        primop.u.c.op = op = pop->op; \
-	primop.u.c.nargs = n; \
+#define C_START_CALL(n)				\
+        SAVE_OFFSET();				\
+	pop->call_count++;			\
+        primop.u.c.prim = pop;			\
+        op = pop->op;				\
+	primop.u.c.nargs = n;			\
 	call_stack = &primop
 
-#define C_END_CALL() \
-	call_stack = &me; \
-	GCCHECK(result); \
-	RESTORE_STACK(); \
-	RESTORE_INS(); \
+#define C_END_CALL()				\
+	call_stack = &me;			\
+	GCCHECK(result);			\
+	RESTORE_STACK();			\
+	RESTORE_INS();				\
 	FAST_PUSH(result);
 
       case op_execute_primitive1:
@@ -235,7 +260,7 @@ void do_interpret(struct closure *fn, int nargs)
 	nargs = INSUBYTE();
 
       execute_fn:
-	if (!pointerp(called)) runtime_error(error_bad_function);
+	if (!pointerp(called)) IERROR(error_bad_function);
 	seclevel = DEFAULT_SECLEVEL;
 	switch (called->type)
 	  {
@@ -248,7 +273,8 @@ void do_interpret(struct closure *fn, int nargs)
 	      /* call_stack must be set after allocate_record, so can't use
 		 C_START_CALL macro */
 	      pop->call_count++;
-	      primop.u.c.op = op = pop->op;
+	      primop.u.c.prim = pop;
+	      op = pop->op;
 	      primop.u.c.nargs = 1;
 
 	      args = (struct vector *)unsafe_allocate_record(type_vector, nargs);
@@ -266,7 +292,7 @@ void do_interpret(struct closure *fn, int nargs)
 	    pop = (struct primitive *)called;
 	    C_START_CALL(nargs);
 	    if (seclevel < op->seclevel)
-	      early_runtime_error(error_security_violation);
+	      IEARLY_ERROR(error_security_violation);
 	    goto execute_primitive;
 
 	  case type_primitive:
@@ -275,7 +301,7 @@ void do_interpret(struct closure *fn, int nargs)
 
 	  execute_primitive:
 	    if (nargs != op->nargs)
-	      early_runtime_error(error_wrong_parameters);
+	      IEARLY_ERROR(error_wrong_parameters);
 
 	    switch (nargs)
 	      {
@@ -324,6 +350,7 @@ void do_interpret(struct closure *fn, int nargs)
 	    {
 	      struct closure *c = (struct closure *)called;
 
+	      SAVE_OFFSET();
 	      if (c->code->o.type == type_mcode)
 		{
 		  result = invoke_stack(c, nargs);
@@ -338,7 +365,7 @@ void do_interpret(struct closure *fn, int nargs)
 	      RESTORE_INS();
 	      break;
 	    }
-	  default: runtime_error(error_bad_function);
+	  default: IERROR(error_bad_function);
 	  }
 	break;
 
@@ -354,7 +381,7 @@ void do_interpret(struct closure *fn, int nargs)
 	C_START_CALL(nargs);
 	seclevel = me.u.mudlle.code->seclevel;
 	if (seclevel < op->seclevel)
-	  early_runtime_error(error_security_violation);
+	  IEARLY_ERROR(error_security_violation);
 	goto execute_primitive;
 
       case op_execute_primitive:
@@ -388,7 +415,8 @@ void do_interpret(struct closure *fn, int nargs)
 	  /* call_stack must be set after allocate_record, so can't use
 	     C_START_CALL macro */
 	  pop->call_count++;
-	  primop.u.c.op = op = pop->op;
+	  primop.u.c.prim = pop;
+	  op = pop->op;
 	  primop.u.c.nargs = 1;
 
 	  args = (struct vector *)unsafe_allocate_record(type_vector, nargs);
@@ -396,6 +424,7 @@ void do_interpret(struct closure *fn, int nargs)
 	  for (i = nargs; i > 0;) args->data[--i] = FAST_POP();
 
 	  call_stack = &primop;
+	  SAVE_OFFSET();
 	  C_SETARG(1, args);
 	  result = op->op(args, nargs);
 	  C_END_CALL();
@@ -403,7 +432,7 @@ void do_interpret(struct closure *fn, int nargs)
 	}
 
       case op_argcheck:		/* A CISCy instruction :-) */
-	if (nargs != INSUBYTE()) early_runtime_error(error_wrong_parameters);
+	if (nargs != INSUBYTE()) IEARLY_ERROR(error_wrong_parameters);
 	for (i = 0; i < nargs; i++)
 	  ((struct variable *)me.u.mudlle.locals->data[i])->vvalue = FAST_GET(i);
 	break;
@@ -458,7 +487,7 @@ void do_interpret(struct closure *fn, int nargs)
 	break;
       case op_loop1:
 	FAST_POPN(1);
-#ifdef INTERRUPT
+#ifdef MUDLLE_INTERRUPT
 	check_interrupt();
 #endif
 	/* FALL THROUGH */
@@ -474,7 +503,7 @@ void do_interpret(struct closure *fn, int nargs)
 
       case op_loop2:
 	FAST_POPN(1);
-#ifdef INTERRUPT
+#ifdef MUDLLE_INTERRUPT
 	check_interrupt();
 #endif
 	/* FALL THROUGH */
@@ -507,7 +536,7 @@ void do_interpret(struct closure *fn, int nargs)
 	{
 	  ulong goffset = INSUWORD();
 
-	  if (GCONSTANT(goffset)) runtime_error(error_variable_read_only);
+	  if (GCONSTANT(goffset)) IERROR(error_variable_read_only);
 	  GVAR(goffset) = FAST_GET(0);
 	  break;
 	}
@@ -527,13 +556,14 @@ void do_interpret(struct closure *fn, int nargs)
 	FAST_SET(0, makebool(FAST_GET(0) != arg1));
 	break;
 
-#define INTEGER_OP(op) \
-	arg2 = FAST_POP(); \
-	arg1 = FAST_GET(0); \
-	if (integerp(arg1) && integerp(arg2)) \
-	  FAST_SET(0, op); \
-	else \
-	  runtime_error(error_bad_type);
+#define INTEGER_OP(op) do {			\
+	  arg2 = FAST_POP();			\
+	  arg1 = FAST_GET(0);			\
+	  if (integerp(arg1) && integerp(arg2))	\
+	    FAST_SET(0, op);			\
+	  else					\
+	    IERROR(error_bad_type);		\
+	} while (0)
 	
       case op_builtin_lt:
 	INTEGER_OP(makebool((long)arg1 < (long)arg2));
@@ -560,7 +590,8 @@ void do_interpret(struct closure *fn, int nargs)
 	    RESTORE_STACK();
 	    FAST_SET(0, arg1);
 	  }
-	else runtime_error(error_bad_type);
+	else
+	  IERROR(error_bad_type);
 	break;
 
       case op_builtin_sub:
@@ -580,6 +611,7 @@ void do_interpret(struct closure *fn, int nargs)
 
 	/* These could be optimised */
       case op_builtin_ref:
+	SAVE_OFFSET();
 	arg2 = FAST_POP();
 	arg1 = code_ref(FAST_GET(0), arg2);
 	GCCHECK(arg1);
@@ -589,6 +621,7 @@ void do_interpret(struct closure *fn, int nargs)
 	break;
 
       case op_builtin_set:
+	SAVE_OFFSET();
 	arg2 = FAST_POP();
 	arg1 = FAST_POP();
 	arg1 = code_set(FAST_GET(0), arg1, arg2);
@@ -601,7 +634,7 @@ void do_interpret(struct closure *fn, int nargs)
       /* The type checks */
       case op_typecheck + type_integer:
 	arg1 = FAST_GET(INSUBYTE());
-	if (!integerp(arg1)) runtime_error(error_bad_type);
+	if (!integerp(arg1)) IERROR(error_bad_type);
 	break;
 
       case op_typecheck + type_string:
@@ -615,34 +648,34 @@ void do_interpret(struct closure *fn, int nargs)
       case op_typecheck + type_bigint:
       case op_typecheck + type_gone:
 	arg1 = FAST_GET(INSUBYTE());
-	if (!TYPE(arg1, byteop - op_typecheck)) runtime_error(error_bad_type);
+	if (!TYPE(arg1, byteop - op_typecheck)) IERROR(error_bad_type);
 	break;
 
       case op_typecheck + type_null:
 	arg1 = FAST_GET(INSUBYTE());
-	if (arg1) runtime_error(error_bad_type);
+	if (arg1) IERROR(error_bad_type);
 	break;
 
       case op_typecheck + stype_none:
-	runtime_error(error_bad_type);
+	IERROR(error_bad_type);
 
       case op_typecheck + stype_function:
 	{
 	  int type;
 
 	  arg1 = FAST_GET(INSUBYTE());
-	  if (!pointerp(arg1)) runtime_error(error_bad_type);
+	  if (!pointerp(arg1)) IERROR(error_bad_type);
 
 	  type = ((struct obj *)arg1)->type;
 	  if (!(type == type_closure || type == type_primitive ||
 		type == type_varargs || type == type_secure))
-	    runtime_error(error_bad_type);
+	    IERROR(error_bad_type);
 	  break;
 	}	
 
       case op_typecheck + stype_list:
 	arg1 = FAST_GET(INSUBYTE());
-	if (arg1 && !TYPE(arg1, type_pair)) runtime_error(error_bad_type);
+	if (arg1 && !TYPE(arg1, type_pair)) IERROR(error_bad_type);
 	break;
 
       default: assert(0);
@@ -652,6 +685,9 @@ void do_interpret(struct closure *fn, int nargs)
   call_stack = me.next;
 
   me.u.mudlle.code->instruction_count += instruction_number - start_ins;
+
+  if (session_context->recursion_count)
+    ++session_context->recursion_count;
 }
 
 

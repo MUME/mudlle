@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-1999 David Gay
+ * Copyright (c) 1993-2004 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,30 +19,22 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-[
-  // Bootstrap via interpreter (load linker)
-  load_library = fn (s) basic_load("mudlle/compiler/" + s + ".mud",
-				   "compiler/" + s + ".mud", LVL_IMPLEMENTOR, true);
-  load_library("link");
-  
-  // Now (re)load compiled compiler
-  load_library = fn (s) mc:linkrun(load_data("obj-mudlle/compiler/" + s + ".obj"),
-				   LVL_IMPLEMENTOR, true);
+// Load compiled 68k compiler (dysfunctional)
+// Bootstrap via interpreter (load minimum for linker)
+garbage_collect(300000);
+load("lib.mud");
+load("link.mud");
+load("interface.mud");
 
-  // Reload interpreted modules. Order is important (the compiler uses
-  // protected modules, and must not see the previously loaded ones).
-  load_library("dlist");
-  load_library("sequences");
-  load_library("misc");
-  load_library("vars");
-  load_library("compiler");
-  load_library("link");
+load_library = fn (s) [ display(format("loading %s", s)); newline(); fload(s + ".obj") ];
+// reload compiled modules
+fload("compiler.obj");
+fload("vars.obj");
+fload("sequences.obj");
+fload("dlist.obj");
+fload("misc.obj");
+fload("link.obj");
 
-  // Load compiler
-  load_library("noinf"); // no-inference version of inference library
-  load_library("x86"); // x86 back-end
-  load_library("compile"); // hurrah!
-
-  mc:verbose = 0;
-];
-
+fload("68k.obj");
+fload("compile.obj");
+load("noinf.mud");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,44 +25,47 @@
 /* Mudlle configuration */
 /* This files contains only #define's, it is used for both C and assembly code */
 
+
+/* Must also define INLINE, HAVE_MEMMOVE and stricmp as needed */
+
 #if defined(__GNUC__) || defined(AMIGA)
-#define INLINE
+#  define INLINE
 #else
-#define INLINE
+#  define INLINE
 #endif
 
 #ifdef sparc
-#ifdef __SVR4
-#define HAVE_MEMMOVE
-#define stricmp strcasecmp
-#endif
+#  ifdef __SVR4
+#    define HAVE_MEMMOVE
+#    define stricmp strcasecmp
+#  endif
 #endif
 
 #ifdef hpux
-#define HAVE_MEMMOVE
-#define stricmp strcasecmp
+#  define HAVE_MEMMOVE
+#  define stricmp strcasecmp
 #endif
 
 #ifdef __sgi
-#define stricmp strcasecmp
-#define HAVE_MEMMOVE
+#  define stricmp strcasecmp
+#  define HAVE_MEMMOVE
 #endif
 
 #ifdef i386
-#define stricmp strcasecmp
-#define HAVE_MEMMOVE
-#define GCQDEBUG
-#define GCDEBUG_CHECK
+#  define stricmp strcasecmp
+#  define HAVE_MEMMOVE
+#  define GCQDEBUG
+#  define GCDEBUG_CHECK
 #endif
 
 #ifdef AMIGA
-#define HAVE_MEMMOVE
+#  define HAVE_MEMMOVE
 #endif
 
-#ifndef linux
+#ifndef PATH_MAX
 #  define PATH_MAX 1024
 #endif
-
+  
 /* GC configuration, basic parameters */
 /* More parameters are found in alloc.h (and some logic in alloc.c). */
 #define INITIAL_BLOCKSIZE (128*1024)
@@ -70,7 +73,7 @@
 
 #define GLOBAL_SIZE 512
 #define DEFAULT_SECLEVEL 0
-#define INTERRUPT
+#define MUDLLE_INTERRUPT
 #define PRINT_CODE
 
 #ifdef HAVE_MEMMOVE
@@ -81,77 +84,78 @@
 #endif
 
 
+
 /* Define NORETURN as a qualifier to indicate that a function never returns.
    With gcc, this is `volatile'. The empty definition is ok too. */
 #ifdef __GNUC__
-#define NORETURN __attribute__ ((noreturn))
+#  define NORETURN __attribute__ ((noreturn))
 #else
-#define NORETURN
+#  define NORETURN
 #endif
 
 
 #ifdef sparc
-#define USE_CCONTEXT
-#ifdef __SVR4
-#define __EXTENSIONS__
-#define HAVE_ULONG
-#include <sys/types.h>
-/* This is now defined in config.h from configure
-define HAVE_ALLOCA_H
-*/
-#define nosigsetjmp setjmp
-#define nosiglongjmp longjmp
-#else
-#define HAVE_ALLOCA_H
-#define nosigsetjmp _setjmp
-#define nosiglongjmp _longjmp
-#define HAVE_TM_ZONE
-#endif
-#endif
+#  define USE_CCONTEXT
+#  ifdef __SVR4
+#    define __EXTENSIONS__
+#    define HAVE_ULONG
+#    define nosigsetjmp setjmp
+#    define nosiglongjmp longjmp
+#  else
+#    define HAVE_ALLOCA_H
+#    define nosigsetjmp _setjmp
+#    define nosiglongjmp _longjmp
+#    define HAVE_TM_ZONE
+#  endif
+#endif /* sparc */
 
 #ifdef hpux
-#define NOCOMPILER
-#define nosigsetjmp setjmp
-#define nosiglongjmp longjmp
-#endif
+#  define NOCOMPILER
+#  define nosigsetjmp setjmp
+#  define nosiglongjmp longjmp
+#endif /* hpux */
 
 #ifdef __sgi
-#include <sys/bsd_types.h>
-#define HAVE_ULONG
-#define NOCOMPILER
-#define HAVE_ALLOCA_H
-#define nosigsetjmp setjmp
-#define nosiglongjmp longjmp
-#endif
+#  include <sys/bsd_types.h>
+#  define HAVE_ULONG
+#  define NOCOMPILER
+#  define HAVE_ALLOCA_H
+#  define nosigsetjmp setjmp
+#  define nosiglongjmp longjmp
+#endif /* __sgi */
 
 #ifdef linux
-#ifndef __ASSEMBLER__
-#include <sys/types.h>
-#endif
-#define HAVE_ULONG
-/* This now defined in config.h from configure
-#define HAVE_ALLOCA_H
-*/
-#define nosigsetjmp _setjmp
-#define nosiglongjmp _longjmp
-#if defined(i386) || defined(sparc)
-#define USE_CCONTEXT
-#else
-#define NOCOMPILER
-#endif
-#endif
+#  ifndef __ASSEMBLER__
+#    include <sys/types.h>
+#  endif
+#  define HAVE_ULONG
+#  define nosigsetjmp _setjmp
+#  define nosiglongjmp _longjmp
+#  if defined(i386) || defined(sparc)
+#    define USE_CCONTEXT
+#  else
+#    define NOCOMPILER
+#  endif
+#endif /* linux */
+
+#ifdef __CYGWIN__
+#  define NOCOMPILER
+#  define nosigsetjmp setjmp
+#  define nosiglongjmp longjmp
+#endif /* __CYGWIN__ */
 
 #ifdef AMIGA
-#define HAVE_ALLOCA_H
-#define HAVE_TM_ZONE
-#define nosigsetjmp setjmp
-#define nosiglongjmp longjmp
-#endif
+#  define HAVE_ALLOCA_H
+#  define HAVE_TM_ZONE
+#  define nosigsetjmp setjmp
+#  define nosiglongjmp longjmp
+#endif /* AMIGA */
 
 /* Execution limits */
 
-#define MAX_CALLS 100000		/* Max # of calls executed / interpret */
+#define MAX_CALLS 100000       /* Max # of calls executed / interpret */
+#define MAX_RECURSION 10000    /* Max # recursion depth / interpret */
 
-#define MAX_FAST_CALLS 1000000	/* Max # of faster calls (machine code) */
+#define MAX_FAST_CALLS 1000000 /* Max # of faster calls (machine code) */
 
 #endif

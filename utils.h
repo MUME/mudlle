@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,7 +22,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include "options.h"
+#  include "options.h"
 
 extern int erred;
 
@@ -42,6 +42,7 @@ char *strlwr(char *s);
 void compile_error(const char *msg, ...);
 void log_error(const char *msg, ...);
 void warning(const char *msg, ...);
+void warning_line(const char *fname, int line, const char *msg, ...);
 
 #if (!HAVE_MEMMOVE)
 void memmove(char *to, const char *from, int n);

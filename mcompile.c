@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -36,6 +36,7 @@
 typedef struct _glist {
   struct _glist *next;
   ulong n;
+  int used;
 } *glist;
 
 static glist new_glist(block_t heap, ulong n, glist next)
@@ -44,14 +45,20 @@ static glist new_glist(block_t heap, ulong n, glist next)
 
   newp->next = next;
   newp->n = n;
+  newp->used = 0;
 
   return newp;
 }
 
-static int in_glist(ulong n, glist l)
+static int in_glist(ulong n, glist l, int do_mark)
 {
   for (; l; l = l->next)
-    if (n == l->n) return TRUE;
+    if (n == l->n)
+      {
+	if (do_mark)
+	  l->used = 1;
+	return TRUE;
+      }
 
   return FALSE;
 }
@@ -68,6 +75,7 @@ typedef struct _mlist {
   struct _mlist *next;
   const char *name;
   int status;
+  int used;
 } *mlist;
 
 static mlist imported_modules;
@@ -79,23 +87,29 @@ static mlist new_mlist(block_t heap, const char *name, int status, mlist next)
   newp->next = next;
   newp->name = name;
   newp->status = status;
+  newp->used = 0;
 
   return newp;
 }
 
-static int imported(const char *name)
+static int imported(const char *name, int do_mark)
 /* Returns: status of name in imported_modules, module_unloaded if absent
 */
 {
   mlist mods;
 
   for (mods = imported_modules; mods; mods = mods->next)
-    if (stricmp(mods->name, name) == 0) return mods->status;
+    if (stricmp(mods->name, name) == 0) 
+      {
+	if (do_mark)
+	  mods->used = 1;
+	return mods->status;
+      }
 
   return module_unloaded;
 }
 
-int mstart(block_t heap, mfile f)
+int mstart(block_t heap, mfile f, int seclev)
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -107,13 +121,18 @@ int mstart(block_t heap, mfile f)
 */
 {
   vlist mods, reads, writes, defines;
-  int all_loaded = TRUE;
   mlist lmodules = NULL;
 
   if (f->name)
     {
-      if (!module_unload(f->name)) return FALSE;
-      module_set(f->name, module_loading);
+      if (module_status(f->name) == module_loaded &&
+	  module_seclevel(f->name) > seclev)
+	return FALSE;
+	
+      if (!module_unload(f->name))
+	return FALSE;
+
+      module_set(f->name, module_loading, seclev);
     }
 
   /* Load all modules */
@@ -126,14 +145,16 @@ int mstart(block_t heap, mfile f)
 	  if (mstatus == module_loading)
 	    log_error("loop in requires of %s", mods->var);
 	  else
-	    warning("failed to load %s", mods->var);
-	  all_loaded = FALSE;
+	    log_error("failed to load %s", mods->var);
+	  if (f->name)
+	    module_set(f->name, module_error, seclev);
+	  return FALSE;
 	}
       lmodules = new_mlist(heap, mods->var, mstatus, lmodules);
     }
 
   all_writable = f->vclass == f_plain;
-  all_readable = f->vclass == f_plain || !all_loaded;
+  all_readable = f->vclass == f_plain;
   readable = writable = definable = NULL;
   if (f->name) 
     {
@@ -187,20 +208,21 @@ void mrecall(ulong n, const char *name, fncode fn)
   struct string *mod;
   int status = module_vstatus(n, &mod);
 
-  if (!in_glist(n, definable) &&
-      !in_glist(n, readable) && !in_glist(n, writable)) {
+  if (!in_glist(n, definable, 0) &&
+      !in_glist(n, readable, 1) && !in_glist(n, writable, 0)) {
     if (status == var_module)
       {
 	/* Implicitly import protected modules */
 	if (module_status(mod->str) == module_protected)
 	  {
+	    imported(mod->str, 1);
 	    if (immutablep(GVAR(n))) /* Use value */
 	      {
 		ins_constant(GVAR(n), fn);
 		return;
 	      }
 	  }
-	else if (!all_readable && imported(mod->str) == module_unloaded)
+	else if (!all_readable && imported(mod->str, 1) == module_unloaded)
 	  log_error("read of global %s (module %s)", name, mod->str);
       }
     else if (!all_readable)
@@ -218,14 +240,16 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
   struct string *mod;
   int status = module_vstatus(n, &mod);
 
-  if (!in_glist(n, definable) &&
-      !in_glist(n, readable) && !in_glist(n, writable)) {
+  if (!in_glist(n, definable, 0) &&
+      !in_glist(n, readable, 1) && !in_glist(n, writable, 0)) {
     if (status == var_module)
       {
 	/* Implicitly import protected modules */
 	if (module_status(mod->str) == module_protected)
 	  {
 	    value gvar = GVAR(n);
+
+	    imported(mod->str, 1);
 
 	    if (TYPE(gvar, type_primitive))
 	      {
@@ -260,7 +284,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
 		return;
 	      }
 	  }
-	else if (!all_readable && imported(mod->str) == module_unloaded)
+	else if (!all_readable && imported(mod->str, 1) == module_unloaded)
 	  log_error("read of global %s (module %s)", name, mod->str);
       }
     else if (!all_readable)
@@ -287,18 +311,46 @@ void massign(ulong n, const char *name, fncode fn)
   int status = module_vstatus(n, &mod);
 
   if (status == var_module)
-    if (mod == this_module && fntoplevel(fn)) 
-      /* defined here */
-      ins2(op_define, n, fn);
+    if (mod == this_module && fntoplevel(fn))
+      {
+	if (!in_glist(n, definable, 1))
+	  assert(0);
+
+	/* defined here */
+	ins2(op_define, n, fn);
+      }
     else
       log_error("write of global %s (module %s)", name, mod->str);
-  else if (all_writable || in_glist(n, writable))
+  else if (all_writable || in_glist(n, writable, 1))
     {
       ins2(op_assign + global_var, n, fn);
       if (status != var_write) module_vset(n, var_write, NULL);
     }
   else
     log_error("write of global %s", name);
+}
+
+void mwarn_module(void)
+{
+  glist gl;
+  mlist ml;
+
+  for (ml = imported_modules; ml; ml = ml->next)
+    if (!ml->used)
+      warning("symbols from required module %s were never used",
+	      ml->name);
+
+  for (gl = readable; gl; gl = gl->next)
+    if (!gl->used)
+      warning("readable variable %s was never read", GNAME(gl->n)->str);
+
+  for (gl = writable; gl; gl = gl->next)
+    if (!gl->used)
+      warning("writable variable %s was never written", GNAME(gl->n)->str);
+
+  for (gl = definable; gl; gl = gl->next)
+    if (!gl->used)
+      warning("definable variable %s was never defined", GNAME(gl->n)->str);
 }
 
 void mcompile_init(void)

@@ -1,7 +1,6 @@
-# Makefile for x86/linux
-# Alternative (commented out lines) are for sparc/solaris
+#                                                              -*- makefile -*-
 
-# Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+# Copyright (c) 1993-2004 David Gay and Gustav Hållberg
 # All rights reserved.
 # 
 # Permission to use, copy, modify, and distribute this software for any
@@ -20,11 +19,14 @@
 # "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
 # PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
-OBJS=  basic.o arith.o bool.o symbol.o runtime.o io.o string.o list.o \
-       vector.o support.o bitset.o debug.o files.o float.o bigint.o pattern.o
+OBJS=  basic.o arith.o bool.o symbol.o runtime.o io.o string.o	 \
+       list.o vector.o support.o bitset.o debug.o files.o float.o \
+       bigint.o pattern.o
 
-CFLAGS=-Wall -Wshadow -Wwrite-strings -Wnested-externs -I.. -g -DUSE_PCRE -DUSE_GMP
-#CFLAGS=-Wall -Wshadow -Wnested-externs -Wno-char-subscripts -Wno-parentheses -Wno-unused -I.. -g -munaligned-doubles
+SRC = $(OBJS:%.o=%.c)
+
+CFLAGS +=-fno-optimize-sibling-calls -I.. -DHAVE_PCRE_PCRE_H
+
 CC=gcc
 MAKEDEPEND=gcc -MM
 
@@ -34,12 +36,15 @@ clean:
 	rm -f *.o librun.a
 
 librun.a: $(OBJS)
-	rm -f librun.a
+	if [ -f librun.a ]; then rm -f librun.a; fi
 	ar r librun.a $(OBJS)
 	-ranlib librun.a
 
-dep depend .depend:
-	$(MAKEDEPEND) $(CFLAGS) -I../.. *.c > .depend
+%.o: %.c
+	$(CC) $(CFLAGS) -o $@ -c $<
+
+dep depend:
+	$(MAKEDEPEND) $(CFLAGS) $(SRC)> .depend
 
 lsimple.c: simple.l
 	flex -F -Psimple simple.l
@@ -49,8 +54,5 @@ psimple.c psimple.h: simple.y
 	bison -b psimple -d -p simple -t -v simple.y
 	mv psimple.tab.c psimple.c
 	mv psimple.tab.h psimple.h
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
 
 -include .depend

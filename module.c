@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -42,10 +42,16 @@
 
 */
 
-struct table *modules;
+enum {
+  vmodule_status,
+  vmodule_seclev,
+  vmodule_size
+};
+struct table *module_data;
+
 static ulong load_library;
 
-int module_status(const char *name)
+enum module_status module_status(const char *name)
 /* Returns: Status of module name:
      module_unloaded: module has never been loaded, or has been unloaded
      module_loaded: module loaded successfully
@@ -54,15 +60,43 @@ int module_status(const char *name)
 {
   struct symbol *sym;
 
-  if (!table_lookup(modules, name, &sym)) return module_unloaded;
-  return intval(sym->data);
+  if (!table_lookup(module_data, name, &sym))
+    return module_unloaded;
+  return intval(((struct vector *)sym->data)->data[vmodule_status]);
 }
 
-void module_set(const char *name, int status)
+int module_seclevel(const char *name)
+{
+  struct symbol *sym;
+
+  if (!table_lookup(module_data, name, &sym))
+    return -1;
+
+  return intval(((struct vector *)sym->data)->data[vmodule_seclev]);
+}
+
+void module_set(const char *name, enum module_status status, int seclev)
 /* Effects: Sets module status
 */
 {
-  table_set(modules, name, makeint(status));
+  struct gcpro gcpro1;
+  struct symbol *sym;
+  struct vector *v;
+
+  if (table_lookup(module_data, name, &sym))
+    {
+      ((struct vector *)sym->data)->data[vmodule_status] = makeint(status);
+      ((struct vector *)sym->data)->data[vmodule_seclev] = makeint(seclev);
+      return;
+    }
+
+  v = alloc_vector(vmodule_size);
+  GCPRO1(v);
+  v->data[vmodule_status] = makeint(status);
+  v->data[vmodule_seclev] = makeint(seclev);
+  UNGCPRO();
+
+  table_set(module_data, name, v);
 }
 
 int module_unload(const char *name)
@@ -95,7 +129,7 @@ int module_unload(const char *name)
 	}
       /* Safe even if name comes from a mudlle string,
 	 because we know that entry name already exists */
-      module_set(name, module_unloaded);
+      module_set(name, module_unloaded, 0);
     }
 
   return TRUE;
@@ -171,7 +205,7 @@ int module_vset(long n, int status, struct string *name)
 void module_init(void)
 /* Initialise this module */
 {
-  modules = alloc_table(DEF_TABLE_SIZE);
-  staticpro((value *)&modules);
+  module_data = alloc_table(DEF_TABLE_SIZE);
+  staticpro((value *)&module_data);
   load_library = global_lookup("load_library");
 }

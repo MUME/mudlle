@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,10 +19,13 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <alloca.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "mudlle.h"
 #include "tree.h"
-#include <string.h>
-#include <stddef.h>
 #include "runtime/runtime.h"
 #include "alloc.h"
 #include "global.h"
@@ -33,7 +36,9 @@
 #include "builtins.h"
 #include "module.h"
 
-int cc_length;
+#if defined(i386) && !defined(NOCOMPILER)
+static int cc_length = 0;	/* statistics */
+#endif
 
 OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
 	  "parse tree", 1, (struct string *code), OP_LEAF | OP_NOESCAPE)
@@ -87,6 +92,7 @@ UNSAFEOP(mudlle_parse_file, "s1 s2 -> v. Parses a file s (nice name s2) and retu
 
 /* The machine language builtin ops */
 
+#ifndef NOCOMPILER
 static struct builtin_table {
   const char *name;
   void (*address)(void);
@@ -212,11 +218,10 @@ static struct builtin_table {
   {"berror_value_read_only", berror_value_read_only},
   {"berror_user_interrupt", berror_user_interrupt}
 #endif
-#ifdef NOCOMPILER
-  {"bdummy", 0}
-#endif
   };
+#endif /* NOCOMPILER */
 
+#ifndef NOCOMPILER
 static ulong builtin_find(struct string *name, int *k)
 {
   char *n = name->str;
@@ -231,7 +236,9 @@ static ulong builtin_find(struct string *name, int *k)
 
   return 0;
 }
+#endif
 
+#ifndef NOCOMPILER
 static ulong primitive_find(struct string *name)
 {
   ulong n = mglobal_lookup(name);
@@ -240,6 +247,7 @@ static ulong primitive_find(struct string *name)
   if (!TYPE(p, type_primitive)) return 0;
   return (ulong)p->op->op;
 }
+#endif
 
 #ifdef sparc
 static void set_cst(ulong *sethi, ulong val)
@@ -263,7 +271,7 @@ static void set_cst(ulong *sethi, ulong val)
 #ifdef i386
 #define set_cst(x, n) (*(ulong *)(x) = (n))
 #endif
-     
+
 VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 -> code. Builds a code object from:\n\
 its machine code s1,\n\
 security level n1, help string s2, varname s3, filename s4, lineno n2\n\
@@ -273,7 +281,13 @@ globals l3=list of name/offset pairs\n\
 primitives l4=list of name/offset pairs",
       0)
 {
-  ulong clen, ncsts = 0, nrel = 0, size = 0;
+#ifdef NOCOMPILER
+  runtime_error(error_bad_value);
+#else  /* !NOCOMPILER */
+  ulong clen, ncsts = 0, size = 0;
+#if defined(i386) && !defined(NOCOMPILER)
+  ulong nrel = 0;
+#endif
   struct mcode *newp = NULL;
   uword *cst_offsets;
   struct list *scan_csts, *scan_builtins, *scan_globals, *scan_primitives;
@@ -283,9 +297,6 @@ primitives l4=list of name/offset pairs",
   struct string *help, *varname, *afilename;
   struct list *csts, *abuiltins, *globals, *primitives;
 
-#ifdef NOCOMPILER
-  runtime_error(error_bad_value);
-#endif
 
   if (nargs != 10) runtime_error(error_wrong_parameters);
 
@@ -538,13 +549,13 @@ primitives l4=list of name/offset pairs",
   scan_globals = globals;
   while (scan_globals != NULL)
     {
-      struct list *global;
+      struct list *globl;
       ulong goffset, offset;
       struct vector *genv;
 
-      global = scan_globals->car;
-      offset = intval(global->cdr);
-      goffset = mglobal_lookup(global->car);
+      globl = scan_globals->car;
+      offset = intval(globl->cdr);
+      goffset = mglobal_lookup(globl->car);
 
       /* Compute byte offset from environment base */
       genv = environment->values;
@@ -556,7 +567,7 @@ primitives l4=list of name/offset pairs",
 
 #endif
 
-#ifdef i386
+#if defined(i386)
   /* Count relocatable builtins */
   abuiltins = args->data[7];
   scan_builtins = abuiltins;
@@ -694,12 +705,13 @@ primitives l4=list of name/offset pairs",
 
 #ifdef GCSTATS
   gcstats.anb[type_mcode]++;
-  gcstats.asizes[type_mcode] += size;
+  gcstats.asizes[type_mcode] += ALIGN(size + CODE_ALIGNMENT, sizeof (value));
 #endif
 
   newp->o.flags |= OBJ_IMMUTABLE;
 
   return newp;
+#endif /* !NOCOMPILER */
 }
 
 UNSAFEOP(make_closure, "mcode -> fn. Makes a function with no closure vars from given mcode object",
@@ -819,17 +831,27 @@ TYPEDOP(module_status, "s -> n. Returns status of module s",
   return makeint(module_status(name->str));
 }
 
-UNSAFEOP(module_set, "s n -> . Sets status of module s to n",
-	 2, (struct string *name, value status),
-	 OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(module_seclevel, "s -> n. Returns seclevel of module s",
+	1, (struct string *name),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
+{
+  TYPEIS(name, type_string);
+
+  return makeint(module_seclevel(name->str));
+}
+
+UNSAFEOP(module_set, "s n1 n2 -> . Sets status of module s to n1, seclevel n2",
+	 3, (struct string *name, value status, value seclev),
+	 OP_LEAF | OP_NOESCAPE)
 {
   char *tname;
 
   TYPEIS(name, type_string);
   LOCALSTR(tname, name);
   ISINT(status);
+  ISINT(seclev);
 
-  module_set(tname, intval(status));
+  module_set(tname, intval(status), intval(seclev));
 
   undefined();
 }
@@ -901,7 +923,7 @@ UNSAFEOP(module_table, " -> table. Returns module status table",
 	 0, (void),
 	 OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
-  return modules;
+  return module_data;
 }
 
 void support_init(void)
@@ -990,6 +1012,7 @@ void support_init(void)
 
   /* Module support */
   DEFINE("module_status", module_status);
+  DEFINE("module_seclevel", module_seclevel);
   DEFINE("module_set!", module_set);
   DEFINE("module_table", module_table);
   system_define("module_unloaded", makeint(module_unloaded));
@@ -1002,6 +1025,7 @@ void support_init(void)
   DEFINE("module_vstatus", module_vstatus);
   DEFINE("module_vset!", module_vset);
   system_define("var_normal", makeint(var_normal));
+  system_define("var_module", makeint(var_module));
   system_define("var_write", makeint(var_write));
 
   /* C options information */

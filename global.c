@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -33,6 +33,7 @@ struct env *environment;
 struct vector *env_values;
 struct table *global;
 struct vector *mvars;
+struct vector *global_names;
 
 void global_init(void)
 /* Effects: Initialises the global environment before use.
@@ -46,6 +47,8 @@ void global_init(void)
   staticpro((value *)&global);
   mvars = alloc_vector(GLOBAL_SIZE);
   staticpro((value *)&mvars);
+  global_names = alloc_vector(GLOBAL_SIZE);
+  staticpro((value *)&global_names);
 }
 
 static ulong global_add(struct string *name, value val)
@@ -62,12 +65,17 @@ static ulong global_add(struct string *name, value val)
   aindex = env_add_entry(environment, val);
   if (intval(environment->size) != old_size) /* Increase mvars too */
     {
-      struct vector *new_mvars = alloc_vector(intval(environment->size));
+      struct vector *vec = alloc_vector(intval(environment->size));
 
-      memcpy(new_mvars->data, mvars->data, mvars->o.size - sizeof(struct obj));
-      mvars = new_mvars;
+      memcpy(vec->data, mvars->data, mvars->o.size - sizeof(struct obj));
+      mvars = vec;
 
-#ifdef i386
+      vec = alloc_vector(intval(environment->size));
+
+      memcpy(vec->data, global_names->data, global_names->o.size - sizeof(struct obj));
+      global_names = vec;
+
+#if defined(i386) && !defined(NOCOMPILER)
       /* This is evil, but the alternative is to lose a scarce, callee-save
 	 register */
       patch_globals_stack(old_values, environment->values);
@@ -76,6 +84,7 @@ static ulong global_add(struct string *name, value val)
   env_values = environment->values;
   UNGCPRO();
   mvars->data[aindex] = makeint(var_normal);
+  global_names->data[aindex] = name;
   pos = table_add_fast(global, name, makeint(aindex));
   pos->o.flags |= OBJ_READONLY; /* index of global vars never changes */
 
