@@ -1,45 +1,23 @@
-/* $Log: global.c,v $
- * Revision 1.12  1994/10/09  06:42:06  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.11  1994/09/06  07:50:34  arda
- * Constant support: detect_immutability, global_set!, string_{i}search.
- *
- * Revision 1.10  1994/08/29  13:17:18  arda
- * Contagious immutability.
- * Global array of values instead of variables.
- * Direct recursion.
- *
- * Revision 1.9  1994/08/16  19:15:54  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.6  1994/02/12  17:24:44  arda
- * Owl: Better code generated.
- *
- * Revision 1.5  1993/04/22  18:58:35  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.4  1993/03/29  09:23:50  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:13  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.2  1993/01/11  16:15:09  un_mec
- * Added read-only variables.
- *
- * Revision 1.1  1992/12/27  21:41:06  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: global.c,v 1.12 1994/10/09 06:42:06 arda Exp $";
 
 #include <string.h>
 #include "mudlle.h"
@@ -73,28 +51,35 @@ void global_init(void)
 static ulong global_add(struct string *name, value val)
 {
   struct symbol *pos;
-  struct gcpro gcpro1;
-  ulong index, old_size;
+  struct gcpro gcpro1, gcpro2;
+  ulong aindex, old_size;
+  struct vector *old_values = env_values;
 
   GCCHECK(val);
 
-  GCPRO1(name);
+  GCPRO2(name, old_values);
   old_size = intval(environment->size);
-  index = env_add_entry(environment, val);
+  aindex = env_add_entry(environment, val);
   if (intval(environment->size) != old_size) /* Increase mvars too */
     {
       struct vector *new_mvars = alloc_vector(intval(environment->size));
 
       memcpy(new_mvars->data, mvars->data, mvars->o.size - sizeof(struct obj));
       mvars = new_mvars;
+
+#ifdef i386
+      /* This is evil, but the alternative is to lose a scarce, callee-save
+	 register */
+      patch_globals_stack(old_values, environment->values);
+#endif
     }
   env_values = environment->values;
   UNGCPRO();
-  mvars->data[index] = makeint(var_normal);
-  pos = table_add_fast(global, name, makeint(index));
+  mvars->data[aindex] = makeint(var_normal);
+  pos = table_add_fast(global, name, makeint(aindex));
   pos->o.flags |= OBJ_READONLY; /* index of global vars never changes */
 
-  return index;
+  return aindex;
 }
 
 ulong global_lookup(const char *name)

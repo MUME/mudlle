@@ -1,60 +1,23 @@
-/* $Log: ins.c,v $
- * Revision 1.14  1994/10/09  06:42:11  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.13  1994/08/29  13:17:20  arda
- * Contagious immutability.
- * Global array of values instead of variables.
- * Direct recursion.
- *
- * Revision 1.12  1994/08/22  11:18:27  arda
- * Moved code allocation to ins.c
- * Changes for mudlle compiler in MUME.
- *
- * Revision 1.11  1994/08/16  19:15:57  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.8  1994/03/23  14:31:21  arda
- * *** empty log message ***
- *
- * Revision 1.7  1994/02/24  08:32:51  arda
- * Owl: New error messages.
- *
- * Revision 1.6  1994/02/12  17:24:50  arda
- * Owl: Better code generated.
- *
- * Revision 1.5  1994/01/29  19:50:25  dgay
- * Owl: add file & line information to functions.
- *
- * Revision 1.4  1993/12/23  20:48:51  dgay
- * Owl: New alloc.c: semi-generational collector.
- *      Included Amiga makefile for convenience.
- *
- * Revision 1.3  1993/11/27  11:29:00  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.2  1993/10/03  14:07:13  dgay
- * Bumper disun8 update.
- *
- * Revision 1.1  1993/07/21  20:36:38  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: ins.c,v 1.14 1994/10/09 06:42:11 arda Exp $";
 
 #include "mudlle.h"
 #include "ins.h"
@@ -69,9 +32,9 @@ static char rcsid[] = "$Id: ins.c,v 1.14 1994/10/09 06:42:11 arda Exp $";
    They are reversed before use ...
 */
 
-typedef struct ilist		/* Instruction list */
+typedef struct _ilist		/* Instruction list */
 {
-  struct ilist *next;
+  struct _ilist *next;
   instruction ins;
   label lab;			/* The main label for this instruction.
 				   All other labels are aliases of this one. */
@@ -79,15 +42,15 @@ typedef struct ilist		/* Instruction list */
   ulong offset;			/* Offset from end of code ... */
 } *ilist;
 
-typedef struct blocks
+typedef struct _blocks
 {
-  struct blocks *next;
+  struct _blocks *next;
   const char *name;
   label exitlab;		/* Label for block exit */
   word stack_depth;		/* Stack depth at block entry */
 } *blocks;
 
-struct fncode
+struct _fncode
 {
   ilist instructions;
   word current_depth, max_depth; /* This tracks the stack depth as
@@ -96,27 +59,31 @@ struct fncode
   struct gcpro_list cstpro;	/* Protect csts list */
   valuelist csts;		/* Constants of this function */
   uword cstindex;		/* Index of next constant */
-  blocks blocks;		/* Stack of named blocks */
+  blocks blks;			/* Stack of named blocks */
+  int toplevel;
+  block_t memory;
 };
 
-struct label			/* A pointer to an instruction */
+struct _label			/* A pointer to an instruction */
 {
-  struct ilist *ins;		/* The instruction this label points to */
+  ilist ins;			/* The instruction this label points to */
   label alias;			/* This label is actually an alias for
 				   another label ... */
 };
 
+int bc_length; /* For statistical purposes */
+
 static void add_ins(instruction ins, fncode fn)
 {
-  ilist new = allocate(memory, sizeof *new);
+  ilist newp = allocate(fnmemory(fn), sizeof *newp);
 
-  new->next = fn->instructions;
-  fn->instructions = new;
+  newp->next = fn->instructions;
+  fn->instructions = newp;
 
-  new->ins = ins;
-  new->to = NULL;
-  new->lab = fn->next_label;
-  if (fn->next_label) fn->next_label->ins = new;
+  newp->ins = ins;
+  newp->to = NULL;
+  newp->lab = fn->next_label;
+  if (fn->next_label) fn->next_label->ins = newp;
   fn->next_label = NULL;
 }
 
@@ -131,32 +98,56 @@ void adjust_depth(int by, fncode fn)
   if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
 }
 
-fncode new_fncode(void)
+fncode new_fncode(int toplevel)
 /* Returns: A new function code structure (in which code for functions
      may be generated).
 */
 {
-  fncode new = allocate(memory, sizeof *new);
+  block_t afnmemory = new_block();
+  fncode newp = allocate(afnmemory, sizeof *newp);
 
-  new->instructions = NULL;
-  new->current_depth = new->max_depth = 0;
-  new->next_label = NULL;
-  new->blocks = NULL;
-  PUSH_LIST(new->cstpro);
-  new->cstpro.cl = &new->csts;
-  init_list(&new->csts);
-  new->cstindex = 0;
+  newp->toplevel = toplevel;
+  newp->memory = afnmemory;
+  newp->instructions = NULL;
+  newp->current_depth = newp->max_depth = 0;
+  newp->next_label = NULL;
+  newp->blks = NULL;
+  PUSH_LIST(newp->cstpro);
+  newp->cstpro.cl = &newp->csts;
+  init_list(&newp->csts);
+  newp->cstindex = 0;
 
-  return new;
+  return newp;
 }
 
+void delete_fncode(fncode fn)
+/* Effects: deletes fncode 'fn'
+ */
+{
+  POP_LIST(fn->cstpro);
+  free_block(fn->memory);
+}
+
+block_t fnmemory(fncode fn)
+/* Returns: memory block for fn
+ */
+{
+  return fn->memory;
+}
+
+int fntoplevel(fncode fn)
+/* Returns: true if 'fn' is the toplevel function
+ */
+{
+  return fn->toplevel;
+}
 
 uword add_constant(value cst, fncode fn)
 /* Effects: Adds a constant to code of 'fn'.
    Returns: The index where this constant is stored.
 */
 {
-  addtail(&fn->csts, cst);
+  addtail(fn->memory, &fn->csts, cst);
 
   return fn->cstindex++;
 }
@@ -166,7 +157,7 @@ void ins_constant(value cst, fncode fn)
    Modifies: fn
 */
 {
-  uword index;
+  uword aindex;
 
   if (integerp(cst))
     {
@@ -184,9 +175,9 @@ void ins_constant(value cst, fncode fn)
 	}
     }
 
-  index = add_constant(cst, fn);
-  if (index < ARG1_MAX) ins1(op_constant1, index, fn);
-  else ins2(op_constant2, index, fn);
+  aindex = add_constant(cst, fn);
+  if (aindex < ARG1_MAX) ins1(op_constant1, aindex, fn);
+  else ins2(op_constant2, aindex, fn);
 }
 
 void ins0(instruction ins, fncode fn)
@@ -227,7 +218,8 @@ void ins1(instruction ins, int arg1, fncode fn)
       fn->current_depth++;
       if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
       break;
-    case op_execute: case op_pop_n:
+    case op_execute: case op_pop_n: case op_execute_primitive:
+    case op_execute_secure: case op_execute_varargs:
       fn->current_depth -= arg1;
       break;
     }
@@ -254,7 +246,7 @@ void ins2(instruction ins, int arg2, fncode fn)
   add_ins(arg2 & 0xff, fn);
 }
 
-void branch(instruction branch, label to, fncode fn)
+void branch(instruction abranch, label to, fncode fn)
 /* Effects: Adds a branch instruction to lavel 'to' to instruction 
      list 'next'.
      A 1 byte offset is added at this stage.
@@ -262,7 +254,7 @@ void branch(instruction branch, label to, fncode fn)
    Modifies: fn
 */
 {
-  switch (branch)
+  switch (abranch)
     {
     case op_branch1: break;
     case op_branch_nz1: case op_branch_z1: case op_loop1:
@@ -270,7 +262,7 @@ void branch(instruction branch, label to, fncode fn)
       break;
     default: assert(0);
     }
-  add_ins(branch, fn);
+  add_ins(abranch, fn);
   fn->instructions->to = to;
   add_ins(0, fn);		/* Reserve a 1 byte offset */
 }
@@ -374,12 +366,12 @@ static int resolve_offsets(fncode fn)
 	      else
 		{
 		  /* Make a 2 byte branch */
-		  ilist new = allocate(memory, sizeof *new);
+		  ilist newp = allocate(fn->memory, sizeof *newp);
 
 		  scan->ins++;	/* he he */
-		  new->next = scan;
-		  new->lab = new->to = NULL;
-		  prev1->next = new;
+		  newp->next = scan;
+		  newp->lab = newp->to = NULL;
+		  prev1->next = newp;
 
 		  ok = FALSE;
 		}
@@ -407,8 +399,12 @@ void peephole(fncode fn)
   while (!resolve_offsets(fn));
 }
 
-struct code *generate_fncode(fncode fn, struct string *help, struct string *varname,
-			     struct string *filename, int lineno, int seclev)
+struct code *generate_fncode(fncode fn,
+			     struct string *help,
+			     struct string *varname,
+			     struct string *afilename,
+			     int alineno,
+			     int seclev)
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
      recent call to new_fncode. That call is then deemed to never have
@@ -429,10 +425,11 @@ struct code *generate_fncode(fncode fn, struct string *help, struct string *varn
   sequence_length = 0;
   for (scanins = fn->instructions; scanins; scanins = scanins->next) sequence_length++;
 
-  GCPRO2(help, varname); GCPRO(gcpro3, filename);
+  GCPRO2(help, varname); GCPRO(gcpro3, afilename);
   /* Warning: Portability */
   size = offsetof(struct code, constants) + fn->cstindex * sizeof(value) + 
     sequence_length * sizeof(instruction);
+  bc_length += size;
   gencode = gc_allocate(size);
   UNGCPRO();
 
@@ -445,8 +442,8 @@ struct code *generate_fncode(fncode fn, struct string *help, struct string *varn
   gencode->stkdepth = fn->max_depth;
   gencode->seclevel = seclev;
   gencode->help = help;
-  gencode->lineno = lineno;
-  gencode->filename = filename;
+  gencode->lineno = alineno;
+  gencode->filename = afilename;
   gencode->varname = varname;
 
   gencode->call_count = gencode->instruction_count = 0;
@@ -459,8 +456,8 @@ struct code *generate_fncode(fncode fn, struct string *help, struct string *varn
   /* Copy the constants */
   for (i = 0, scancst = fn->csts.first; i < fn->cstindex; i++, scancst = scancst->next)
     {
-      gencode->constants[i] = scancst->value;
-      GCCHECK(scancst->value);
+      gencode->constants[i] = scancst->lvalue;
+      GCCHECK(scancst->lvalue);
     }
 
   /* Jump to interpreter to execute interpreted code - machine specific */
@@ -491,27 +488,34 @@ struct code *generate_fncode(fncode fn, struct string *help, struct string *varn
   }
 #endif
 
-#ifdef GCDEBUG
+#ifdef i386
+  /* jmp interpreter_invoke */
+  gencode->magic_dispatch[0] = 0xea;
+  *(ulong *)(gencode->magic_dispatch + 1) = (ulong)interpreter_invoke;
+  /* segment */
+  asm("mov %%cs,%0" : "=r" (*(short *)(gencode->magic_dispatch + 5)));
+  
+#endif
+
+#ifdef GCSTATS
   gcstats.anb[type_code]++;
   gcstats.asizes[type_code] += size;
 #endif
 
-  POP_LIST(fn->cstpro);
-
   return gencode;
 }
 
-label new_label(void)
+label new_label(fncode fn)
 /* Returns: A new label which points to nothing. Use label() to make it
      point at a particular instruction.
 */
 {
-  label new = allocate(memory, sizeof *new);
+  label newp = allocate(fn->memory, sizeof *newp);
 
-  new->ins = NULL;
-  new->alias = NULL;
+  newp->ins = NULL;
+  newp->alias = NULL;
 
-  return new;
+  return newp;
 }
 
 void set_label(label lab, fncode fn)
@@ -529,22 +533,22 @@ void start_block(const char *name, fncode fn)
      exited with exit_block()
 */
 {
-  blocks new = allocate(memory, sizeof *new);
+  blocks newp = allocate(fn->memory, sizeof *newp);
 
-  new->next = fn->blocks;
-  new->name = name;
-  new->exitlab = new_label();
-  new->stack_depth = fn->current_depth;
+  newp->next = fn->blks;
+  newp->name = name;
+  newp->exitlab = new_label(fn);
+  newp->stack_depth = fn->current_depth;
 
-  fn->blocks = new;
+  fn->blks = newp;
 }
 
 void end_block(fncode fn)
 /* Effects: End of named block. Generate exit label
 */
 {
-  set_label(fn->blocks->exitlab, fn);
-  fn->blocks = fn->blocks->next;
+  set_label(fn->blks->exitlab, fn);
+  fn->blks = fn->blks->next;
 }
 
 int exit_block(const char *name, fncode fn)
@@ -553,7 +557,7 @@ int exit_block(const char *name, fncode fn)
    Returns: FALSE if the named block doesn't exist
 */
 {
-  blocks find = fn->blocks;
+  blocks find = fn->blks;
   int npop;
 
   for (;;)

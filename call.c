@@ -1,28 +1,41 @@
-/* $Log: call.c,v $
- * Revision 1.1  1995/07/15  15:49:25  arda
- * New files, missing from previous commit.
- *
- *
- * Purpose: Call mudlle code from C
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: call.c,v 1.1 1995/07/15 15:49:25 arda Exp $";
 
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
 #include "mudlle.h"
 #include "alloc.h"
 #include "builtins.h"
 #include "interpret.h"
 #include "error.h"
 #include "stack.h"
+#include "call.h"
 
 /* Interface to machine code. */
 
 #ifdef AMIGA
 
-static INLINE value invoke0(struct closure *c)
+INLINE value invoke0(struct closure *c)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c()
@@ -40,7 +53,7 @@ static INLINE value invoke0(struct closure *c)
   return result;
 }
 
-static INLINE value invoke1(struct closure *c, value arg)
+INLINE value invoke1(struct closure *c, value arg)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg)
@@ -59,7 +72,7 @@ static INLINE value invoke1(struct closure *c, value arg)
   return result;
 }
 
-static INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
+INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
@@ -102,7 +115,7 @@ static INLINE value invoke1plus(struct closure *c, value arg, struct vector *arg
   return result;
 }
 
-static INLINE value invoke(struct closure *c, struct vector *args)
+INLINE value invoke(struct closure *c, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
@@ -152,7 +165,7 @@ static INLINE value invoke(struct closure *c, struct vector *args)
 
 #ifdef sparc
 
-static INLINE value invoke0(struct closure *c)
+INLINE value invoke0(struct closure *c)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c()
@@ -162,7 +175,7 @@ static INLINE value invoke0(struct closure *c)
   return mc_invoke(NULL, NULL, NULL, NULL, NULL, c, 0);
 }
 
-static INLINE value invoke1(struct closure *c, value arg)
+INLINE value invoke1(struct closure *c, value arg)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg)
@@ -172,7 +185,38 @@ static INLINE value invoke1(struct closure *c, value arg)
   return mc_invoke(arg, NULL, NULL, NULL, NULL, c, 1);
 }
 
-static INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
+INLINE value invoke2(struct closure *c, value arg1, value arg2)
+/* Requires: c be a closure whose code is in machine code, i.e.
+     TYPEIS(c->code, type_mcode);
+   Effects: Executes c(arg1, arg2)
+   Returns: c()'s result
+*/
+{
+  return mc_invoke(arg1, arg2, NULL, NULL, NULL, c, 2);
+}
+
+INLINE value invoke3(struct closure *c, value arg1, value arg2, value arg3)
+/* Requires: c be a closure whose code is in machine code, i.e.
+     TYPEIS(c->code, type_mcode);
+   Effects: Executes c(arg1, arg2, arg3)
+   Returns: c()'s result
+*/
+{
+  return mc_invoke(arg1, arg2, arg3, NULL, NULL, c, 3);
+}
+
+INLINE value invoke4(struct closure *c, value arg1, value arg2, value arg3,
+		     value arg4)
+/* Requires: c be a closure whose code is in machine code, i.e.
+     TYPEIS(c->code, type_mcode);
+   Effects: Executes c(arg1, arg2, arg3, arg4)
+   Returns: c()'s result
+*/
+{
+  return mc_invoke(arg1, arg2, arg3, arg4, NULL, c, 4);
+}
+
+INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
@@ -200,7 +244,7 @@ static INLINE value invoke1plus(struct closure *c, value arg, struct vector *arg
     }
 }
 
-static INLINE value invoke(struct closure *c, struct vector *args)
+INLINE value invoke(struct closure *c, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
@@ -233,44 +277,70 @@ static INLINE value invoke(struct closure *c, struct vector *args)
 
 #endif
 
-#ifdef linux
+#ifdef i386
+/* The invokexxx fns are defined in x86builtins.s */
+#endif
 
-static INLINE value invoke0(struct closure *c)
+#ifdef NOCOMPILER
+INLINE value invoke0(struct closure *c)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c()
    Returns: c()'s result
 */
 {
+  return NULL;
 }
 
-static INLINE value invoke1(struct closure *c, value arg)
+INLINE value invoke1(struct closure *c, value arg)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg)
    Returns: c(arg)'s result
 */
 {
+  return NULL;
 }
 
-static INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
+INLINE value invoke2(struct closure *c, value arg1, value arg2)
+/* Requires: c be a closure whose code is in machine code, i.e.
+     TYPEIS(c->code, type_mcode);
+   Effects: Executes c(arg1, arg2)
+   Returns: c()'s result
+*/
+{
+  return NULL;
+}
+
+INLINE value invoke3(struct closure *c, value arg1, value arg2, value arg3)
+/* Requires: c be a closure whose code is in machine code, i.e.
+     TYPEIS(c->code, type_mcode);
+   Effects: Executes c(arg1, arg2, arg3)
+   Returns: c()'s result
+*/
+{
+  return NULL;
+}
+
+INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
 {
+  return NULL;
 }
 
-static INLINE value invoke(struct closure *c, struct vector *args)
+INLINE value invoke(struct closure *c, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
 {
+  return NULL;
 }
-
 #endif
 
 int callablep(value c, int nargs)
@@ -286,7 +356,7 @@ int callablep(value c, int nargs)
 	{
 	case type_closure: return TRUE;
 	case type_secure:
-	  if (seclevel < ((struct primitive *)o)->op->seclevel)
+	  if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
 	    return FALSE;
 	  /* fall through */
 	case type_primitive: 
@@ -311,7 +381,7 @@ void callable(value c, int nargs)
 	{
 	case type_closure: return;
 	case type_secure:
-	  if (seclevel < ((struct primitive *)o)->op->seclevel)
+	  if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
 	    runtime_error(error_security_violation);
 	  /* fall through */
 	case type_primitive: 
@@ -410,6 +480,163 @@ value call1(value c, value arg)
   abort();
 }
 
+value call2(value c, value arg1, value arg2)
+/* Effects: Calls c with arguments arg1, arg2
+   Returns: c's result
+   Requires: callable(c, 2) does not fail.
+*/
+{
+  struct obj *o = c;
+  struct gcpro gcpro1, gcpro2;
+  value result;
+
+  switch (o->type)
+    {
+    case type_closure:
+      {
+	struct closure *cl = (struct closure *)o;
+
+	if (cl->code->o.type == type_mcode)
+	  return invoke2(cl, arg1, arg2);
+	else
+	  {
+	    GCPRO2(cl, arg2);
+	    stack_push(arg1);
+	    stack_push(arg2);
+	    UNGCPRO();
+	    do_interpret(cl, 2);
+	    return stack_pop();
+	  }
+      }
+
+    case type_secure: case type_primitive:
+      ((struct primitive *)o)->call_count++;
+      result = ((struct primitive *)o)->op->op(arg1, arg2);
+      return result;
+
+    case type_varargs:
+      {
+	struct vector *args;
+
+	((struct primitive *)o)->call_count++;
+	GCPRO2(arg1, arg2);
+	args = (struct vector *)unsafe_allocate_record(type_vector, 2);
+	args->data[0] = arg1;
+	args->data[1] = arg2;
+	UNGCPRO();
+	result = ((struct primitive *)o)->op->op(args, 2);
+	return result;
+      }
+    }
+  abort();
+}
+
+value call3(value c, value arg1, value arg2, value arg3)
+/* Effects: Calls c with arguments arg1, arg2, arg3
+   Returns: c's result
+   Requires: callable(c, 3) does not fail.
+*/
+{
+  struct obj *o = c;
+  struct gcpro gcpro1, gcpro2, gcpro3;
+  value result;
+
+  switch (o->type)
+    {
+    case type_closure:
+      {
+	struct closure *cl = (struct closure *)o;
+
+	if (cl->code->o.type == type_mcode)
+	  return invoke3(cl, arg1, arg2, arg3);
+	else
+	  {
+	    GCPRO2(cl, arg2); GCPRO(gcpro3, arg3);
+	    stack_push(arg1);
+	    stack_push(arg2);
+	    stack_push(arg3);
+	    UNGCPRO();
+	    do_interpret(cl, 3);
+	    return stack_pop();
+	  }
+      }
+
+    case type_secure: case type_primitive:
+      ((struct primitive *)o)->call_count++;
+      result = ((struct primitive *)o)->op->op(arg1, arg2, arg3);
+      return result;
+
+    case type_varargs:
+      {
+	struct vector *args;
+
+	((struct primitive *)o)->call_count++;
+	GCPRO2(arg1, arg2); GCPRO(gcpro3, arg3);
+	args = (struct vector *)unsafe_allocate_record(type_vector, 3);
+	args->data[0] = arg1;
+	args->data[1] = arg2;
+	args->data[2] = arg3;
+	UNGCPRO();
+	result = ((struct primitive *)o)->op->op(args, 3);
+      }
+    }
+  abort();
+}
+
+value call4(value c, value arg1, value arg2, value arg3, value arg4)
+/* Effects: Calls c with arguments arg1, arg2, arg3, arg4
+   Returns: c's result
+   Requires: callable(c, 4) does not fail.
+*/
+{
+  struct obj *o = c;
+  struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
+  value result;
+
+  switch (o->type)
+    {
+    case type_closure:
+      {
+	struct closure *cl = (struct closure *)o;
+
+	if (cl->code->o.type == type_mcode)
+	  return invoke4(cl, arg1, arg2, arg3, arg4);
+	else
+	  {
+	    GCPRO2(cl, arg2); GCPRO(gcpro3, arg3); GCPRO(gcpro4, arg4);
+	    stack_push(arg1);
+	    stack_push(arg2);
+	    stack_push(arg3);
+	    stack_push(arg4);
+	    UNGCPRO();
+	    do_interpret(cl, 4);
+	    return stack_pop();
+	  }
+      }
+
+    case type_secure: case type_primitive:
+      ((struct primitive *)o)->call_count++;
+      result = ((struct primitive *)o)->op->op(arg1, arg2, arg3, arg4);
+      return result;
+
+    case type_varargs:
+      {
+	struct vector *args;
+
+	((struct primitive *)o)->call_count++;
+	GCPRO2(arg1, arg2); GCPRO(gcpro3, arg3);
+	args = (struct vector *)unsafe_allocate_record(type_vector, 4);
+	args->data[0] = arg1;
+	args->data[1] = arg2;
+	args->data[2] = arg3;
+	args->data[3] = arg4;
+	UNGCPRO();
+	result = ((struct primitive *)o)->op->op(args, 4);
+      }
+    }
+  abort();
+}
+
 value call1plus(value c, value arg, struct vector *args)
 /* Effects: Calls c with argument arg
    Returns: c's result
@@ -467,6 +694,8 @@ value call1plus(value c, value arg, struct vector *args)
 	  result = op->op(arg, args->data[0], args->data[1], args->data[2],
 			  args->data[3]);
 	  break;
+	default:
+	  assert(0);
 	}
       return result;
 
@@ -543,6 +772,8 @@ value call(value c, struct vector *args)
 	  result = op->op(args->data[0], args->data[1], args->data[2], args->data[3],
 			  args->data[4]);
 	  break;
+	default:
+	  assert(0);
 	}
       return result;
 
@@ -562,7 +793,7 @@ static INLINE int display_error(void)
   else return TRUE;		/* Default is display errors */
 }
 
-struct val3 { value v1, v2, v3; };
+struct val3 { value v1, v2, v3, v4, v5; };
 static value result;
 
 static void docall(void *x)
@@ -572,12 +803,12 @@ static void docall(void *x)
   result = call(args->v1, args->v2);
 }
 
-value catch_call(value c, struct vector *arguments)
+value mcatch_call(value c, struct vector *arguments)
 {
   struct val3 args;
 
   args.v1 = c; args.v2 = arguments;
-  if (catch(docall, &args, display_error())) return result;
+  if (mcatch(docall, &args, display_error())) return result;
   else return NULL;
 }
 
@@ -586,9 +817,9 @@ static void docall0(void *x)
   result = call0(x);
 }
 
-value catch_call0(value c)
+value mcatch_call0(value c)
 {
-  if (catch(docall0, c, display_error())) return result;
+  if (mcatch(docall0, c, display_error())) return result;
   else return NULL;
 }
 
@@ -599,12 +830,60 @@ static void docall1(void *x)
   result = call1(args->v1, args->v2);
 }
 
-value catch_call1(value c, value arg)
+value mcatch_call1(value c, value arg)
 {
   struct val3 args;
 
   args.v1 = c; args.v2 = arg;
-  if (catch(docall1, &args, display_error())) return result;
+  if (mcatch(docall1, &args, display_error())) return result;
+  else return NULL;
+}
+
+static void docall2(void *x)
+{
+  struct val3 *args = x;
+
+  result = call2(args->v1, args->v2, args->v3);
+}
+
+value mcatch_call2(value c, value arg1, value arg2)
+{
+  struct val3 args;
+
+  args.v1 = c; args.v2 = arg1; args.v3 = arg2;
+  if (mcatch(docall2, &args, display_error())) return result;
+  else return NULL;
+}
+
+static void docall3(void *x)
+{
+  struct val3 *args = x;
+
+  result = call3(args->v1, args->v2, args->v3, args->v4);
+}
+
+value mcatch_call3(value c, value arg1, value arg2, value arg3)
+{
+  struct val3 args;
+
+  args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3;
+  if (mcatch(docall3, &args, display_error())) return result;
+  else return NULL;
+}
+
+static void docall4(void *x)
+{
+  struct val3 *args = x;
+
+  result = call4(args->v1, args->v2, args->v3, args->v4, args->v5);
+}
+
+value mcatch_call4(value c, value arg1, value arg2, value arg3, value arg4)
+{
+  struct val3 args;
+
+  args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3; args.v5 = arg4;
+  if (mcatch(docall4, &args, display_error())) return result;
   else return NULL;
 }
 
@@ -615,11 +894,11 @@ static void docall1plus(void *x)
   result = call1plus(args->v1, args->v2, args->v3);
 }
 
-value catch_call1plus(value c, value arg, struct vector *arguments)
+value mcatch_call1plus(value c, value arg, struct vector *arguments)
 {
   struct val3 args;
 
   args.v1 = c; args.v2 = arg; args.v3 = arguments;
-  if (catch(docall1plus, &args, display_error())) return result;
+  if (mcatch(docall1plus, &args, display_error())) return result;
   else return NULL;
 }

@@ -1,0 +1,11 @@
+eval("f1 = fn v v");
+eval("f2 = fn (x1, x2) x1");
+eval("f3 = fn (x1, x2) fn (y) x1 = y");
+eval("f4 = fn () [ | x1 | fn (y) x1 = y ]");
+regress("prolog1", f1(1, 2, 3), '[ 1 2 3]);
+regress("prolog2", f2(1, 2), 1);
+regressfail("prolog2a", fn () f2(1));
+regressfail("prolog2b", fn () f2(1, 3, 55));
+tmp = f3(1, 10);
+regress("prolog3", tmp(10), 10);
+regress("prolog4", f4()(10), 10);

@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library misc // Miscellaneous useful functions
 requires system, sequences
 defines caar, cadr, cdar, cddr, caaar, caadr, cadar, caddr, cdaar, cdadr,
@@ -10,7 +31,7 @@ defines caar, cadr, cdar, cddr, caaar, caadr, cadar, caddr, cdaar, cdadr,
   str2int, unquote, char_white?, skip_white, vector_to_list, memq, member, for,
   repeat, table_copy, vector_exists_index, string_ljustify, string_ljustify_cut,
   string_rjustify, string_rjustify_cut, sorted_table_list, rprotect, lprotect,
-  vector_rindex
+  vector_rindex, failMessage, assertMessage
 reads random // hack to avoid problems w/ standalone version
 [
 
@@ -47,13 +68,43 @@ equal? = fn "x1 x2 -> b. Compares x1 to x2 for equality, recursively for strings
 	    true
 	  ]
       ]
-  else x1 == x2;
+  else if (float?(x1))
+    if (float?(x2))
+      if (fnan?(x1) || fnan?(x2))
+	x1 == x2
+      else
+	fcmp(x1, x2) == 0
+    else
+      0
+  else if (bigint?(x1))
+    bigint?(x2) && bicmp(x1, x2) == 0
+  else if (symbol?(x1))
+    (symbol?(x2) && equal?(symbol_name(x1), symbol_name(x2)) &&
+     equal?(symbol_get(x1), symbol_get(x2)))
+  else if (table?(x1))
+    table?(x2) &&
+      [
+	| l, y |
+	y = table_copy(x2);
+	l = table_list(x1);
+	while (l != null && equal?(symbol_get(car(l)), y[symbol_name(car(l))]))
+	  [
+	    y[symbol_name(car(l))] = null;
+	    l = cdr(l);
+	  ];
+	if (l == null)
+	  table_list(y) == null
+	else
+	  0
+      ]
+  else
+    x1 == x2;
 
-rprotect = fn "x -> . Protect x and it's contents (vectors, pairs) recursively" (x)
+rprotect = fn "x -> x. Protect x and it's contents (vectors, pairs) recursively" (x)
   [
-    | pro |
+    | pro, seen |
 
-    pro = fn (x, seen)
+    pro = fn (x)
       if (!memq(x, seen))
 	[
 	  protect(x);
@@ -61,20 +112,37 @@ rprotect = fn "x -> . Protect x and it's contents (vectors, pairs) recursively" 
 	  if (pair?(x))
 	    [
 	      seen = x . seen;
-	      pro(car(x), seen);
-	      pro(cdr(x), seen);
+	      pro(car(x));
+	      pro(cdr(x));
 	    ]
 	  else if (vector?(x))
 	    [
 	      | l |
 	      
 	      l = vector_length(x);
+	      seen = x .  seen;
+	      while ((l = l - 1) >= 0) 
+		pro(x[l]);
+	    ]
+	  else if (symbol?(x))
+	    [
 	      seen = x . seen;
-	      while ((l = l - 1) >= 0) pro(x[l], seen);
-	    ];
+	      pro(symbol_name(x));
+	      pro(symbol_get(x));
+	    ]
+	  else if (table?(x))
+	    [
+	      seen = x . seen;
+	      lforeach(pro, table_list(x))
+	    ]
 	];
 
-    pro(x, null);
+    // Start new session, with no execution limits
+    session(fn ()
+	    [
+	      unlimited_execution();
+	      pro(x);
+	    ]);
     x
   ];
 
@@ -105,7 +173,9 @@ cddar = fn (x) cdr(cdr(car(x)));
 cdddr = fn (x) cdr(cdr(cdr(x)));
 
 assert = fn "b -> . Fail if b is false" (b) if (!b) fail();
+assertMessage = fn "b s-> . Fail with message s if b is false" (b, s) if (!b) failMessage(s);
 fail = fn " -> . Fail." () 1/0;
+failMessage = fn "s -> . Fail with message s." (s) [ display(format("%s%n", s)); 1/0 ];
 
 union = fn "l1 l2 -> l3. Set union of l1 and l2" (l1, l2)
   // Types: l1, l2: set
@@ -206,7 +276,7 @@ string_index = fn "s n1 -> n2. Finds index of char 'n1' in str, or -1 if none"
    |check, max|
    check = 0;
    max = string_length (str) - 1;
-   while (if (check <= max) (string_ref (str, check) != n) else 0)
+   while (if (check <= max) (str[check] != n) else 0)
       check = check + 1;
    if (check <= max) check else -1;
 ];
@@ -236,7 +306,7 @@ vequal? = fn "v1 v2 -> b. True if the elements of v1 are == to those of v2" (v1,
       ]
   ];
 
-lqsort = fn "l1 -> l2. Sort l1 according to f. f(x1, x2) should return true if x1 goes before x2" (f, l)
+lqsort = fn "f l1 -> l2. Sort l1 according to f. f(x1, x2) should return true if x1 goes before x2" (f, l)
   if (l == null) null
   else
     [
@@ -254,7 +324,7 @@ lqsort = fn "l1 -> l2. Sort l1 according to f. f(x1, x2) should return true if x
 	]
     ];
 
-vqsort! = fn "v1 -> v1. Sort v1 according to f. f(x1, x2) should return true if x1 goes before x2" (f, v)
+vqsort! = fn "f v1 -> v1. Sort v1 according to f. f(x1, x2) should return true if x1 goes before x2" (f, v)
   [
     | subsort |
 
@@ -325,7 +395,7 @@ mapstr = fn "c s -> l. Executes function to on every character in l and  makes l
     len = string_length(s); results = null;
 
     while (len > 0)
-      results = cons(f(s[len = len - 1]), results);
+      results = f(s[len = len - 1]) . results;
 
     results
   ];
@@ -521,7 +591,7 @@ str2int = fn "s -> n. Returns some value of s for int2word"
    |result|
    result = 0;
    for (0, string_length (str) - 1, fn (i)
-      result = result + string_ref (str, i) * (i + 1));
+      result = result + str[i] * (i + 1));
    result;
 ];
 
@@ -534,7 +604,7 @@ unquote = fn "s1 -> s2. Returns s1 w/o any surrounding single or double quotes" 
   ];
 
 char_white? = fn "n -> b. TRUE if n is a white space character" (c)
-  c == ?  || c == ?\n || c == 12 || c == 9;
+  c == ?  || c == ?\n || c == 12 || c == ?\t || c == ?\r;
 
 skip_white = fn "s1 -> s2. Returns s1 w/o any leading white space" (s)
   [

@@ -1,6 +1,27 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library msparc // mudlle assembler for sparc
 // uses sparc: prefix
-requires system, dlist, misc, sequences
+requires system, dlist, misc, sequences, compiler
 defines
   sparc:l_ins, sparc:l_alias, sparc:l_number, sparc:il_label, sparc:il_ins,
   sparc:il_node, sparc:il_number, sparc:il_offset, sparc:i_type, sparc:i_op,
@@ -35,7 +56,7 @@ defines
   sparc:register_global_constant, sparc:register_primitive, sparc:new_label,
   sparc:label, sparc:set_label, sparc:ins_list, sparc:slabel, sparc:print_ins,
   sparc:set_leaf!, sparc:leaf?, sparc:make_leaf, sparc:get_instructions,
-  sparc:rem_instruction
+  sparc:rem_instruction, sparc:copy_instruction
 
 [
 // labels:
@@ -159,9 +180,9 @@ sparc:bvc = 15;
 sparc:bvs = 7;
 
 [
-  | ins_index, add_ins, label_index, rnames, print_ins, rname, saddress, cnames,
+  | ins_index, label_index, rnames, print_ins, rname, saddress, cnames, 
     smixed, check, register, load_ins, store_ins, alu_ins, okleaf, leafarg,
-    remoffset |
+    remoffset, add_ins, duplicate |
 
 
   sparc:new_code = fn ()
@@ -197,14 +218,33 @@ sparc:bvs = 7;
     [
       fcode[0] = dremove!(il, fcode[0]);
       il = dget(il);
-      fcode[2] = remoffset(il, fcode[2]);
-      fcode[3] = remoffset(il, fcode[3]);
-      fcode[4] = remoffset(il, fcode[4]);
-      fcode[5] = remoffset(il, fcode[5]);
-      fcode[6] = remoffset(il, fcode[6]);
-      fcode[7] = remoffset(il, fcode[7]);
+      fcode[mc:a_builtins + 2] = remoffset(il, fcode[mc:a_builtins + 2]);
+      fcode[mc:a_constants + 2] = remoffset(il, fcode[mc:a_constants + 2]);
+      fcode[mc:a_subfns + 2] = remoffset(il, fcode[mc:a_subfns + 2]);
+      fcode[mc:a_globals + 2] = remoffset(il, fcode[mc:a_globals + 2]);
+      fcode[mc:a_kglobals + 2] = remoffset(il, fcode[mc:a_kglobals + 2]);
+      fcode[mc:a_primitives + 2] = remoffset(il, fcode[mc:a_primitives + 2]);
     ];
-      
+
+  duplicate = fn (il, fcode, n)
+    [
+      | found |
+
+      found = lexists?(fn (x) cdr(x) == il, fcode[n]);
+      if (found)
+	register(fcode, n, car(found));
+    ];
+  
+  sparc:copy_instruction = fn (fcode, il)
+    [
+      add_ins(fcode, il[sparc:il_ins]);
+      duplicate(il, fcode, mc:a_builtins + 2);
+      duplicate(il, fcode, mc:a_constants + 2);
+      duplicate(il, fcode, mc:a_subfns + 2);
+      duplicate(il, fcode, mc:a_globals + 2);
+      duplicate(il, fcode, mc:a_kglobals + 2);
+      duplicate(il, fcode, mc:a_primitives + 2);
+    ];
   
   // refs to g0-g7, l0-l1, i0-i7 and non-registers are ok in leaf routines.
   okleaf = fn (arg) !pair?(arg) || (arg = car(arg)) >= 24 || arg < 8 ||
@@ -342,24 +382,24 @@ sparc:bvs = 7;
     [
       sparc:set_leaf!(fcode, false);
       add_ins(fcode, vector(sparc:ins_call, 0, 0, null, null));
-      register(fcode, 2, builtin);
+      register(fcode, mc:a_builtins + 2, builtin);
     ];
 
 
   sparc:register_constant = fn (fcode, cst)
-    register(fcode, 3, cst);
+    register(fcode, mc:a_constants + 2, cst);
 
   sparc:register_function = fn (fcode, f)
-    register(fcode, 4, f);
+    register(fcode, mc:a_subfns + 2, f);
 
   sparc:register_global = fn (fcode, name)
-    register(fcode, 5, name);
+    register(fcode, mc:a_globals + 2, name);
 
   sparc:register_global_constant = fn (fcode, name)
-    register(fcode, 6, name);
+    register(fcode, mc:a_kglobals + 2, name);
 
   sparc:register_primitive = fn (fcode, info)
-    register(fcode, 7, info);
+    register(fcode, mc:a_primitives + 2, info);
 
   leafarg = fn (arg)
     if (pair?(arg) && car(arg) >= 24) car(arg) - 16 . null // rename

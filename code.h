@@ -1,58 +1,22 @@
-/* $Log: code.h,v $
- * Revision 1.15  1995/07/15  15:24:15  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.14  1995/04/29  20:05:18  arda
- * fix
- *
- * Revision 1.13  1994/10/09  06:41:50  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.12  1994/08/16  19:15:45  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.9  1994/03/23  14:31:16  arda
- * *** empty log message ***
- *
- * Revision 1.8  1994/02/12  17:24:40  arda
- * Owl: Better code generated.
- *
- * Revision 1.7  1994/01/08  12:49:37  dgay
- * Owl: Improved code generation for blocks (they are not implemented
- * as 0 argument functions anymore, they are folded into the current
- * function instead).
- *
- * Revision 1.6  1993/10/03  14:07:12  dgay
- * Bumper disun8 update.
- *
- * Revision 1.5  1993/07/21  20:36:34  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
- * Revision 1.4  1993/03/29  09:23:41  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:13:59  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.2  1993/01/26  09:48:42  un_mec
- * Owl:
- * - Limit mudlle execution time (prevent infinite loops).
- * - Add mudlle reaction procedures.
- *
- * Revision 1.1  1992/12/27  21:40:58  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef CODE_H
@@ -86,6 +50,9 @@ enum {
   op_closure_code1,		/* arg1 is code's offset in constants */
   op_closure_code2,		/* arg2 is code's offset in constants */
   op_execute,			/* arg1 is # of parameters passed */
+  op_execute_secure,		/* arg1 is # of parameters passed */
+  op_execute_varargs,		/* arg1 is # of parameters passed */
+  op_execute_primitive,		/* arg1 is # of parameters passed */
   op_execute_primitive1,	/* arg2 is global offset */
   op_execute_primitive2,	/* arg2 is global offset */
   op_execute_global1,		/* arg2 is global offset */
@@ -113,14 +80,15 @@ enum {
      flavours, and take an arg1 (local, closure) or arg2 (global) indicating the
      offset in the corresponding variable list */
   op_recall,
-  op_define = op_recall + global_var + 1,
+  op_assign = op_recall + global_var + 1,
 				/* arg2 is # of global variable */
-  op_assign,
   op_closure_var = op_assign + global_var + 1,
   /* Note: No global vars in closures ... */
 
+  op_define = op_closure_var + closure_var + 1,
+
   /* Builtin operations (very common) */
-  op_builtin_eq = op_closure_var + closure_var + 1,
+  op_builtin_eq,
   op_builtin_neq,
   op_builtin_gt,
   op_builtin_lt,

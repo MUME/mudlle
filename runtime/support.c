@@ -1,58 +1,28 @@
-/* $Log: support.c,v $
- * Revision 1.15  1995/07/15  15:25:08  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.14  1995/06/04  14:24:41  arda
- * Rename/move some files, misc. junk
- *
- * Revision 1.13  1995/01/22  15:12:00  arda
- * Linux patches.
- *
- * Revision 1.12  1994/10/09  06:44:22  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.11  1994/09/06  07:50:47  arda
- * Constant support: detect_immutability, global_set!, string_{i}search.
- *
- * Revision 1.10  1994/08/31  16:57:36  arda
- * *** empty log message ***
- *
- * Revision 1.9  1994/08/29  15:44:54  arda
- * Mudlle stuff
- *
- * Revision 1.8  1994/08/29  13:19:50  arda
- * Contagious immutability.
- * Global array of values instead of variables.
- * Direct recursion.
- *
- * Revision 1.7  1994/08/26  04:36:05  arda
- * hidden objects
- *
- * Revision 1.6  1994/08/22  18:03:39  arda
- * Primitives for compiler.
- *
- * Revision 1.5  1994/08/22  11:19:06  arda
- * Changes for mudlle compiler in MUME.
- *
- * Revision 1.4  1994/08/17  16:30:11  arda
- * Seclevel fixes.
- *
- * Revision 1.3  1994/08/17  14:10:34  arda
- * Changed bcons to balloc_cons.
- *
- * Revision 1.2  1994/08/16  19:17:19  arda
- * Added flags to primitives for better calling sequences.
- *
-*/
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
 
-static char rcsid[] = "$Id: support.c,v 1.15 1995/07/15 15:25:08 arda Exp $";
-
+#include "mudlle.h"
+#include "tree.h"
 #include <string.h>
 #include <stddef.h>
-#include <alloca.h>
 #include "runtime/runtime.h"
 #include "alloc.h"
 #include "global.h"
@@ -63,21 +33,21 @@ static char rcsid[] = "$Id: support.c,v 1.15 1995/07/15 15:25:08 arda Exp $";
 #include "builtins.h"
 #include "module.h"
 
-#define ALIGN(x, n) ((x) + ((n) - 1) & ~((n) - 1))
+int cc_length;
 
-UNSAFEOP(mudlle_parse, "s -> v. Parses a mudlle expression and returns a parse tree",
-	 1, (struct string *code),
-	 OP_LEAF | OP_NOESCAPE)
+OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
+	  "parse tree", 1, (struct string *code), OP_LEAF | OP_NOESCAPE)
 {
+  mfile f;
   value parsed;
+  block_t memory;
 
   TYPEIS(code, type_string);
 
   read_from_string(code->str);
-  erred = FALSE;
   memory = new_block();
-  if (yyparse() == 0 && !erred)
-    parsed = mudlle_parse(parsed_code);
+  if ((f = parse(memory)))
+    parsed = mudlle_parse(memory, f);
   else
     parsed = makebool(FALSE);
 
@@ -93,19 +63,19 @@ UNSAFEOP(mudlle_parse_file, "s1 s2 -> v. Parses a file s (nice name s2) and retu
   FILE *f;
   value parsed;
   char *fname;
+  block_t memory;
+  mfile mf;
 
   TYPEIS(name, type_string);
   TYPEIS(nicename, type_string);
   if (!(f = fopen(name->str, "r"))) return makebool(FALSE);
 
-  fname = alloca(strlen(nicename->str) + 1);
-  strcpy(fname, nicename->str);
+  LOCALSTR(fname, nicename);
   read_from_file(f, fname);
 
-  erred = FALSE;
   memory = new_block();
-  if (yyparse() == 0 && !erred)
-    parsed = mudlle_parse(parsed_code);
+  if ((mf = parse(memory)))
+    parsed = mudlle_parse(memory, mf);
   else
     parsed = makebool(FALSE);
 
@@ -122,90 +92,142 @@ static struct builtin_table {
   void (*address)(void);
 } builtins[] = {
 #ifdef AMIGA
-  "bsubtract", bsubtract,
-  "bor", bor,
-  "band", band,
-  "bleq", bleq,
-  "blne", blne,
-  "bllt", bllt,
-  "blle", blle,
-  "blgt", blgt,
-  "blge", blge,
-  "bbitor", bbitor,
-  "bbitxor", bbitxor,
-  "bbitand", bbitand,
-  "bshift_left", bshift_left,
-  "bshift_right", bshift_right,
-  "badd", badd,
-  "bmultiply", bmultiply,
-  "bdivide", bdivide,
-  "bremainder", bremainder,
-  "bnegate", bnegate,
-  "bnot", bnot,
-  "bbitnot", bbitnot,
-  "bref", bref,
-  "bcar", bcar,
-  "bcdr", bcdr,
-  "bwglobal", bwglobal,
-  "bbadargs", bbadargs,
-  "bcompare", bcompare,
-  "bcall", bcall,
-  "balloc", balloc,
-  "balloc_readonly", balloc_readonly,
-  "bcons", bcons,
-  "berror", berror,
-  "bvarargs", bvarargs,
+  {"bsubtract", bsubtract},
+  {"bor", bor},
+  {"band", band},
+  {"bleq", bleq},
+  {"blne", blne},
+  {"bllt", bllt},
+  {"blle", blle},
+  {"blgt", blgt},
+  {"blge", blge},
+  {"bbitor", bbitor},
+  {"bbitxor", bbitxor},
+  {"bbitand", bbitand},
+  {"bshift_left", bshift_left},
+  {"bshift_right", bshift_right},
+  {"badd", badd},
+  {"bmultiply", bmultiply},
+  {"bdivide", bdivide},
+  {"bremainder", bremainder},
+  {"bnegate", bnegate},
+  {"bnot", bnot},
+  {"bbitnot", bbitnot},
+  {"bref", bref},
+  {"bcar", bcar},
+  {"bcdr", bcdr},
+  {"bwglobal", bwglobal},
+  {"bbadargs", bbadargs},
+  {"bcompare", bcompare},
+  {"bcall", bcall},
+  {"balloc", balloc},
+  {"balloc_readonly", balloc_readonly},
+  {"bcons", bcons},
+  {"berror", berror},
+  {"bvarargs", bvarargs},
 #endif
 #ifdef sparc
-  "bsubtract", bsubtract,
-  "bor", bor,
-  "band", band,
-  "bleq", bleq,
-  "blne", blne,
-  "bllt", bllt,
-  "blle", blle,
-  "blgt", blgt,
-  "blge", blge,
-  "bbitor", bbitor,
-  "bbitxor", bbitxor,
-  "bbitand", bbitand,
-  "bshift_left", bshift_left,
-  "bshift_right", bshift_right,
-  "badd", badd,
-  "bmultiply", bmultiply,
-  "bdivide", bdivide,
-  "bremainder", bremainder,
-  "bnegate", bnegate,
-  "bnot", bnot,
-  "bbitnot", bbitnot,
-  "bref", bref,
-  "bcar", bcar,
-  "bcdr", bcdr,
-  "bwglobal", bwglobal,
-  "bcleargc", bcleargc,
-  "bvarargs", bvarargs,
-  "bcompare", bcompare,
-  "bcall", bcall,
-  "balloc_variable", balloc_variable,
-  "balloc_cons", balloc_cons,
-  "balloc_cons_l0", balloc_cons_l0,
-  "balloc_closure", balloc_closure,
-  "bcall_primitive", bcall_primitive,
-  "bcall_primitive_leaf", bcall_primitive_leaf,
-  "bcall_primitive_leaf_noalloc", bcall_primitive_leaf_noalloc,
+  {"bsubtract", bsubtract},
+  {"bor", bor},
+  {"band", band},
+  {"bleq", bleq},
+  {"blne", blne},
+  {"bllt", bllt},
+  {"blle", blle},
+  {"blgt", blgt},
+  {"blge", blge},
+  {"bbitor", bbitor},
+  {"bbitxor", bbitxor},
+  {"bbitand", bbitand},
+  {"bshift_left", bshift_left},
+  {"bshift_right", bshift_right},
+  {"badd", badd},
+  {"bmultiply", bmultiply},
+  {"bdivide", bdivide},
+  {"bremainder", bremainder},
+  {"bnegate", bnegate},
+  {"bnot", bnot},
+  {"bbitnot", bbitnot},
+  {"bref", bref},
+  {"bcar", bcar},
+  {"bcdr", bcdr},
+  {"bwglobal", bwglobal},
+  {"bcleargc", bcleargc},
+  {"bvarargs", bvarargs},
+  {"bcompare", bcompare},
+  {"bcall", bcall},
+  {"balloc_variable", balloc_variable},
+  {"balloc_cons", balloc_cons},
+  {"balloc_closure", balloc_closure},
+  {"bcall_primitive", bcall_primitive},
+  {"bcall_primitive_leaf", bcall_primitive_leaf},
+  {"bcall_primitive_leaf_noalloc", bcall_primitive_leaf_noalloc},
+  {"bcall_secure", bcall_secure},
+  {"bcall_varargs", bcall_varargs}
 #endif
-#ifdef linux
-  "bdummy", 0,
+#ifdef i386
+  {"xcount", (void (*)())&xcount},
+  {"seclevel", (void (*)())&seclevel},
+  {"ccontext", (void (*)())&ccontext},
+  {"env_values", (void (*)())&env_values},
+
+#define FIRST_RELBUILTIN 4
+
+  {"bshift_left", bshift_left},
+  {"bshift_right", bshift_right},
+  {"badd", badd},
+  {"bmultiply", bmultiply},
+  {"bdivide", bdivide},
+  {"bremainder", bremainder},
+  {"bref", bref},
+  {"bset", bset},
+
+  {"bwglobal", bwglobal},
+
+  {"bcleargc", bcleargc},
+  {"bcleargc0", bcleargc0},
+  {"bcleargc1", bcleargc1},
+  {"bcleargc2", bcleargc2},
+  {"bvarargs", bvarargs},
+
+  {"bcall", bcall},
+  {"bcall_secure", bcall_secure},
+  {"bcall_varargs", bcall_varargs},
+
+  {"balloc_variable", balloc_variable},
+  {"balloc_cons", balloc_cons},
+  {"balloc_closure", balloc_closure},
+
+  {"berror_bad_function", berror_bad_function},
+  {"berror_stack_underflow", berror_stack_underflow},
+  {"berror_bad_type", berror_bad_type},
+  {"berror_divide_by_zero", berror_divide_by_zero},
+  {"berror_bad_index", berror_bad_index},
+  {"berror_bad_value", berror_bad_value},
+  {"berror_variable_read_only", berror_variable_read_only},
+  {"berror_loop", berror_loop},
+  {"berror_recurse", berror_recurse},
+  {"berror_wrong_parameters", berror_wrong_parameters},
+  {"berror_security_violation", berror_security_violation},
+  {"berror_value_read_only", berror_value_read_only},
+  {"berror_user_interrupt", berror_user_interrupt}
+#endif
+#ifdef NOCOMPILER
+  {"bdummy", 0}
 #endif
   };
 
-static ulong builtin_find(struct string *name)
+static ulong builtin_find(struct string *name, int *k)
 {
   char *n = name->str;
   int i = sizeof(builtins) / sizeof(struct builtin_table);
 
   while ((i = i - 1) >= 0)
-    if (!strcmp(n, builtins[i].name)) return (ulong)builtins[i].address;
+    if (!strcmp(n, builtins[i].name))
+      {
+	if (k) *k = i;
+	return (ulong)builtins[i].address;
+      }
 
   return 0;
 }
@@ -219,6 +241,7 @@ static ulong primitive_find(struct string *name)
   return (ulong)p->op->op;
 }
 
+#ifdef sparc
 static void set_cst(ulong *sethi, ulong val)
 /* Effects: Sets value defined by a sethi/or pair to val.
      sethi points to the sethi instruction of the pair, the or can be found
@@ -236,6 +259,10 @@ static void set_cst(ulong *sethi, ulong val)
   *sethi = (*sethi & ~((1 << 22) - 1)) | (val >> 10);
   *or = (*or & ~((1 << 13) - 1)) | (val & ((1 << 10) - 1));
 }
+#endif
+#ifdef i386
+#define set_cst(x, n) (*(ulong *)(x) = (n))
+#endif
      
 VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 -> code. Builds a code object from:\n\
 its machine code s1,\n\
@@ -246,39 +273,38 @@ globals l3=list of name/offset pairs\n\
 primitives l4=list of name/offset pairs",
       0)
 {
-  ulong clen, ncsts = 0, size;
-  struct mcode *new;
+  ulong clen, ncsts = 0, nrel = 0, size = 0;
+  struct mcode *newp = NULL;
   uword *cst_offsets;
   struct list *scan_csts, *scan_builtins, *scan_globals, *scan_primitives;
-  struct gcpro gcpro1;
+  struct gcpro gcpro1, gcpro2;
   struct string *mcode;
-  value seclev, lineno;
-  struct string *help, *varname, *filename;
-  struct list *csts, *builtins, *globals, *primitives;
+  value seclev, alineno;
+  struct string *help, *varname, *afilename;
+  struct list *csts, *abuiltins, *globals, *primitives;
 
-#ifdef MUME
-  if (seclevel < LVL_IMPLEMENTOR) runtime_error(error_security_violation);
+#ifdef NOCOMPILER
+  runtime_error(error_bad_value);
 #endif
 
   if (nargs != 10) runtime_error(error_wrong_parameters);
+
+  GCPRO1(args);
+
   mcode = args->data[0];
-  seclev = args->data[1];
-  help = args->data[2];
-  varname = args->data[3];
-  filename = args->data[4];
-  lineno = args->data[5];
-  csts = args->data[6];
-  builtins = args->data[7];
-  globals = args->data[8];
-  primitives = args->data[9];
-
   TYPEIS(mcode, type_string);
+  seclev = args->data[1];
   ISINT(seclev);
+  help = args->data[2];
   if (help) TYPEIS(help, type_string);
+  varname = args->data[3];
   if (varname) TYPEIS(varname, type_string);
-  if (filename) TYPEIS(filename, type_string);
-  ISINT(lineno);
+  afilename = args->data[4];
+  if (afilename) TYPEIS(afilename, type_string);
+  alineno = args->data[5];
+  ISINT(alineno);
 
+  csts = args->data[6];
   scan_csts = csts;
   while (scan_csts != NULL)
     {
@@ -293,7 +319,8 @@ primitives l4=list of name/offset pairs",
       ncsts++;
     }
 
-  scan_builtins = builtins;
+  abuiltins = args->data[7];
+  scan_builtins = abuiltins;
   while (scan_builtins != NULL)
     {
       struct list *builtin;
@@ -306,20 +333,26 @@ primitives l4=list of name/offset pairs",
       scan_builtins = scan_builtins->cdr;
     }
 
+  globals = args->data[8];
   scan_globals = globals;
+  GCPRO(gcpro2, scan_globals);
   while (scan_globals != NULL)
     {
-      struct list *global;
+      struct list *lglobal;
 
       TYPEIS(scan_globals, type_pair);
-      global = scan_globals->car;
-      TYPEIS(global, type_pair);
-      TYPEIS(global->car, type_string);
-      ISINT(global->cdr);
+      lglobal = scan_globals->car;
+      TYPEIS(lglobal, type_pair);
+      TYPEIS(lglobal->car, type_string);
+      ISINT(lglobal->cdr);
+      mglobal_lookup(lglobal->car); /* don't want GC later ! */
       scan_globals = scan_globals->cdr;
     }
+  UNGCPRO1(gcpro2);
 
+  primitives = args->data[9];
   scan_primitives = primitives;
+  GCPRO(gcpro2, scan_primitives);
   while (scan_primitives != NULL)
     {
       struct list *primitive;
@@ -329,41 +362,44 @@ primitives l4=list of name/offset pairs",
       TYPEIS(primitive, type_pair);
       TYPEIS(primitive->car, type_string);
       ISINT(primitive->cdr);
+      if (!primitive_find(primitive->car)) runtime_error(error_bad_value);
       scan_primitives = scan_primitives->cdr;
     }
+  UNGCPRO1(gcpro2);
+
+  mcode = args->data[0];
+  clen = string_len(mcode);
 
 #ifdef AMIGA
-  clen = string_len(mcode);
-  GCPRO1(args);
   size = offsetof(struct mcode, mcode) + clen + ncsts * sizeof(uword);
-  new = gc_allocate(size);
+  newp = gc_allocate(size);
   UNGCPRO();
   mcode = args->data[0];
   help = args->data[2];
   varname = args->data[3];
-  filename = args->data[4];
+  afilename = args->data[4];
   csts = args->data[6];
-  builtins = args->data[7];
+  abuiltins = args->data[7];
   globals = args->data[8];
 
-  new->o.size = size;
-  new->o.garbage_type = garbage_mcode;
-  new->o.type = type_mcode;
-  new->o.flags = 0;
-  new->nb_constants = ncsts;
-  new->seclevel = intval(seclev);
-  new->help = help;
-  new->varname = varname;
-  new->filename = filename;
-  new->lineno = intval(lineno);
-  new->code_length = clen;
-  memcpy(new->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
+  newp->o.size = size;
+  newp->o.garbage_type = garbage_mcode;
+  newp->o.type = type_mcode;
+  newp->o.flags = 0;
+  newp->nb_constants = ncsts;
+  newp->seclevel = intval(seclev);
+  newp->help = help;
+  newp->varname = varname;
+  newp->filename = afilename;
+  newp->lineno = intval(alineno);
+  newp->code_length = clen;
+  memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
 
-  memcpy(new->mcode, mcode->str, clen);
+  memcpy(newp->mcode, mcode->str, clen);
 
   /* Copy constants and their offsets */
   scan_csts = csts;
-  cst_offsets = (uword *)((ubyte *)&new->mcode + ALIGN(clen, sizeof(uword)));
+  cst_offsets = (uword *)((ubyte *)&newp->mcode + ALIGN(clen, sizeof(uword)));
   while (scan_csts != NULL)
     {
       struct list *cst;
@@ -371,14 +407,14 @@ primitives l4=list of name/offset pairs",
 
       cst = scan_csts->car;
       offset = intval(cst->cdr);
-      *(value *)(new->mcode + offset) = cst->car;
+      *(value *)(newp->mcode + offset) = cst->car;
       *cst_offsets++ = offset;
 
       scan_csts = scan_csts->cdr;
     }
 
   /* Set builtin addresses */
-  scan_builtins = builtins;
+  scan_builtins = abuiltins;
   while (scan_builtins != NULL)
     {
       struct list *builtin;
@@ -387,8 +423,9 @@ primitives l4=list of name/offset pairs",
 
       builtin = scan_builtins->car;
       offset = intval(builtin->cdr);
-      if (!(baddress = builtin_find(builtin->car))) runtime_error(error_bad_value);
-      *(ulong *)(new->mcode + offset) = baddress;
+      if (!(baddress = builtin_find(builtin->car, NULL)))
+	runtime_error(error_bad_value);
+      *(ulong *)(newp->mcode + offset) = baddress;
 
       scan_builtins = scan_builtins->cdr;
     }
@@ -406,7 +443,7 @@ primitives l4=list of name/offset pairs",
       offset = intval(global->cdr);
       goffset = mglobal_lookup(global->car);
       genv = environment->values;
-      *(uword *)(new->mcode + offset) =
+      *(uword *)(newp->mcode + offset) =
 	(ubyte *)&genv->data[goffset] - (ubyte *)genv;
 
       scan_globals = scan_globals->cdr;
@@ -415,40 +452,43 @@ primitives l4=list of name/offset pairs",
   /* Primitives not implemented on Amiga */
 
 #endif
+
 #ifdef sparc
-  clen = string_len(mcode);
-  GCPRO1(args);
   size = offsetof(struct mcode, mcode) + clen + ncsts * sizeof(uword);
-  new = gc_allocate(size);
+  /* allocate extra space to ensure that gen1 will have space for this object
+     even with the aligned forwarding */
+  newp = gc_allocate(size + CODE_ALIGNMENT);
   UNGCPRO();
+  /* No more GC from here on !!! */
+
   mcode = args->data[0];
   help = args->data[2];
   varname = args->data[3];
-  filename = args->data[4];
+  afilename = args->data[4];
   csts = args->data[6];
-  builtins = args->data[7];
+  abuiltins = args->data[7];
   globals = args->data[8];
   primitives = args->data[9];
 
-  new->o.size = size;
-  new->o.garbage_type = garbage_mcode;
-  new->o.type = type_mcode;
-  new->o.flags = 0;
-  new->nb_constants = ncsts;
-  new->seclevel = intval(seclev);
-  new->help = help;
-  new->varname = varname;
-  new->filename = filename;
-  new->lineno = intval(lineno);
-  new->code_length = clen >> 2;
-  new->myself = (ubyte *)new;
-  memcpy(new->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
+  newp->o.size = size;
+  newp->o.garbage_type = garbage_mcode;
+  newp->o.type = type_mcode;
+  newp->o.flags = 0;
+  newp->nb_constants = ncsts;
+  newp->seclevel = intval(seclev);
+  newp->help = help;
+  newp->varname = varname;
+  newp->filename = afilename;
+  newp->lineno = intval(alineno);
+  newp->code_length = clen;
+  newp->myself = (ubyte *)newp;
+  memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
 
-  memcpy(new->mcode, mcode->str, clen);
+  memcpy(newp->mcode, mcode->str, clen);
 
   /* Copy constants and their offsets */
   scan_csts = csts;
-  cst_offsets = (uword *)((ubyte *)new->mcode + clen);
+  cst_offsets = (uword *)((ubyte *)newp->mcode + clen);
   while (scan_csts != NULL)
     {
       struct list *cst;
@@ -456,45 +496,27 @@ primitives l4=list of name/offset pairs",
 
       cst = scan_csts->car;
       offset = intval(cst->cdr);
-      set_cst(new->mcode + offset, (ulong)cst->car);
+      set_cst(newp->mcode + offset, (ulong)cst->car);
       *cst_offsets++ = offset;
 
       scan_csts = scan_csts->cdr;
     }
 
   /* Set builtin addresses */
-  scan_builtins = builtins;
+  scan_builtins = abuiltins;
   while (scan_builtins != NULL)
     {
       struct list *builtin;
       ulong baddress, *callins;
 
       builtin = scan_builtins->car;
-      if (!(baddress = builtin_find(builtin->car))) runtime_error(error_bad_value);
+      if (!(baddress = builtin_find(builtin->car, NULL)))
+	runtime_error(error_bad_value);
 
-      callins = new->mcode + intval(builtin->cdr);
+      callins = newp->mcode + intval(builtin->cdr);
       *callins = 1 << 30 | (baddress - (ulong)callins) >> 2;
 
       scan_builtins = scan_builtins->cdr;
-    }
-
-  /* Set global offsets */
-  scan_globals = globals;
-  while (scan_globals != NULL)
-    {
-      struct list *global;
-      ulong goffset;
-      struct vector *genv;
-
-      global = scan_globals->car;
-      goffset = mglobal_lookup(global->car);
-
-      /* Compute byte offset from environment base */
-      genv = environment->values;
-      goffset = (ubyte *)&genv->data[goffset] - (ubyte *)genv;
-      set_cst(new->mcode + intval(global->cdr), goffset);
-
-      scan_globals = scan_globals->cdr;
     }
 
   /* Set primitive addresses */
@@ -502,26 +524,182 @@ primitives l4=list of name/offset pairs",
   while (scan_primitives != NULL)
     {
       struct list *primitive;
-      ulong paddress;
+      ulong paddress, offset;
 
       primitive = scan_primitives->car;
-      if (!(paddress = primitive_find(primitive->car))) runtime_error(error_bad_value);
-
-      set_cst(new->mcode + intval(primitive->cdr), paddress);
+      offset = intval(primitive->cdr);
+      paddress = primitive_find(primitive->car);
+      set_cst(newp->mcode + offset, paddress);
 
       scan_primitives = scan_primitives->cdr;
     }
 
+  /* Set global offsets */
+  scan_globals = globals;
+  while (scan_globals != NULL)
+    {
+      struct list *global;
+      ulong goffset, offset;
+      struct vector *genv;
+
+      global = scan_globals->car;
+      offset = intval(global->cdr);
+      goffset = mglobal_lookup(global->car);
+
+      /* Compute byte offset from environment base */
+      genv = environment->values;
+      goffset = (ubyte *)&genv->data[goffset] - (ubyte *)genv;
+      set_cst(newp->mcode + offset, goffset);
+
+      scan_globals = scan_globals->cdr;
+    }
+
 #endif
 
-#ifdef GCDEBUG
+#ifdef i386
+  /* Count relocatable builtins */
+  abuiltins = args->data[7];
+  scan_builtins = abuiltins;
+  nrel = 0;
+  while (scan_builtins != NULL)
+    {
+      struct list *builtin;
+      int k;
+
+      builtin = scan_builtins->car;
+      if (!builtin_find(builtin->car, &k))
+	runtime_error(error_bad_value);
+
+      if (k >= FIRST_RELBUILTIN)
+	nrel++;
+
+      scan_builtins = scan_builtins->cdr;
+    }
+
+  size = ALIGN(clen, sizeof(uword)) + (ncsts + nrel) * sizeof(uword);
+  /* The next line gave a net slowdown, at least on the compiler */
+  /*size = ALIGN(size, 32);*/ /* Avoid sharing cache lines with other objects */
+  size += offsetof(struct mcode, mcode);
+  cc_length += size;
+  /* allocate extra space to ensure that gen1 will have space for this object
+     even with the aligned forwarding */
+  newp = gc_allocate(size + CODE_ALIGNMENT);
+  UNGCPRO();
+  /* No more GC from here on !!! */
+
+  mcode = args->data[0];
+  help = args->data[2];
+  varname = args->data[3];
+  afilename = args->data[4];
+  csts = args->data[6];
+  abuiltins = args->data[7];
+  globals = args->data[8];
+  primitives = args->data[9];
+
+  newp->o.size = size;
+  newp->o.garbage_type = garbage_mcode;
+  newp->o.type = type_mcode;
+  newp->o.flags = 0;
+  newp->nb_constants = ncsts;
+  newp->nb_rel = nrel;
+  newp->seclevel = intval(seclev);
+  newp->help = help;
+  newp->varname = varname;
+  newp->filename = afilename;
+  newp->lineno = intval(alineno);
+  newp->code_length = clen;
+  newp->myself = (ubyte *)newp;
+  memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
+
+  memcpy(newp->mcode, mcode->str, clen);
+
+  /* Copy constants and their offsets */
+  scan_csts = csts;
+  cst_offsets = (uword *)((ubyte *)newp->mcode + ALIGN(clen, sizeof(uword)));
+  while (scan_csts != NULL)
+    {
+      struct list *cst;
+      uword offset;
+
+      cst = scan_csts->car;
+      offset = intval(cst->cdr);
+      set_cst(newp->mcode + offset, (ulong)cst->car);
+      *cst_offsets++ = offset;
+
+      scan_csts = scan_csts->cdr;
+    }
+
+  /* Set builtin addresses */
+  scan_builtins = abuiltins;
+  while (scan_builtins != NULL)
+    {
+      struct list *builtin;
+      ulong baddress, *callins;
+      int k;
+      uword offset;
+
+      builtin = scan_builtins->car;
+      baddress = builtin_find(builtin->car, &k);
+      offset = intval(builtin->cdr);
+      callins = (ulong *)(newp->mcode + offset);
+
+      if (k < FIRST_RELBUILTIN)
+	set_cst(callins, baddress);
+      else
+	{
+	  set_cst(callins, baddress - (ulong)(callins + 1));
+	  /* need to remember offset (for relocation) */
+	  *cst_offsets++ = offset;
+	}
+
+      scan_builtins = scan_builtins->cdr;
+    }
+
+  /* Set primitive addresses */
+  scan_primitives = primitives;
+  while (scan_primitives != NULL)
+    {
+      struct list *primitive;
+      ulong paddress, offset;
+
+      primitive = scan_primitives->car;
+      offset = intval(primitive->cdr);
+      paddress = primitive_find(primitive->car);
+      set_cst(newp->mcode + offset, paddress);
+
+      scan_primitives = scan_primitives->cdr;
+    }
+
+  /* Set global offsets */
+  scan_globals = globals;
+  while (scan_globals != NULL)
+    {
+      struct list *lglobal;
+      ulong goffset, offset;
+      struct vector *genv;
+
+      lglobal = scan_globals->car;
+      offset = intval(lglobal->cdr);
+      goffset = mglobal_lookup(lglobal->car);
+
+      /* Compute byte offset from environment base */
+      genv = environment->values;
+      goffset = (ubyte *)&genv->data[goffset] - (ubyte *)genv;
+      set_cst(newp->mcode + offset, goffset);
+
+      scan_globals = scan_globals->cdr;
+    }
+
+#endif
+
+#ifdef GCSTATS
   gcstats.anb[type_mcode]++;
   gcstats.asizes[type_mcode] += size;
 #endif
 
-  new->o.flags |= OBJ_IMMUTABLE;
+  newp->o.flags |= OBJ_IMMUTABLE;
 
-  return new;
+  return newp;
 }
 
 UNSAFEOP(make_closure, "mcode -> fn. Makes a function with no closure vars from given mcode object",
@@ -570,18 +748,18 @@ TYPEDOP(primitive_type, "primitive -> l. Returns type of primitive",
 	OP_LEAF | OP_NOESCAPE, "f.l")
 {
   struct list *l = NULL;
-  const char **typing;
+  const char **atyping;
   struct gcpro gcpro1;
 
   TYPEIS(p, type_primitive);
 
-  typing = p->op->type;
-  if (typing)
+  atyping = p->op->type;
+  if (atyping)
     {
       GCPRO1(l);
-      while (*typing)
+      while (*atyping)
 	{
-	  struct string *sig = alloc_string(*typing++);
+	  struct string *sig = alloc_string(*atyping++);
 
 	  l = alloc_list(sig, l);
 	}
@@ -648,8 +826,7 @@ UNSAFEOP(module_set, "s n -> . Sets status of module s to n",
   char *tname;
 
   TYPEIS(name, type_string);
-  tname = alloca(strlen(name->str) + 1);
-  strcpy(tname, name->str);
+  LOCALSTR(tname, name);
   ISINT(status);
 
   module_set(tname, intval(status));
@@ -673,8 +850,7 @@ TYPEDOP(module_require, "s -> n. Load module s if needed, return its new status"
   char *tname;
 
   TYPEIS(name, type_string);
-  tname = alloca(strlen(name->str) + 1);
-  strcpy(tname, name->str);
+  LOCALSTR(tname, name);
 
   return makeint(module_require(tname));
 }
@@ -764,6 +940,8 @@ void support_init(void)
   system_define("type_gone", makeint(type_gone));
   system_define("type_outputport", makeint(type_outputport));
   system_define("type_mcode", makeint(type_mcode));
+  system_define("type_float", makeint(type_float));
+  system_define("type_bigint", makeint(type_bigint));
   system_define("type_null", makeint(type_null));
   system_define("last_type", makeint(last_type));
 
@@ -807,6 +985,8 @@ void support_init(void)
   system_define("error_security_violation", makeint(error_security_violation));
   system_define("error_value_read_only", makeint(error_value_read_only));
   system_define("error_user_interrupt", makeint(error_user_interrupt));
+  system_define("error_no_match", makeint(error_no_match));
+  system_define("last_runtime_error", makeint(last_runtime_error));
 
   /* Module support */
   DEFINE("module_status", module_status);

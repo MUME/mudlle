@@ -1,10 +1,22 @@
-/* $Log: context.h,v $
- * Revision 1.1  1995/07/15  15:49:28  arda
- * New files, missing from previous commit.
- *
- *
- * Purpose: an attempt at providing a centralised view of the mudlle context,
- *   and the operations to control it.
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 /*
@@ -44,6 +56,7 @@ context (in that case the current value is in global variable x).
 #ifndef CONTEXT_H
 #define CONTEXT_H
 
+#include <setjmp.h>
 #include "mvalues.h"
 #include "types.h"
 #include "mudio.h"
@@ -51,20 +64,50 @@ context (in that case the current value is in global variable x).
 /* Function context */
 /* ---------------- */
 
+#ifndef USE_CCONTEXT
+struct ccontext 
+{
+  int dummy;
+};
+#endif
+
+#ifdef i386
+struct ccontext {
+  ulong *frame_start;
+  ulong *frame_end_sp;
+  ulong *frame_end_bp;
+  /* Space to save callee and caller saved registers */
+  value callee[2];
+  value caller[2];
+  ulong retadr; /* Return address from primitives */
+};
+#endif
+
+#ifdef sparc
+struct ccontext {
+  ulong *frame_start;
+  ulong *frame_end;
+};
+#endif
+
+extern struct ccontext ccontext;
+
 extern uword seclevel;		/* Security level of the function */
 
 /* Used only by byte-coded functions and C primitives (not used for,
    nor updated by, compiled code) */
+enum call_class { call_bytecode, call_c, call_compiled };
+
 struct call_stack
 {
   struct call_stack *next;
-  enum { call_bytecode, call_c, call_compiled } type;
+  enum call_class type;
   union {
     struct {
-      struct closure *fn;		/* Actual function */
-      struct code *code;		/* Code for this function */
-      struct vector *locals;		/* Local vars */
-      int nargs;			/* -1 = don't know yet */
+      struct closure *fn;	/* Actual function */
+      struct code *code;	/* Code for this function */
+      struct vector *locals;	/* Local vars */
+      int nargs;		/* -1 = don't know yet */
     } mudlle;
 
     struct {
@@ -72,8 +115,9 @@ struct call_stack
       value arg1, arg2, arg3, arg4, arg5;
       int nargs;
     } c;
-    /* No information is kept for compiled code, just a placemarker in the
-       call_stack (nicer messages that way) */
+
+    /* Compiled code information is up to each backend.
+       (i386 finds it using the shallow-bound ccontext stuff) */
   } u;
 };
 
@@ -86,12 +130,23 @@ struct catch_context
 {
   int display_error;		/* Should error messages be shown if an error
 				   occurs in this context ? */
-#ifdef sparc
-  ulong *old_frame_start, *old_frame_end;/*Used to restore the frame boundaries
-					   to a valid value when landing in
-					   runtime_error from an unknown
-					   state ... (eg processor trap) */
+
+  /* "Private" ifnromation */
+  struct catch_context *parent;
+  jmp_buf exception;		/* The return point */
+
+  /* Save values of constant/local/preserved M variables, to be able to restore
+     them after a throw(). In an ideal world, everything would be in the
+     call_stack ... */
+  struct call_stack *old_call_stack;
+  int old_stack_depth;
+  struct gcpro *old_gcpro;
+  uword old_seclevel;
+#ifdef AMIGA
+  struct vector *old_activation_stack;
+  int old_registers_valid;
 #endif
+  struct ccontext occontext;	/* Old code context */
 };
 
 extern struct catch_context *catch_context;
@@ -99,7 +154,7 @@ extern struct catch_context *catch_context;
 extern long exception_signal;	/* Last exception that occured, 0 for none */
 extern value exception_value;
 
-int catch(void (*fn)(void *x), void *x, int display_error);
+int mcatch(void (*fn)(void *x), void *x, int display_error);
 /* Effects: Executes fn(x) with error protection in place.
    Returns: TRUE if all went well, FALSE otherwise.
      If FALSE, information on the exeception that occurred is in 
@@ -110,10 +165,10 @@ int catch(void (*fn)(void *x), void *x, int display_error);
 	activation stack
 	seclevel
 	exception handler
-     Calls to catch may be nested with no problems.
+     Calls to mcatch may be nested with no problems.
 */
 
-NORETURN void throw(long signal, value val);
+void mthrow(long sig, value val) NORETURN;
 
 
 /* Session context */
@@ -124,6 +179,7 @@ struct session_context
   struct session_context *parent;
   Mio _mudout, _muderr;
   Muser _muduser;
+  value data;
   uword old_minlevel;
   ulong old_xcount;
   ulong call_count;
@@ -134,7 +190,7 @@ extern struct session_context *session_context;
 extern ulong xcount;			/* Loop detection */
 extern uword minlevel;			/* Minimum security level */
 
-void session_start(struct session_context *new,
+void session_start(struct session_context *newp,
 		   uword new_minlevel,
 		   Muser new_muduser,
 		   Mio new_mudout,

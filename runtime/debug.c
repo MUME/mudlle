@@ -1,20 +1,23 @@
-/* $Log: debug.c,v $
- * Revision 1.4  1995/07/16  09:17:05  arda
- * Add GCSTATS option.
- * Misc bug fixes.
- *
- * Revision 1.3  1995/07/15  15:24:55  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.2  1994/10/09  15:14:32  arda
- * mudlle libraries.
- *
- * Revision 1.1  1994/10/09  07:18:17  arda
- * Add/Remove files
- * */
-
-static char rcsid[] = "$Id: debug.c,v 1.4 1995/07/16 09:17:05 arda Exp $";
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,12 +30,6 @@ static char rcsid[] = "$Id: debug.c,v 1.4 1995/07/16 09:17:05 arda Exp $";
 #include "global.h"
 #include "alloc.h"
 #include "interpret.h"
-
-#ifdef MUME
-#include "interact.h"
-#include "struct.char.h"
-#include "frontend.h"
-#endif
 
 static void show_function(struct closure *c);
 
@@ -76,6 +73,83 @@ TYPEDOP(help_string, "fn -> s. Returns fn's help string, or false if none",
       return alloc_string(((struct primitive *)c->code)->op->help);
     }
   runtime_error(error_bad_type);
+  NOTREACHED;
+}
+
+TYPEDOP(defined_in, "fn -> v. Returns information on where fn is defined (filename, lineno). Returns false for primitives",
+	1, (value fn),
+	OP_LEAF | OP_NOESCAPE, "f.v")
+{
+  if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
+      TYPE(fn, type_secure))
+    return makebool(FALSE);
+  if (TYPE(fn, type_closure)) 
+    {
+      struct closure *c = fn;
+      struct vector *v;
+      struct string *filename;
+      uword lineno;
+      struct gcpro gcpro1;
+
+      if (c->code->o.type == type_code) 
+	{
+	  filename = c->code->filename;
+	  lineno = c->code->lineno;
+	}
+      else if (c->code->o.type == type_mcode)
+	{
+	  struct mcode *code = (struct mcode *)c->code;
+
+	  filename = code->filename;
+	  lineno = code->lineno;
+	}
+      else
+	return makebool(FALSE);
+
+      GCPRO1(filename);
+      v = alloc_vector(2);
+      UNGCPRO();
+      v->data[0] = filename;
+      v->data[1] = makeint(lineno);
+
+      return v;
+    }
+  runtime_error(error_bad_type);
+  NOTREACHED;
+}
+
+TYPEDOP(function_name, "fn -> s. Returns name of fn if available, false otherwise",
+	1, (value fn),
+	OP_LEAF | OP_NOESCAPE, "f.x")
+{
+  if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
+      TYPE(fn, type_secure))
+    {
+      struct primitive *op = fn;
+
+      return alloc_string(op->op->name);
+    }
+  if (TYPE(fn, type_closure)) 
+    {
+      struct string *name = NULL;
+      struct closure *c = fn;
+
+      if (c->code->o.type == type_code) 
+	name = c->code->varname;
+      else if (c->code->o.type == type_mcode)
+	{
+	  struct mcode *code = (struct mcode *)c->code;
+
+	  name = code->varname;
+	}
+
+      if (name)
+	return name;
+      else
+	return makebool(FALSE);
+    }
+  runtime_error(error_bad_type);
+  NOTREACHED;
 }
 
 static void show_function(struct closure *c)
@@ -88,7 +162,7 @@ static void show_function(struct closure *c)
       else mputs("undocumented", mudout);
       mputs(" {", mudout);
       mprint(mudout, prt_display, code->filename);
-      mprintf(mudout, ":%d", code->lineno);
+      mprintf(mudout, ";%d", code->lineno);
       mputs("}", mudout);
     }
   else if (c->code->o.type == type_code)
@@ -130,6 +204,7 @@ OPERATION(profile, "fn -> x. Returns profiling information for function fn: \n\
   else if (TYPE(fn, type_primitive) || TYPE(fn, type_secure) || TYPE(fn, type_varargs))
     return makeint(((struct primitive *)fn)->call_count);
   else runtime_error(error_bad_type);
+  NOTREACHED;
 }
 
 UNSAFEOP(dump_memory, " -> . Dumps GC memory (for use by profiler)",
@@ -172,9 +247,9 @@ OPERATION(apropos, "s -> . Finds all global variables whose name contains substr
       if (instr(s->str, sym->name->str))
 	{
 	  value v = GVAR(intval(sym->data));
-	  struct gcpro gcpro1;
+	  struct gcpro gcpro3;
 
-	  GCPRO1(v);
+	  GCPRO(gcpro3, v);
 	  mprint(mudout, prt_display, sym->name);
 	  mputs(EOL "  ", mudout);
 	  if (TYPE(v, type_primitive) || TYPE(v, type_secure) || TYPE(v, type_varargs))
@@ -192,7 +267,7 @@ OPERATION(apropos, "s -> . Finds all global variables whose name contains substr
 	      mputs(EOL, mudout);
 	    }
 	  else mprintf(mudout, "Variable" EOL);
-	  UNGCPRO();
+	  UNGCPRO1(gcpro3);
 	  
 	}
       globals = globals->cdr;
@@ -209,38 +284,11 @@ OPERATION(debug, "n -> . Set debug level (0 = no debug)", 1, (value c),
   undefined();
 }
 
-#ifndef MUME
 OPERATION(quit, " -> . Exit mudlle", 0, (void),
 	  0)
 {
   exit(0);
 }
-#endif
-
-#ifdef MUME
-OPERATION(with_output, "p fn -> . Evaluates fn() with output sent to player p.\n\
-If p is not a player, just evaluates fn() (no error).\n\
-Output is restored when done",
-	  2, (struct character *out, value code),
-	  0)
-{
-  struct session_context new;
-  value result;
-  Mio newout = mudout, newerr = muderr;
-
-  callable(code, 0);
-  if (TYPE(out, type_character)) newout = newerr = out->ch;
-
-  session_start(&new, minlevel, muduser, newout, newerr);
-  result = catch_call0(code);
-  session_end();
-
-  if (exception_signal) /* Continue with exception handling */
-    throw(exception_signal, exception_value);
-
-  return result;
-}
-#endif
 
 #ifdef GCSTATS
 OPERATION(gcstats, " -> l. Returns GC statistics", 0, (void),
@@ -282,6 +330,31 @@ OPERATION(gcstats, " -> l. Returns GC statistics", 0, (void),
 
   return v;
 }
+
+OPERATION(reset_gcstats, " -> . Reset short GC statistics", 0, (void),
+	  OP_LEAF | OP_NOALLOC)
+{
+  memset(gcstats.anb, 0, sizeof gcstats.anb);
+  memset(gcstats.asizes, 0, sizeof gcstats.asizes);
+  undefined();
+}
+
+OPERATION(short_gcstats, " -> l. Returns short GC statistics", 0, (void),
+	  OP_LEAF)
+{
+  struct gcstats stats = gcstats;
+  struct vector *v = alloc_vector(2 * last_type);
+  int i;
+
+  for (i = 0; i < last_type; ++i)
+    {
+      v->data[2 * i] = makeint(stats.anb[i]);
+      v->data[2 * i + 1] = makeint(stats.asizes[i]);
+    }
+
+  return v;
+}
+
 #endif
 
 UNSAFEOP(garbage_collect, "n -> . Does a forced garbage collection",
@@ -299,17 +372,16 @@ void debug_init(void)
   DEFINE("garbage_collect", garbage_collect);
   DEFINE("help", help);
   DEFINE("help_string", help_string);
+  DEFINE("defined_in", defined_in);
+  DEFINE("function_name", function_name);
   DEFINE("profile", profile);
   DEFINE("dump_memory", dump_memory);
   DEFINE("apropos", apropos);
   DEFINE("debug", debug);
-
-#ifdef MUME
-  DEFINE("with_output", with_output);
-#else
   DEFINE("quit", quit);
-#endif
 #ifdef GCSTATS
   DEFINE("gcstats", gcstats);
+  DEFINE("short_gcstats", short_gcstats);
+  DEFINE("reset_gcstats!", reset_gcstats);
 #endif
 }

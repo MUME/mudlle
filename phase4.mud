@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library phase4 // Phase 4: code generation
 requires system, sequences, dlist, misc, graph, 
   compiler, vars, ins3, mp, flow, phase3, optimise
@@ -118,9 +139,12 @@ reads mc:verbose
 		  // makes register allocation for them rather pointless),
 		  // but is the simplest test
 		  
-		  // also (68k & sparc specific?) closure uses all scratch regs
-		  if (class == mc:i_closure) survives = live_in
-		  else survives = bintersection(live_in, live_out);
+		  // operations that imply allocation use scratch regs
+		  if (class == mc:i_closure ||
+		      class == mc:i_compute && ins[mc:i_aop] == mc:b_cons)
+		    survives = live_in
+		  else
+		    survives = bintersection(live_in, live_out);
 
 		  // those temps that survive move to locals
 		  bunion!(locals, bintersection(temps, survives));
@@ -325,7 +349,7 @@ reads mc:verbose
 
       map = ifn[mc:c_fallvars];
       // discover how many registers are available for this function
-      ifn[mc:c_fmisc] = vector(false, false);
+      ifn[mc:c_fmisc] = vector(false, false, false, false);
       nregargs = mp:nregargs(ifn);
       nscratch = mp:nscratch(ifn);
       ncaller = mp:ncaller(ifn);
@@ -457,7 +481,7 @@ reads mc:verbose
 	  display(format("ainfo is %s", ainfo));
 	  newline();
 	];
-      //display_blocks(ifn);
+      //mc:display_blocks(ifn);
       mc:flatten_blocks(ifn);
       cgen_code(ifn, ainfo);
     ];

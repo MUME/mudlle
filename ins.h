@@ -1,15 +1,50 @@
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 #ifndef INS_H
 #define INS_H
 
-typedef struct label *label;
-typedef struct fncode *fncode;
+typedef struct _label *label;
+typedef struct _fncode *fncode;
 
 #include "code.h"
 
-fncode new_fncode(void);
+fncode new_fncode(int toplevel);
 /* Returns: A new function code structure (in which code for functions
      may be generated and in which constants may be stored).
+   Warning: calls to new_fncode/delete_fncode must be matched in a stack-like
+     discipline (new_fncode calls PUSH_LIST, delete_fncode POP_LIST)
 */
+
+void delete_fncode(fncode fn);
+/* Effects: deletes fncode 'fn'
+ */
+
+block_t fnmemory(fncode fn);
+/* Returns: memory block for fn
+ */
+
+int fntoplevel(fncode fn);
+/* Returns: true if 'fn' is the toplevel function
+ */
 
 void ins0(instruction ins, fncode fn);
 /* Effects: Adds instruction ins to code of 'fn'.
@@ -63,8 +98,12 @@ void peephole(fncode fn);
    Returns: Optimised instruction list
 */
 
-struct code *generate_fncode(fncode fn, struct string *help, struct string *varname,
-			     struct string *filename, int lineno, int seclev);
+struct code *generate_fncode(fncode fn,
+			     struct string *help,
+			     struct string *varname,
+			     struct string *afilename,
+			     int alineno,
+			     int seclev);
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
      recent call to new_fncode. That call is then deemed to never have
@@ -72,7 +111,7 @@ struct code *generate_fncode(fncode fn, struct string *help, struct string *varn
      in reverse temporal order)
 */
 
-label new_label(void);
+label new_label(fncode fn);
 /* Returns: A new label which points to nothing. Use label() to make it
      point at a particular instruction.
 */

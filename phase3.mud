@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library phase3 // optimisation
 requires system, sequences, dlist, misc, graph,
   compiler, vars, ins3, flow, optimise
@@ -143,9 +164,11 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	[
 	  | locals |
 
-	  mc:flow_ambiguous(ifn);
+	  mc:flow_ambiguous(ifn, mc:closure_read | mc:closure_write);
 	  locals = ifn[mc:c_flocals]; // candidates
 	  // all locals assigned in closures must be indirect
+	  /*lforeach(fn (v) v[mc:v_indirect] = true, locals);
+	  locals = null;*/
 	  locals = lfilter(fn (v)
 			     [
 			       | uses |
@@ -176,11 +199,14 @@ writes tnargs, tncstargs, tnpartial, tnfull
 		   if (!indirect)
 		     mc:scan_ambiguous
 		       (fn (il, ambiguous, x)
+			[
 			  if (!indirect &&
 			      nlocal == il[mc:il_defined_var] &&
 			      bit_set?(ambiguous, nlocal))
-			    indirect = local[mc:v_indirect] = true,
-			null, graph_node_get(n), mc:new_varset(ifn)),
+			    indirect = local[mc:v_indirect] = true
+			],
+			null, graph_node_get(n), mc:new_varset(ifn),
+			mc:closure_read | mc:closure_write),
 		 cdr(ifn[mc:c_fvalue]));
 	    ];
 
@@ -287,7 +313,6 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	    ]
 	];
       
-      compute_closure_uses(fns);
       lforeach(indirection, fns);
       lforeach(fn (ifn)	// forward indirection to closure vars
 	      lforeach(fn (cvar)
@@ -350,6 +375,7 @@ writes tnargs, tncstargs, tnpartial, tnfull
       // makes basic blocks explicit
       lforeach(mc:split_blocks, fns);
       
+      compute_closure_uses(fns);
       lforeach(mc:optimise_function, fns);
 
       if (mc:verbose >= 2)

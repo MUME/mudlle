@@ -1,17 +1,23 @@
-/* $Log: mcompile.c,v $
- * Revision 1.3  1995/07/15  15:24:29  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.2  1994/11/08  09:23:17  arda
- * Protected modules are implicitly imported [fix].
- *
- * Revision 1.1  1994/10/09  06:42:29  arda
- * Libraries
- * Type inference
- * Many minor improvements
- * */
-static char rcsid[] = "$Id: mcompile.c,v 1.3 1995/07/15 15:24:29 arda Exp $";
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
 
 #include "mudlle.h"
 #include "tree.h"
@@ -27,19 +33,19 @@ static char rcsid[] = "$Id: mcompile.c,v 1.3 1995/07/15 15:24:29 arda Exp $";
 #include <stdlib.h>
 
 /* A list of global variable indexes */
-typedef struct glist {
-  struct glist *next;
+typedef struct _glist {
+  struct _glist *next;
   ulong n;
 } *glist;
 
-static glist new_glist(ulong n, glist next)
+static glist new_glist(block_t heap, ulong n, glist next)
 {
-  glist new = allocate(memory, sizeof *new);
+  glist newp = allocate(heap, sizeof *newp);
 
-  new->next = next;
-  new->n = n;
+  newp->next = next;
+  newp->n = n;
 
-  return new;
+  return newp;
 }
 
 static int in_glist(ulong n, glist l)
@@ -58,23 +64,23 @@ static glist definable;
 static struct string *this_module;
 
 /* A list of imported modules */
-typedef struct mlist { 
-  struct mlist *next;
+typedef struct _mlist { 
+  struct _mlist *next;
   const char *name;
   int status;
 } *mlist;
 
 static mlist imported_modules;
 
-static mlist new_mlist(const char *name, int status, mlist next)
+static mlist new_mlist(block_t heap, const char *name, int status, mlist next)
 {
-  mlist new = allocate(memory, sizeof *new);
+  mlist newp = allocate(heap, sizeof *newp);
 
-  new->next = next;
-  new->name = name;
-  new->status = status;
+  newp->next = next;
+  newp->name = name;
+  newp->status = status;
 
-  return new;
+  return newp;
 }
 
 static int imported(const char *name)
@@ -89,7 +95,7 @@ static int imported(const char *name)
   return module_unloaded;
 }
 
-int mstart(file f)
+int mstart(block_t heap, mfile f)
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -102,7 +108,7 @@ int mstart(file f)
 {
   vlist mods, reads, writes, defines;
   int all_loaded = TRUE;
-  mlist modules = NULL;
+  mlist lmodules = NULL;
 
   if (f->name)
     {
@@ -118,16 +124,16 @@ int mstart(file f)
       if (mstatus < module_loaded)
 	{
 	  if (mstatus == module_loading)
-	    error("loop in requires of %s", mods->var);
+	    log_error("loop in requires of %s", mods->var);
 	  else
 	    warning("failed to load %s", mods->var);
 	  all_loaded = FALSE;
 	}
-      modules = new_mlist(mods->var, mstatus, modules);
+      lmodules = new_mlist(heap, mods->var, mstatus, lmodules);
     }
 
-  all_writable = f->class == f_plain;
-  all_readable = f->class == f_plain || !all_loaded;
+  all_writable = f->vclass == f_plain;
+  all_readable = f->vclass == f_plain || !all_loaded;
   readable = writable = definable = NULL;
   if (f->name) 
     {
@@ -136,7 +142,7 @@ int mstart(file f)
     }
   else
     this_module = NULL;
-  imported_modules = modules;
+  imported_modules = lmodules;
 
   /* Change status of variables */
   for (defines = f->defines; defines; defines = defines->next)
@@ -146,11 +152,11 @@ int mstart(file f)
       int ostatus = module_vstatus(n, &omod);
 
       if (!module_vset(n, var_module, this_module))
-	error("cannot define %s: belongs to module %s", defines->var, omod->str);
+	log_error("cannot define %s: belongs to module %s", defines->var, omod->str);
       else if (ostatus == var_write)
 	warning("%s was writable", defines->var);
 
-      definable = new_glist(n, definable);
+      definable = new_glist(heap, n, definable);
     }
       
   for (writes = f->writes; writes; writes = writes->next)
@@ -162,14 +168,14 @@ int mstart(file f)
 	  struct string *belongs;
 
 	  module_vstatus(n, &belongs);
-	  error("cannot write %s: belongs to module %s", writes->var, belongs->str);
+	  log_error("cannot write %s: belongs to module %s", writes->var, belongs->str);
 	}
 
-      writable = new_glist(n, writable);
+      writable = new_glist(heap, n, writable);
     }
       
   for (reads = f->reads; reads; reads = reads->next)
-    readable = new_glist(global_lookup(reads->var), readable);
+    readable = new_glist(heap, global_lookup(reads->var), readable);
 
   return TRUE;
 }
@@ -182,7 +188,7 @@ void mrecall(ulong n, const char *name, fncode fn)
   int status = module_vstatus(n, &mod);
 
   if (!in_glist(n, definable) &&
-      !in_glist(n, readable) && !in_glist(n, writable))
+      !in_glist(n, readable) && !in_glist(n, writable)) {
     if (status == var_module)
       {
 	/* Implicitly import protected modules */
@@ -195,10 +201,11 @@ void mrecall(ulong n, const char *name, fncode fn)
 	      }
 	  }
 	else if (!all_readable && imported(mod->str) == module_unloaded)
-	  error("read of global %s (module %s)", name, mod->str);
+	  log_error("read of global %s (module %s)", name, mod->str);
       }
     else if (!all_readable)
-      error("read of global %s", name);
+      log_error("read of global %s", name);
+  }
 
   ins2(op_recall + global_var, n, fn);
 }
@@ -212,7 +219,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
   int status = module_vstatus(n, &mod);
 
   if (!in_glist(n, definable) &&
-      !in_glist(n, readable) && !in_glist(n, writable))
+      !in_glist(n, readable) && !in_glist(n, writable)) {
     if (status == var_module)
       {
 	/* Implicitly import protected modules */
@@ -220,20 +227,45 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
 	  {
 	    value gvar = GVAR(n);
 
-	    if (TYPE(gvar, type_primitive) &&
-		count >= 1 && count <= 2 &&
-		((struct primitive *)gvar)->op->nargs == count)
+	    if (TYPE(gvar, type_primitive))
 	      {
-		if (count == 1) ins2(op_execute_primitive1, n, fn);
-		else ins2(op_execute_primitive2, n, fn);
+		if (count >= 1 && count <= 2 &&
+		    ((struct primitive *)gvar)->op->nargs == count)
+		  {
+		    if (count == 1) ins2(op_execute_primitive1, n, fn);
+		    else ins2(op_execute_primitive2, n, fn);
+		  }
+		else
+		  {
+		    /* Could merge, but can't be bothered... */
+		    ins2(op_recall + global_var, n, fn);
+		    ins1(op_execute_primitive, count, fn);
+		  }
+		return;
+	      }
+
+	    if (TYPE(gvar, type_secure))
+	      {
+		/* Could merge, but can't be bothered... */
+		ins2(op_recall + global_var, n, fn);
+		ins1(op_execute_secure, count, fn);
+		return;
+	      }
+
+	    if (TYPE(gvar, type_varargs))
+	      {
+		/* Could merge, but can't be bothered... */
+		ins2(op_recall + global_var, n, fn);
+		ins1(op_execute_varargs, count, fn);
 		return;
 	      }
 	  }
 	else if (!all_readable && imported(mod->str) == module_unloaded)
-	  error("read of global %s (module %s)", name, mod->str);
+	  log_error("read of global %s (module %s)", name, mod->str);
       }
     else if (!all_readable)
-      error("read of global %s", name);
+      log_error("read of global %s", name);
+  }
 
   if (count == 1)
     ins2(op_execute_global1, n, fn);
@@ -247,7 +279,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
     }
 }
 
-void massign(ulong n, const char *name, int toplevel, fncode fn)
+void massign(ulong n, const char *name, fncode fn)
 /* Effects: Generate code to assign to variable n
 */
 {
@@ -255,18 +287,18 @@ void massign(ulong n, const char *name, int toplevel, fncode fn)
   int status = module_vstatus(n, &mod);
 
   if (status == var_module)
-    if (mod == this_module && toplevel) 
+    if (mod == this_module && fntoplevel(fn)) 
       /* defined here */
       ins2(op_define, n, fn);
     else
-      error("write of global %s (module %s)", name, mod->str);
+      log_error("write of global %s (module %s)", name, mod->str);
   else if (all_writable || in_glist(n, writable))
     {
       ins2(op_assign + global_var, n, fn);
       if (status != var_write) module_vset(n, var_write, NULL);
     }
   else
-    error("write of global %s", name);
+    log_error("write of global %s", name);
 }
 
 void mcompile_init(void)

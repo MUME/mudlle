@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library flow // Data-flow analysis
 requires compiler, vars, ins3, graph, 
   system, dlist, sequences, misc
@@ -287,12 +308,16 @@ union_successors = fn (n, problem)
       ]
   ];
 
-mc:flow_ambiguous = fn (ifn)
-  // Types: ifn: intermediate function
+mc:flow_ambiguous = fn (ifn, rwmask)
+  // Types: ifn: intermediate function, rwmask: int
   // Effects: A simple data-flow problem (no info killed):
   //   computes which variables have escaped into closures by the start
   //   of each block. This is used to detect ambiguous use/definition at
   //   function call time.
+  //   rwmask is used to select the variables that are considered ambiguous:
+  //     mc:closure_read: variables read in some closure
+  //     mc:closure_write: variables written in some closure
+  //     mc:closure_read|mc:closure_write: all variables that escape
   [
     | fg, merge_block, change, block_ambiguous |
 
@@ -312,7 +337,7 @@ mc:flow_ambiguous = fn (ifn)
 
 	    ins = dget(scan)[mc:il_ins];
 	    if (ins[mc:i_class] == mc:i_closure)
-	      mc:set_closure_vars!(ins, amb);
+	      mc:set_closure_vars!(ins, rwmask, amb);
 
 	    scan = dnext(scan);
 	    if (scan == ilist) exit amb
@@ -347,15 +372,20 @@ mc:flow_ambiguous = fn (ifn)
       ];
   ];
 
-mc:scan_ambiguous = fn (f, x, block, globals)
+mc:scan_ambiguous = fn (f, x, block, globals, rwmask)
   // Types: f : function (see effects)
   //        x : any
   //        block : flow graph node
   //        globals : bitset
+  //        rwmask : int
   // Effects: Scans the instructions of the block in order, doing
   //     x = f(ins, ambiguous, x) 
   //   at each instruction, where ambiguous is the current "ambiguous"
   //   information (represented as a bitset)
+  //   rwmask is used to select the variables that are considered ambiguous:
+  //     mc:closure_read: variables read in some closure
+  //     mc:closure_write: variables written in some closure
+  //     mc:closure_read|mc:closure_write: all variables that escape
   // Returns: The final x
   [
     | scan, ilist, ambiguous |
@@ -372,7 +402,7 @@ mc:scan_ambiguous = fn (f, x, block, globals)
 	    
 	x = f(il, ambiguous, x);
 	if (ins[mc:i_class] == mc:i_closure)
-	  mc:set_closure_vars!(ins, ambiguous);
+	  mc:set_closure_vars!(ins, rwmask, ambiguous);
 
 	scan = dnext(scan);
 	if (scan == ilist) exit x
@@ -438,7 +468,7 @@ mc:flow_uses = fn (ifn)
 	  ];
 
 	defined = mc:new_varset(ifn);
-	mc:scan_ambiguous(use1, null, block, globals)
+	mc:scan_ambiguous(use1, null, block, globals, mc:closure_write)
       ];
 
     // initialise data-flow problem
@@ -586,7 +616,7 @@ mc:flow_copies = fn (ifn)
       //   On function calls, all the variables in ambiguous must be
       //   considered used.
       lmap(fn (copy) (cindex = cindex + 1) . copy,
-	   mc:scan_ambiguous(copy1, null, block, globals));
+	   mc:scan_ambiguous(copy1, null, block, globals, mc:closure_write));
     
     
     // initialise data-flow problem

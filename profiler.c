@@ -1,16 +1,24 @@
-/* $Log: profiler.c,v $
- * Revision 1.4  1994/08/16  19:16:16  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.2  1994/02/24  08:33:04  arda
- * Owl: New error messages.
- *
- * Revision 1.1  1994/02/03  19:21:48  arda
- * nothing special(2)
- * */
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 /* A profiler for mudlle, based on the dump files */
 
 #include <stdio.h>
@@ -23,7 +31,6 @@
 #include "mudlle.h"
 #include "types.h"
 
-#define ALIGN(x, n) ((x) + ((n) - 1) & ~((n) - 1))
 #undef calloc
 #undef malloc
 #undef exit
@@ -103,10 +110,14 @@ int order_primitives(const void *_p1, const void *_p2)
   return (int)(((struct pp *)_p2)->count - ((struct pp *)_p1)->count);
 }
 
-static ubyte *primitive_scan(ubyte *ptr, int show_unused)
+static ubyte *primitive_scan(ubyte *ptr, ubyte *end)
 {
-  struct obj *obj = (struct obj *)ptr;
+  struct obj *obj;
   struct primitive *op;
+
+  while (ptr < end && *(ulong *)ptr == 0) ptr += sizeof(ulong);
+  if (ptr == end) return ptr;
+  obj = (struct obj *)ptr;
 
   ptr += ALIGN(obj->size, sizeof(value));
   switch (obj->type)
@@ -128,15 +139,15 @@ void profile_primitives(int show_unused)
   int i;
 
   info_primitives = (void *)calloc(nb_primitives, sizeof(*info_primitives));
-  for (scan = datagen0; scan < end0; ) scan = primitive_scan(scan, show_unused);
-  for (scan = datagen1; scan < end1; ) scan = primitive_scan(scan, show_unused);
+  for (scan = datagen0; scan < end0; ) scan = primitive_scan(scan, end0);
+  for (scan = datagen1; scan < end1; ) scan = primitive_scan(scan, end1);
 
   qsort(info_primitives, nb_primitives, sizeof *info_primitives,
 	order_primitives);
 
   for (i = 0; i < nb_primitives; i++)
     if (info_primitives[i].count > 0 || show_unused)
-      printf("%-32s %9d\n", info_primitives[i].name, info_primitives[i].count);
+      printf("%-32s %9ld\n", info_primitives[i].name, info_primitives[i].count);
 }
 
 struct pm
@@ -177,10 +188,14 @@ int order_mudlle_ratio(const void *_p1, const void *_p2)
   return ((struct pm *)_p2)->ratio - ((struct pm *)_p1)->ratio;
 }
 
-static ubyte *mudlle_scan(ubyte *ptr, int show_unused)
+static ubyte *mudlle_scan(ubyte *ptr, ubyte *end, int show_unused)
 {
-  struct obj *obj = (struct obj *)ptr;
+  struct obj *obj;
   struct code *code;
+
+  while (ptr < end && *(ulong *)ptr == 0) ptr += sizeof(ulong);
+  if (ptr == end) return ptr;
+  obj = (struct obj *)ptr;
 
   ptr += ALIGN(obj->size, sizeof(value));
   switch (obj->type)
@@ -218,8 +233,8 @@ void profile_mudlle(int show_unused, int sort_method)
   int i;
 
   info_mudlle = NULL;
-  for (scan = datagen0; scan < end0; ) scan = mudlle_scan(scan, show_unused);
-  for (scan = datagen1; scan < end1; ) scan = mudlle_scan(scan, show_unused);
+  for (scan = datagen0; scan < end0; ) scan = mudlle_scan(scan, end0, show_unused);
+  for (scan = datagen1; scan < end1; ) scan = mudlle_scan(scan, end1, show_unused);
 
   if (info_mudlle_used >= 0)
     {
@@ -228,11 +243,20 @@ void profile_mudlle(int show_unused, int sort_method)
 	    sort_method == 2 ? order_mudlle_call :
 	    order_mudlle_ratio);
 
+      printf("%-41s %13s %9s %13s\n",
+	     "name", "insns", "calls", "insn/call");
+      printf("-------------------------------------------------------------------------------\n");
       for (i = 0; i <= info_mudlle_used; i++)
-	printf("%s[%s:%d] %d/%d/%d\n", info_mudlle[i].varname,
-	       info_mudlle[i].filename, info_mudlle[i].lineno,
-	       info_mudlle[i].instructions, info_mudlle[i].calls,
-	       info_mudlle[i].ratio);
+	{
+	  char tmp[512];
+
+	  sprintf(tmp, "%s[%s:%d]", info_mudlle[i].varname,
+		  info_mudlle[i].filename, info_mudlle[i].lineno);
+	  tmp[41] = '\0';
+	  printf("%-41s %13ld %9ld %13d\n", tmp,
+		 info_mudlle[i].instructions, info_mudlle[i].calls,
+		 info_mudlle[i].ratio);
+	}
     }
 }
 
@@ -243,7 +267,7 @@ int main(int argc, char **argv)
   int primitives = FALSE, mudlle = FALSE, unused = FALSE, c;
   int sort_method = 1;
 
-  while ((c = getopt(argc, argv, "pm123")) != -1)
+  while ((c = getopt(argc, argv, "pmu123")) != -1)
     switch (c)
       {
       case 'p': 

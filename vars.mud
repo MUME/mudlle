@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library vars
 requires system, misc
 defines
@@ -10,7 +31,7 @@ defines
   mc:v_kvalue, mc:v_global_constant, mc:var_make_local, mc:var_make_dglobal,
   mc:var_make_global, mc:var_make_constant, mc:var_base, mc:var_value,
   mc:alias_base, mc:alias, mc:var_make_closure, mc:var_make_kglobal, 
-  mc:v_global_define
+  mc:v_global_define, mc:in_reg, mc:get_reg
 
 [
 // Variable handling.
@@ -180,6 +201,13 @@ mc:v_global_define = 5; // from own or loaded module
       else
         base
     ];
+
+  mc:in_reg = fn (var)
+    var[mc:v_location] && var[mc:v_location][mc:v_lclass] == mc:v_lregister;
+
+  mc:get_reg = fn (var)
+    if (mc:in_reg(var)) var[mc:v_location][mc:v_lrnumber]
+    else -1;
 ];
 
 ];

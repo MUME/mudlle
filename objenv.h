@@ -1,20 +1,22 @@
-/* $Log: objenv.h,v $
- * Revision 1.5  1995/01/22  15:11:49  arda
- * Linux patches.
- *
- * Revision 1.4  1993/05/02  07:37:55  un_mec
- * Owl: New output (mudlle ports).
- *
- * Revision 1.3  1993/03/29  09:24:16  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:39  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:24  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef OBJENV_H

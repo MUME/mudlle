@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library compiler
 requires system, vars
 
@@ -17,7 +38,10 @@ defines mc:c_class, mc:c_assign, mc:c_asymbol, mc:c_avalue, mc:c_recall,
   mc:b_loop, mc:b_ref, mc:b_set, mc:b_cons, mc:b_assign, mc:b_car, mc:b_cdr,
   mc:m_class, mc:m_plain, mc:m_module, mc:m_library, mc:m_name, mc:m_imports, 
   mc:m_defines, mc:m_reads, mc:m_writes, mc:m_body, mc:b_slength, mc:b_vlength,
-  mc:b_iadd,
+  mc:b_iadd, mc:c_fm_globalsbase, mc:c_fm_regs_callee,
+
+  mc:a_builtins, mc:a_constants, mc:a_subfns, mc:a_globals, mc:a_kglobals, 
+  mc:a_primitives,
 
   mc:fname, mc:error, mc:warning
 
@@ -78,8 +102,10 @@ writes mc:erred
    mc:c_fnumber = 0;		// a unique number for this closure (int, display)
    // Set by phase 4:
    mc:c_fmisc = 16;		// miscellaneous info
-   mc:c_fm_argsbase = 0;		// true if function needs arguments base
+   mc:c_fm_argsbase = 0;	// true if function needs arguments base
    mc:c_fm_closurebase = 1;	// true if function needs closure base
+   mc:c_fm_globalsbase = 2;	// true if function needs globals base
+   mc:c_fm_regs_callee = 3;     // callee registers used by the backend
    mc:c_fnvars = 17;		// number of vars (global, closure, local) used (int, phase3)
    mc:c_fallvars = 18;		// all vars (global, closure, local) used (vector, phase3)
   
@@ -140,8 +166,16 @@ writes mc:erred
   mc:b_slength = 33;
   mc:b_vlength = 34;
   mc:b_iadd = 35; // integer addition
+
+  // Format of information returned with assembled code
+  mc:a_builtins = 0;
+  mc:a_constants = 1;
+  mc:a_subfns = 2;
+  mc:a_globals = 3;
+  mc:a_kglobals = 4;
+  mc:a_primitives = 5;
   
-  m_name = mc:m_name; // strange unload effects
+  m_name = mc:m_name; // strange unload effects (see comment before linkun in link.mud)
   c_flineno = mc:c_flineno;
   c_ffilename = mc:c_ffilename;
   c_fvar = mc:c_fvar;

@@ -1,32 +1,48 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 [
-  | fload |
+  // Bootstrap via interpreter (load linker)
+  load_library = fn (s) basic_load("mudlle/compiler/" + s + ".mud",
+				   "compiler/" + s + ".mud", LVL_IMPLEMENTOR, true);
+  load_library("link");
+  
+  // Now (re)load compiled compiler
+  load_library = fn (s) mc:linkrun(load_data("obj-mudlle/compiler/" + s + ".obj"),
+				   LVL_IMPLEMENTOR, true);
 
-  // Bootstrap via interpreter (load minimum for linker)
-  basic_load("mudlle/compiler/compiler.mud", "compiler/compiler.mud", LVL_IMPLEMENTOR);
-  basic_load("mudlle/compiler/misc.mud", "compiler/misc.mud", LVL_IMPLEMENTOR);
-  basic_load("mudlle/compiler/sequences.mud", "compiler/sequences.mud", LVL_IMPLEMENTOR);
-  basic_load("mudlle/compiler/link.mud", "compiler/link.mud", LVL_IMPLEMENTOR);
+  // Reload interpreted modules. Order is important (the compiler uses
+  // protected modules, and must not see the previously loaded ones).
+  load_library("dlist");
+  load_library("sequences");
+  load_library("misc");
+  load_library("vars");
+  load_library("compiler");
+  load_library("link");
 
-  fload = fn (s) catch_error(fn () mc:link(load_data(s), LVL_IMPLEMENTOR)());
+  // Load compiler
+  load_library("noinf"); // no-inference version of inference library
+  load_library("x86"); // x86 back-end
+  load_library("compile"); // hurrah!
 
-  // Load compiled compiler
-  fload("compiler.obj");
-  fload("misc.obj");
-  fload("sequences.obj");
-  fload("link.obj");
-  fload("dlist.obj");
-  fload("graph.obj");
-  fload("asparc.obj");
-  fload("vars.obj");
-  fload("flow.obj");
-  fload("optimise.obj");
-  fload("ins3.obj");
-  fload("msparc.obj");
-  fload("phase1.obj");
-  fload("phase2.obj");
-  fload("phase3.obj");
-  fload("phase4.obj");
-  fload("gensparc.obj");
-  fload("sparc.obj");
+  mc:verbose = 0;
 ];
 

@@ -1,46 +1,23 @@
-/* $Log: table.c,v $
- * Revision 1.10  1994/10/09  06:43:02  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.9  1994/09/09  19:36:15  arda
- * TAble prefixes.
- *
- * Revision 1.8  1994/08/16  19:16:22  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.6  1993/12/26  12:12:20  arda
- * Fixed 1 year old bug.
- *
- * Revision 1.5  1993/05/20  16:24:42  un_mec
- * divers
- *
- *
- * nouvelle version avec 107 niveaux
- *
- * Revision 1.4  1993/04/22  18:58:54  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.3  1993/03/29  09:24:29  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:58  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.2  1993/01/18  22:22:56  un_mec
- * Owl: Yucky GC bugs. Why didn't they happen earlier ??
- *
- * Revision 1.1  1992/12/27  21:41:36  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: table.c,v 1.10 1994/10/09 06:43:02 arda Exp $";
 
 #include <string.h>
 #include <ctype.h>
@@ -48,6 +25,7 @@ static char rcsid[] = "$Id: table.c,v 1.10 1994/10/09 06:43:02 arda Exp $";
 #include "types.h"
 #include "table.h"
 #include "alloc.h"
+#include "utils.charset.h"
 
 /* The hash table size must be a power of 2 */
 
@@ -67,7 +45,7 @@ ulong hash(const char *_name)
 
   while (*name)
     {
-      code = ((code << 1) + tolower(*name)) ^ 0x57954317;
+      code = ((code << 1) + TO_7LOWER(*name)) ^ 0x57954317;
       name++;
     }
 
@@ -79,20 +57,20 @@ struct table *alloc_table(ulong size)
    Requires: size be a power of 2, smaller or equal than 2^30.
 */
 {
-  struct table *new;
+  struct table *newp;
   value vec;
   struct gcpro gcpro1;
   value isize = makeint(size);
 
-  new = (struct table *)allocate_record(type_table, 3);
-  GCPRO1(new);
-  new->size = isize;
-  new->used = makeint(0);
+  newp = (struct table *)allocate_record(type_table, 3);
+  GCPRO1(newp);
+  newp->size = isize;
+  newp->used = makeint(0);
   vec = alloc_vector(size);
-  new->buckets = vec;
+  newp->buckets = vec;
   UNGCPRO();
 
-  return new;
+  return newp;
 }
 
 static ulong add_position;
@@ -118,7 +96,7 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym)
 	add_position = scan;
 	return FALSE;
       }
-    if (stricmp(name, (*bucket)->name->str) == 0)
+    if (str8icmp(name, (*bucket)->name->str) == 0)
       {
 	*sym = *bucket;
 	return TRUE;
@@ -131,6 +109,70 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym)
 	bucket = (struct symbol **)&table->buckets->data[scan];
       }
     assert(scan != hashcode);	/* The table is never allowed to be full */
+  } while (1);
+}
+
+int table_remove(struct table *table, const char *name)
+/* Effects: Removes table[name] from data. Rehashes nescessary values.
+   Modifies: table
+   Returns: FALSE if the entry wasn't found
+*/
+{
+  struct symbol **bucket;
+  ulong size = intval(table->size), scan;
+
+  scan = hash(name) & (size - 1);
+  bucket = (struct symbol **)&table->buckets->data[scan];
+
+  do {
+    if (!*bucket) 
+      return FALSE;
+    if (str8icmp(name, (*bucket)->name->str) == 0)
+      {
+	*bucket = 0;
+	++bucket;
+	++scan;
+	if (scan == size)
+	  {
+	    scan = 0;
+	    bucket = (struct symbol **)&table->buckets->data[scan];
+	  }
+	while (*bucket)
+	  {
+	    struct symbol *sym = *bucket, **newbuck;
+	    ulong newpos = hash(sym->name->str) & (size - 1);
+	    
+	    *bucket = 0;
+	    newbuck = (struct symbol **)&table->buckets->data[newpos];
+	    while (*newbuck) 
+	      {
+		newbuck++;
+		newpos++;
+		if (newpos == size) 
+		  {
+		    newpos = 0;
+		    newbuck = (struct symbol **)&table->buckets->data[newpos];
+		  }
+	      } 
+	    *newbuck = sym;
+	    bucket++;
+	    scan++;
+	    if (scan == size)
+	      {
+		scan = 0;
+		bucket = (struct symbol **)&table->buckets->data[scan];
+	      }
+	  }
+	table->used = (value)((long)table->used - 2);
+	return TRUE;
+      }
+    scan++;
+    bucket++;
+    if (scan == size)
+      {
+	scan = 0;
+	bucket = (struct symbol **)&table->buckets->data[scan];
+      }
   } while (1);
 }
 
@@ -182,7 +224,7 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
 */
 {
   ulong size = intval(table->size), newsize, i, max;
-  struct vector *new, *old;
+  struct vector *newp, *old;
   struct symbol **oldbucket;
   struct gcpro gcpro1, gcpro2;
   struct symbol *sym;
@@ -207,9 +249,9 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
   table->size = makeint(newsize);
 
   GCPRO(gcpro2, sym);
-  new = alloc_vector(newsize);
+  newp = alloc_vector(newsize);
   old = table->buckets;
-  table->buckets = new;
+  table->buckets = newp;
   UNGCPRO();
 
   /* Copy data from old buckets into new ones */
@@ -220,7 +262,7 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
 	value *bucket;
 
 	scan = hashcode;
-	bucket = &new->data[scan];
+	bucket = &newp->data[scan];
 	do {
 	  if (!*bucket) 
 	    {
@@ -232,7 +274,7 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
 	  if (scan == newsize)
 	    {
 	      scan = 0;
-	      bucket = &new->data[scan];
+	      bucket = &newp->data[scan];
 	    }
 	  assert(scan != hashcode); /* The table is never allowed to be full */
 	} while (1);
@@ -273,7 +315,7 @@ static int prefixp(struct string *s1, struct string *s2)
   if (l1 > l2) return FALSE;
   while (l1-- != 0)
     {
-      if (tolower(*t1) != tolower(*t2)) return FALSE;
+      if (TO_7LOWER(*t1) != TO_7LOWER(*t2)) return FALSE;
       t1++; t2++;
     }
 
@@ -300,4 +342,56 @@ struct list *table_prefix(struct table *table, struct string *prefix)
   UNGCPRO();
 
   return l;
+}
+
+struct symbol *table_exists(struct table *table, int (*check)(struct symbol *))
+{
+  struct gcpro gcpro1;
+  struct symbol **bucket;
+  int i, size;
+
+  GCPRO1(table);
+  size = intval(table->size);
+  bucket = (struct symbol **)&table->buckets->data[0];
+  for (i = 0; i < size; ++i, ++bucket)
+    if (*bucket && check(*bucket))
+      {
+	UNGCPRO();
+	return *bucket;
+      }
+  UNGCPRO();
+
+  return 0;
+}
+
+void table_foreach(struct table *table, void (*action)(struct symbol *))
+{
+  struct gcpro gcpro1;
+  struct symbol **bucket;
+  int i, size;
+
+  GCPRO1(table);
+  size = intval(table->size);
+  bucket = (struct symbol **)&table->buckets->data[0];
+  for (i = 0; i < size; ++i, ++bucket)
+    if (*bucket)
+      action(*bucket);
+  UNGCPRO();
+}
+
+int table_entries(struct table *table)
+{
+  return intval(table->used);
+}
+
+void protect_table(struct table *table)
+{
+  table->o.flags |= OBJ_READONLY;
+  table->buckets->o.flags |= OBJ_READONLY;
+}
+
+void immutable_table(struct table *table)
+{
+  table->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
+  table->buckets->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
 }

@@ -1,34 +1,22 @@
-/* $Log: stack.h,v $
- * Revision 1.7  1995/07/15  15:24:38  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.6  1995/01/22  15:11:52  arda
- * Linux patches.
- *
- * Revision 1.5  1993/05/02  07:38:06  un_mec
- * Owl: New output (mudlle ports).
- *
- * Revision 1.4  1993/03/29  09:24:28  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:55  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.2  1992/12/30  14:10:56  un_mec
- * Owl:
- * Several changes:
- * - Variables don't have separate value & function cells, instead their are
- *   now 2 types: type_function & type_variable.
- * - print_value: New types (list, vector), printing rationalised.
- * - New type: list (Lisp style pair)
- * - lexer.l: Debug read_from_string
- * - debug_level & DEBUG macro provided to help debugging.
- *
- * Revision 1.1  1992/12/27  21:41:34  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef STACK_H
@@ -49,8 +37,8 @@ void stack_clear(void);
 value stack_pop(void);
 void stack_push(value v);
 
-value stack_get(ulong index);
-void stack_set(ulong index, value v);
+value stack_get(ulong idx);
+void stack_set(ulong idx, value v);
 ulong stack_depth(void);
 
 void print_stack(struct oport *f);

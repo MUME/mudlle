@@ -1,38 +1,28 @@
-/* $Log: utils.h,v $
- * Revision 1.7  1994/10/09  06:43:12  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.6  1994/02/11  09:59:35  dgay
- * Owl: -Wall
- *      new shared string handling
- *      configuration file
- *
- * Revision 1.5  1993/12/06  19:20:57  arda
- * divers CLI
- *
- * Revision 1.4  1993/08/15  21:00:35  un_mec
- * Owl: Overload [].
- *      Added xcalloc, xrealloc.
- *
- * Revision 1.3  1993/06/20  13:35:25  un_mec
- * Owl: edit protocol bug fix.
- *
- * Revision 1.2  1993/03/29  09:24:52  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:15:21  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:47  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef UTILS_H
 #define UTILS_H
+
+#include "options.h"
 
 extern int erred;
 
@@ -49,10 +39,11 @@ char *xstrdup(const char *s);
 #endif
 
 char *strlwr(char *s);
-void error(const char *msg, ...);
+void compile_error(const char *msg, ...);
+void log_error(const char *msg, ...);
 void warning(const char *msg, ...);
 
-#ifndef HAVE_MEMMOVE
+#if (!HAVE_MEMMOVE)
 void memmove(char *to, const char *from, int n);
 #endif
 

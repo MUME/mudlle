@@ -1,127 +1,23 @@
-/* $Log: compile.c,v $
- * Revision 1.32  1995/07/15  15:24:16  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.31  1995/06/04  14:24:26  arda
- * Rename/move some files, misc. junk
- *
- * Revision 1.30  1995/04/29  20:05:19  arda
- * fix
- *
- * Revision 1.29  1994/10/09  06:41:51  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.28  1994/08/29  13:17:15  arda
- * Contagious immutability.
- * Global array of values instead of variables.
- * Direct recursion.
- *
- * Revision 1.27  1994/08/22  11:18:20  arda
- * Moved code allocation to ins.c
- * Changes for mudlle compiler in MUME.
- *
- * Revision 1.26  1994/08/16  19:15:47  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.23  1994/03/23  14:31:18  arda
- * *** empty log message ***
- *
- * Revision 1.22  1994/02/24  08:32:48  arda
- * Owl: New error messages.
- *
- * Revision 1.21  1994/02/12  17:24:42  arda
- * Owl: Better code generated.
- *
- * Revision 1.20  1994/02/11  09:58:42  dgay
- * Owl: -Wall
- *      new shared string handling
- *      configuration file
- *
- * Revision 1.19  1994/01/29  19:50:23  dgay
- * Owl: add file & line information to functions.
- *
- * Revision 1.18  1994/01/27  21:59:30  dgay
- * Owl: Improve the collector (yet again).
- *      Now has just one zone for generation 0 (one extra copy involved).
- *
- * Revision 1.17  1994/01/10  13:34:55  arda
- * Fix compile (GCPRO missing).
- *
- * Revision 1.16  1994/01/08  12:49:40  dgay
- * Owl: Improved code generation for blocks (they are not implemented
- * as 0 argument functions anymore, they are folded into the current
- * function instead).
- *
- * Revision 1.15  1993/12/31  10:16:03  dgay
- * Owl: help string must be allocated before code.
- *
- * Revision 1.14  1993/12/23  20:48:50  dgay
- * Owl: New alloc.c: semi-generational collector.
- *      Included Amiga makefile for convenience.
- *
- * Revision 1.13  1993/11/27  11:28:59  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.12  1993/10/03  14:07:13  dgay
- * Bumper disun8 update.
- *
- * Revision 1.11  1993/08/15  21:00:22  un_mec
- * Owl: Overload [].
- *      Added xcalloc, xrealloc.
- *
- * Revision 1.10  1993/07/21  20:36:36  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
- * Revision 1.9  1993/04/25  19:50:13  un_mec
- * Owl: Miscellaneous changes.
- *      I HATE fixing bugs twice.
- *
- * Revision 1.8  1993/04/24  15:20:32  un_mec
- * Owl: Code cleanup.
- *
- * Revision 1.7  1993/04/22  18:58:33  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.6  1993/04/17  10:01:14  un_autre
- * Various
- *
- * Revision 1.5  1993/04/10  09:16:56  un_mec
- * Owl: Debug mudlle.
- *
- * Revision 1.4  1993/04/02  18:08:46  un_autre
- * Owl: bug fixes.
- *
- * Revision 1.3  1993/03/29  09:23:42  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.4  1993/03/17  12:49:32  dgay
- * Fixed GC of help strings in code blocks.
- * Added security features.
- *
- * Revision 1.3  1993/03/14  16:14:03  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:00  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: compile.c,v 1.32 1995/07/15 15:24:16 arda Exp $";
 
 #include "mudlle.h"
 #include "tree.h"
@@ -139,18 +35,19 @@ static char rcsid[] = "$Id: compile.c,v 1.32 1995/07/15 15:24:16 arda Exp $";
 #include "mcompile.h"
 #include "mparser.h"
 #include "call.h"
+#include "runtime/bigint.h"
+#include "table.h"
 
 #include <string.h>
 #include <stdlib.h>
 
 static ulong builtin_functions[last_builtin];
 static ubyte builtin_ops[last_builtin];
-static component component_undefined, component_true, component_false;
+component component_undefined, component_true, component_false;
 
 static struct string *last_filename;
 static const char *last_c_filename;
 static uword compile_level;	/* Security level for generated code */
-static int toplevel;		/* Hack of the day */
 
 struct string *make_filename(const char *fname)
 {
@@ -166,16 +63,26 @@ struct string *make_filename(const char *fname)
 
 value make_constant(constant c);
 
-value make_list(cstlist csts)
+static value make_list(cstlist csts, int has_tail)
 {
   struct gcpro gcpro1;
-  struct list *l = NULL;
+  struct list *l;
+
+  if (has_tail && csts != NULL)
+    {
+      l = csts->cst ? make_constant(csts->cst) : NULL;
+      csts = csts->next;
+    }
+  else
+    l = NULL;
 
   GCPRO1(l);
   /* Remember that csts is in reverse order ... */
   while (csts)
     {
-      l = alloc_list(make_constant(csts->cst), l);
+      value tmp = make_constant(csts->cst);
+
+      l = alloc_list(tmp, l);
       l->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
       csts = csts->next;
     }
@@ -184,7 +91,19 @@ value make_list(cstlist csts)
   return l;
 }
 
-value make_array(cstlist csts)
+static value make_bigint(const char *s)
+{
+  struct bigint *bi;
+  mpz_t m;
+
+  if (mpz_init_set_str(m, s, 0))
+    assert(0);
+  bi = alloc_bigint(m);
+  free_mpz_temps();
+  return (value)bi;
+}
+
+static value make_array(cstlist csts)
 {
   struct gcpro gcpro1;
   struct list *l;
@@ -196,7 +115,7 @@ value make_array(cstlist csts)
 
   /* This intermediate step is necessary as v is IMMUTABLE
      (so must be allocated after its contents) */
-  l = make_list(csts);
+  l = make_list(csts, 0);
   GCPRO1(l);
   v = alloc_vector(size);
   v->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
@@ -207,26 +126,66 @@ value make_array(cstlist csts)
   return v;
 }
 
+static void protect_symbol(struct symbol *s)
+{
+  s->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
+}
+
+static value make_table(cstlist csts)
+{
+  struct gcpro gcpro1;
+  struct table *t = alloc_table(DEF_TABLE_SIZE);
+  
+  GCPRO1(t);
+  for (; csts; csts = csts->next)
+    table_set(t, csts->cst->u.constpair->cst1->u.string,
+	      make_constant(csts->cst->u.constpair->cst2));
+  table_foreach(t, protect_symbol);
+  immutable_table(t);
+  UNGCPRO();
+
+  return t;
+}
+
+static value make_symbol(cstpair p)
+{
+  struct symbol *sym;
+  struct gcpro gcpro1;
+  struct string *s = alloc_string(p->cst1->u.string);
+
+  GCPRO1(s);
+  s->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
+  sym = alloc_symbol(s, make_constant(p->cst2));
+  sym->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
+  UNGCPRO();
+  return sym;
+}
+
 value make_constant(constant c)
 {
   struct obj *cst;
 
-  switch (c->class)
+  switch (c->vclass)
     {
     case cst_string:
       cst = (value)alloc_string(c->u.string);
       cst->flags |= OBJ_READONLY | OBJ_IMMUTABLE;
       return cst;
-    case cst_list: return make_list(c->u.constants); break;
-    case cst_array: return make_array(c->u.constants); break;
+    case cst_list: return make_list(c->u.constants, 1);
+    case cst_array: return make_array(c->u.constants);
     case cst_int: return makeint(c->u.integer);
+    case cst_float: return (value)alloc_mudlle_float(c->u.mudlle_float);
+    case cst_bigint: return make_bigint(c->u.bigint_str);
+    case cst_table: return make_table(c->u.constants);
+    case cst_symbol: return make_symbol(c->u.constpair);
+    default:
+      abort();
     }
-  abort();
 }
 
 typedef void (*gencode)(void *data, fncode fn);
 
-struct code *generate_function(function f, fncode fn);
+struct code *generate_function(function f, int toplevel, fncode fn);
 void generate_component(component comp, fncode fn);
 void generate_condition(component condition,
 			label slab, gencode scode, void *sdata,
@@ -235,7 +194,7 @@ void generate_condition(component condition,
 
 struct andordata
 {
-  label label, slab, flab;
+  label lab, slab, flab;
   gencode scode, fcode;
   void *sdata, *fdata;
   component arg2;
@@ -245,7 +204,7 @@ static void andorcode(void *_data, fncode fn)
 {
   struct andordata *data = _data;
 
-  set_label(data->label, fn);
+  set_label(data->lab, fn);
   generate_condition(data->arg2,
 		     data->slab, data->scode, data->sdata,
 		     data->flab, data->fcode, data->fdata,
@@ -259,7 +218,7 @@ void generate_condition(component condition,
 {
   struct andordata data;
 
-  switch (condition->class)
+  switch (condition->vclass)
     {
     case c_builtin:
       switch (condition->u.builtin.fn)
@@ -269,19 +228,19 @@ void generate_condition(component condition,
 	    component arg1 = condition->u.builtin.args->c;
 
 	    data.arg2 = condition->u.builtin.args->next->c;
-	    data.label = new_label();
+	    data.lab = new_label(fn);
 	    data.slab = slab; data.scode = scode; data.sdata = sdata;
 	    data.flab = flab; data.fcode = fcode; data.fdata = fdata;
 
 	    if (condition->u.builtin.fn == b_sc_and)
 	      generate_condition(arg1,
-				 data.label, andorcode, &data,
+				 data.lab, andorcode, &data,
 				 flab, NULL, NULL,
 				 fn);
 	    else
 	      generate_condition(arg1,
 				 slab, NULL, NULL,
-				 data.label, andorcode, &data,
+				 data.lab, andorcode, &data,
 				 fn);
 	    return;
 	  }
@@ -343,9 +302,9 @@ void generate_if(component condition, component success, component failure,
 {
   struct ifdata ifdata;
 
-  ifdata.slab = new_label();
-  ifdata.flab = new_label();
-  ifdata.endlab = new_label();
+  ifdata.slab = new_label(fn);
+  ifdata.flab = new_label(fn);
+  ifdata.endlab = new_label(fn);
   ifdata.success = success;
   ifdata.failure = failure;
 
@@ -382,10 +341,10 @@ void generate_while(component condition, component iteration, fncode fn)
 {
   struct whiledata wdata;
 
-  wdata.looplab = new_label();
-  wdata.mainlab = new_label();
-  wdata.exitlab = new_label();
-  wdata.endlab = new_label();
+  wdata.looplab = new_label(fn);
+  wdata.mainlab = new_label(fn);
+  wdata.exitlab = new_label(fn);
+  wdata.endlab = new_label(fn);
   wdata.code = iteration;
 
   set_label(wdata.looplab, fn);
@@ -411,7 +370,7 @@ void generate_block(block b, fncode fn)
 {
   clist cc = b->sequence;
 
-  env_block_push(b->locals, fn);
+  env_block_push(b->locals);
 
   /* Generate code for sequence */
   for (; cc; cc = cc->next)
@@ -422,21 +381,21 @@ void generate_block(block b, fncode fn)
   env_block_pop();
 }
 
-void generate_execute(component call, int count, fncode fn)
+void generate_execute(component acall, int count, fncode fn)
 {
   /* Optimise main case: calling a given global function */
-  if (call->class == c_recall)
+  if (acall->vclass == c_recall)
     {
       ulong offset;
-      variable_class class = env_lookup(call->u.recall, &offset);
+      variable_class vclass = env_lookup(acall->u.recall, &offset);
 
-      if (class == global_var)
+      if (vclass == global_var)
 	{
-	  mexecute(offset, call->u.recall, count, fn);
+	  mexecute(offset, acall->u.recall, count, fn);
 	  return;
 	}
     }
-  generate_component(call, fn);
+  generate_component(acall, fn);
   ins1(op_execute, count, fn);
 }
 
@@ -444,62 +403,60 @@ void generate_component(component comp, fncode fn)
 {
   clist args;
 
-  switch (comp->class)
+  switch (comp->vclass)
     {
     case c_assign:
       {
 	ulong offset;
-	variable_class class = env_lookup(comp->u.assign.symbol, &offset);
+	variable_class vclass = env_lookup(comp->u.assign.symbol, &offset);
 	component val = comp->u.assign.value;
 
-	if (val->class == c_closure)
+	if (val->vclass == c_closure)
 	  {
 	    /* Defining a function, give it a name */
-	    if (class == global_var)
+	    if (vclass == global_var)
 	      val->u.closure->varname = comp->u.assign.symbol;
 	    else
 	      {
-		char *varname = allocate(memory, strlen(comp->u.assign.symbol) + 7);
+		char *varname = allocate(fnmemory(fn), strlen(comp->u.assign.symbol) + 7);
 
 		sprintf(varname, "local-%s", comp->u.assign.symbol);
 		val->u.closure->varname = varname;
 	      }
 	  }
 	generate_component(comp->u.assign.value, fn);
-	if (class == global_var)
-	  massign(offset, comp->u.assign.symbol, toplevel, fn);
+	if (vclass == global_var)
+	  massign(offset, comp->u.assign.symbol, fn);
 	else
-	  ins1(op_assign + class, offset, fn);
+	  ins1(op_assign + vclass, offset, fn);
+	/* Note: varname becomes a dangling pointer when fnmemory(fn) is
+	   deallocated, but it is never used again so this does not cause
+	   a problem. */
 	break;
       }
     case c_recall:
       {
 	ulong offset;
-	variable_class class = env_lookup(comp->u.recall, &offset);
+	variable_class vclass = env_lookup(comp->u.recall, &offset);
 
-	if (class == global_var) mrecall(offset, comp->u.recall, fn);
-	else ins1(op_recall + class, offset, fn);
+	if (vclass == global_var) mrecall(offset, comp->u.recall, fn);
+	else ins1(op_recall + vclass, offset, fn);
 	break;
       }
     case c_constant:
-      ins_constant(make_constant(comp->u.constant), fn);
+      ins_constant(make_constant(comp->u.cst), fn);
       break;
     case c_closure:
       {
-	int old_toplevel = toplevel;
-	uword index;
+	uword idx;
 
-	/* hack */
-	toplevel = FALSE;
-	index = add_constant(generate_function(comp->u.closure, fn), fn);
-	toplevel = old_toplevel;
-
-	if (index < ARG1_MAX) ins1(op_closure_code1, index, fn);
-	else ins2(op_closure_code2, index, fn);
+	idx = add_constant(generate_function(comp->u.closure, FALSE, fn), fn);
+	if (idx < ARG1_MAX) ins1(op_closure_code1, idx, fn);
+	else ins2(op_closure_code2, idx, fn);
 	break;
       }
     case c_block:
-      generate_block(comp->u.block, fn);
+      generate_block(comp->u.blk, fn);
       break;
     case c_labeled:
       start_block(comp->u.labeled.name, fn);
@@ -508,11 +465,12 @@ void generate_component(component comp, fncode fn)
       break;
     case c_exit:
       generate_component(comp->u.labeled.expression, fn);
-      if (!exit_block(comp->u.labeled.name, fn))
+      if (!exit_block(comp->u.labeled.name, fn)) {
 	if (!comp->u.labeled.name)
-	  error("No loop to exit from");
+	  log_error("No loop to exit from");
 	else
-	  error("No block labeled %s", comp->u.labeled.name);
+	  log_error("No block labeled %s", comp->u.labeled.name);
+      }
       break;
     case c_execute:
       {
@@ -529,10 +487,10 @@ void generate_component(component comp, fncode fn)
 	{
 	case b_if:
 	  generate_if(args->c,
-		      new_component(c_block,
-				    new_codeblock(NULL,
-				    new_clist(args->next->c,
-				    new_clist(component_undefined, NULL)))),
+		      new_component(fnmemory(fn), c_block,
+				    new_codeblock(fnmemory(fn), NULL,
+				    new_clist(fnmemory(fn), args->next->c,
+				    new_clist(fnmemory(fn), component_undefined, NULL)))),
 		      component_undefined,
 		      fn);
 	  break;
@@ -549,7 +507,7 @@ void generate_component(component comp, fncode fn)
 
 	case b_loop:
 	  {
-	    label loop = new_label();
+	    label loop = new_label(fn);
 
 	    set_label(loop, fn);
 	    start_block(NULL, fn);
@@ -589,11 +547,11 @@ void generate_component(component comp, fncode fn)
     }
 }
 
-struct code *generate_function(function f, fncode fn)
+struct code *generate_function(function f, int toplevel, fncode fn)
 {
   struct code *c;
   struct string *help, *filename, *varname;
-  fncode preamble;
+  fncode newfn;
   vlist argument;
   uword nargs, clen;
   struct gcpro gcpro1, gcpro2, gcpro3;
@@ -617,11 +575,11 @@ struct code *generate_function(function f, fncode fn)
   filename = make_filename(f->filename);
   GCPRO(gcpro3, filename);
 
-  preamble = new_fncode();
+  newfn = new_fncode(toplevel);
   if (f->varargs)
     /* varargs makes a vector from the first nargs entries of the stack and
        stores it in local value 0 */
-    ins0(op_varargs, preamble);
+    ins0(op_varargs, newfn);
   else
     {
       /* First, generate code to check the argument types & count */
@@ -631,28 +589,28 @@ struct code *generate_function(function f, fncode fn)
 	 It then discards all the parameters */
       for (nargs = 0, argument = f->args; argument; argument = argument->next)
 	nargs++;
-      ins1(op_argcheck, nargs, preamble);
+      ins1(op_argcheck, nargs, newfn);
 
       for (nargs = 0, argument = f->args; argument; argument = argument->next) 
 	{
 	  if (argument->type != stype_any)
-	    ins1(op_typecheck + argument->type, nargs, preamble);
+	    ins1(op_typecheck + argument->type, nargs, newfn);
 
 	  nargs++;
 	}
-      ins1(op_pop_n, nargs, preamble);
+      ins1(op_pop_n, nargs, newfn);
     }
 
   /* Generate code of function */
-  env_push(f->args);
+  env_push(f->args, newfn);
   
-  start_block("function", preamble);
-  generate_component(f->value, preamble);
-  end_block(preamble);
-  if (f->type != stype_any) ins1(op_typecheck + f->type, 0, preamble);
-  ins0(op_return, preamble);
-  peephole(preamble);
-  c = generate_fncode(preamble, help, varname, filename, f->lineno,
+  start_block("function", newfn);
+  generate_component(f->value, newfn);
+  end_block(newfn);
+  if (f->type != stype_any) ins1(op_typecheck + f->type, 0, newfn);
+  ins0(op_return, newfn);
+  peephole(newfn);
+  c = generate_fncode(newfn, help, varname, filename, f->lineno,
 		      compile_level);
   closure = env_pop(&c->nb_locals);
 
@@ -669,7 +627,9 @@ struct code *generate_function(function f, fncode fn)
 
   /* Add variables to it */
   for (cvar = closure; cvar; cvar = cvar->next)
-    ins1(op_closure_var + cvar->class, cvar->offset, fn);
+    ins1(op_closure_var + cvar->vclass, cvar->offset, fn);
+
+  delete_fncode(newfn);
 
   return c;
 }
@@ -684,15 +644,15 @@ static struct closure *compile_code(block b, int seclev)
   compile_level = seclev;
   erred = FALSE;
   env_reset();
-  env_push(NULL);		/* Environment must not be totally empty */
-  top = new_fncode();
-  toplevel = TRUE;
-  cc = generate_function(new_function(stype_any, NULL, NULL,
-				      new_component(c_block, b),
-				      0, ""), top);
+  top = new_fncode(TRUE);
+  env_push(NULL, top);		/* Environment must not be totally empty */
+  cc = generate_function(new_function(fnmemory(top), stype_any, NULL, NULL,
+				      new_component(fnmemory(top), c_block, b),
+				      0, ""), TRUE, top);
   GCPRO1(cc);
   generate_fncode(top, NULL, NULL, NULL, 0, seclev);
   env_pop(&dummy);
+  delete_fncode(top);
   UNGCPRO();
 
   if (erred) return NULL;
@@ -702,36 +662,25 @@ static struct closure *compile_code(block b, int seclev)
 int interpret(value *result, int seclev, int reload)
 {
   int ok = FALSE;
-  block_t old_memory = memory, my_memory;
+  block_t parser_block;
+  mfile f;
 
-  my_memory = memory = new_block();
-  erred = FALSE;
-  if (yyparse() == 0 && !erred)
+  parser_block = new_block();
+  if ((f = parse(parser_block)))
     {
-      file f = parsed_code;
-
       if (f->name && !reload && module_status(f->name) != module_unloaded)
-	return TRUE;
+	{
+	  free_block(parser_block);
+	  return TRUE;
+	}
 
-      if (mstart(f))
+      if (mstart(parser_block, f))
 	{
 	  value closure = compile_code(f->body, seclev);
 
 	  if (closure)
 	    {
-#ifdef MUME
-	      if (muduser && debug_level >= 2)
-		{
-		  struct gcpro gcpro1;
-		  struct oport *f;
-
-		  GCPRO1(closure);
-		  f = char_output(muduser);
-		  output_value(f, prt_examine, closure);
-		  UNGCPRO();
-		}
-#endif
-	      *result = catch_call0(closure);
+	      *result = mcatch_call0(closure);
 
 	      ok = exception_signal == 0;
 	    }
@@ -739,8 +688,7 @@ int interpret(value *result, int seclev, int reload)
 	}
     }
 
-  free_block(my_memory);
-  memory = old_memory;
+  free_block(parser_block);
 
   return ok;
 }
@@ -749,12 +697,15 @@ static block_t compile_block;
 
 void compile_init(void)
 {
-  memory = compile_block = new_block();
+  compile_block = new_block();
 
   /* Note: These definitions actually depend on those in types.h and runtime.c */
-  component_undefined = new_component(c_constant, new_constant(cst_int, 42));
-  component_true = new_component(c_constant, new_constant(cst_int, TRUE));
-  component_false = new_component(c_constant, new_constant(cst_int, FALSE));
+  component_undefined = new_component(compile_block, c_constant,
+				      new_constant(compile_block, cst_int, 42));
+  component_true = new_component(compile_block, c_constant,
+				 new_constant(compile_block, cst_int, TRUE));
+  component_false = new_component(compile_block, c_constant,
+				  new_constant(compile_block, cst_int, FALSE));
   
   builtin_functions[b_or] = global_lookup("or");
   builtin_functions[b_and] = global_lookup("and");

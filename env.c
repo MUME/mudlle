@@ -1,35 +1,23 @@
-/* $Log: env.c,v $
- * Revision 1.6  1994/10/09  06:41:58  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.5  1994/02/11  09:58:45  dgay
- * Owl: -Wall
- *      new shared string handling
- *      configuration file
- *
- * Revision 1.4  1994/02/03  19:21:29  arda
- * nothing special(2)
- *
- * Revision 1.3  1994/01/08  12:49:43  dgay
- * Owl: Improved code generation for blocks (they are not implemented
- * as 0 argument functions anymore, they are folded into the current
- * function instead).
- *
- * Revision 1.2  1993/03/29  09:23:46  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:06  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:03  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: env.c,v 1.6 1994/10/09 06:41:58 arda Exp $";
 
 #include <string.h>
 #include "mudlle.h"
@@ -47,6 +35,7 @@ struct locals_list
 
 struct env_stack
 {
+  fncode fn;
   struct env_stack *next, *prev;
   struct locals_list *locals;
   uword size, max_size;		/* Current & max length of locals */
@@ -55,27 +44,28 @@ struct env_stack
 
 static struct env_stack *env_stack;
 
-static varlist new_varlist(variable_class class, ulong offset, varlist next)
+static varlist new_varlist(block_t heap, variable_class vclass,
+			   ulong offset, varlist next)
 {
-  varlist new = allocate(memory, sizeof *new);
+  varlist newp = allocate(heap, sizeof *newp);
 
-  new->next = next;
-  new->class = class;
-  new->offset = offset;
+  newp->next = next;
+  newp->vclass = vclass;
+  newp->offset = offset;
 
-  return new;
+  return newp;
 }
 
-static struct locals_list *new_locals_list(vlist vars, uword index,
+static struct locals_list *new_locals_list(block_t heap, vlist vars, uword idx,
 					   struct locals_list *next)
 {
-  struct locals_list *new = allocate(memory, sizeof *new);
+  struct locals_list *newp = allocate(heap, sizeof *newp);
 
-  new->next = next;
-  new->index = index;
-  new->locals = vars;
+  newp->next = next;
+  newp->index = idx;
+  newp->locals = vars;
 
-  return new;
+  return newp;
 }
 
 uword vlist_length(vlist scan)
@@ -92,18 +82,19 @@ void env_reset(void)
   env_stack = NULL;
 }
 
-void env_push(vlist locals)
+void env_push(vlist locals, fncode fn)
 {
-  struct env_stack *new = allocate(memory, sizeof *new);
+  struct env_stack *newp = allocate(fnmemory(fn), sizeof *newp);
 
-  new->next = env_stack;
-  new->prev = NULL;
-  new->size = new->max_size = vlist_length(locals);
-  if (locals) new->locals = new_locals_list(locals, 0, NULL);
-  else new->locals = NULL;
-  new->closure = NULL;
-  if (env_stack) env_stack->prev = new;
-  env_stack = new;
+  newp->fn = fn;
+  newp->next = env_stack;
+  newp->prev = NULL;
+  newp->size = newp->max_size = vlist_length(locals);
+  if (locals) newp->locals = new_locals_list(fnmemory(fn), locals, 0, NULL);
+  else newp->locals = NULL;
+  newp->closure = NULL;
+  if (env_stack) env_stack->prev = newp;
+  env_stack = newp;
 }
 
 varlist env_pop(uword *nb_locals)
@@ -116,12 +107,13 @@ varlist env_pop(uword *nb_locals)
   return closure;
 }
 
-void env_block_push(vlist locals, fncode fn)
+void env_block_push(vlist locals)
 {
   uword nsize, i, last_set;
 
   /* Add locals */
-  env_stack->locals = new_locals_list(locals, env_stack->size, env_stack->locals);
+  env_stack->locals = new_locals_list(fnmemory(env_stack->fn), locals,
+				      env_stack->size, env_stack->locals);
 
   /* Update size info, clears vars if necessary */
   nsize = env_stack->size + vlist_length(locals);
@@ -131,7 +123,8 @@ void env_block_push(vlist locals, fncode fn)
       last_set = env_stack->max_size;
       env_stack->max_size = nsize;
     }
-  for (i = env_stack->size; i < last_set; i++) ins1(op_clear_local, i, fn);
+  for (i = env_stack->size; i < last_set; i++) ins1(op_clear_local, i,
+						    env_stack->fn);
   env_stack->size = nsize;
 }
 
@@ -144,7 +137,7 @@ void env_block_pop(void)
   env_stack->locals = env_stack->locals->next;
 }
 
-variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
+static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
 /* Effects: Adds local variable pos of environment env to all closures
      below it in the env_stack.
    Returns: local_var if env is the last environment on the stack,
@@ -155,7 +148,7 @@ variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
 */
 {
   struct env_stack *subenv;
-  variable_class class = local_var;
+  variable_class vclass = local_var;
 
   /* Add <env,pos> to all environments below env */
   for (subenv = env->prev; subenv; subenv = subenv->prev)
@@ -167,41 +160,44 @@ variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
       /* Is <class,pos> already in closure ? */
       for (coffset = 0, closure = &subenv->closure; *closure;
 	   coffset++, closure = &(*closure)->next)
-	if (class == (*closure)->class && pos == (*closure)->offset) /* Yes ! */
+	if (vclass == (*closure)->vclass && pos == (*closure)->offset) /* Yes ! */
 	  {
 	    found = TRUE;
 	    break;
 	  }
       if (!found)
 	/* Add variable to closure, at end */
-	*closure = new_varlist(class, pos, NULL);
+	*closure = new_varlist(fnmemory(subenv->fn), vclass, pos, NULL);
 
       /* Copy reference to this closure position into <class,pos> */
       /* This is how the variable will be named in the next closure */
-      class = closure_var;
+      vclass = closure_var;
       pos = coffset;
     }
   *offset = pos;
-  return class;
+  return vclass;
 }
 
 variable_class env_lookup(const char *name, ulong *offset)
 {
   struct env_stack *env;
 
-  for (env = env_stack; env; env = env->next)
-    {
-      /* Look for variable in environment env */
-      vlist vars;
-      struct locals_list *scope;
-      ulong pos;
-
-      for (scope = env->locals; scope; scope = scope->next)
-	for (pos = scope->index, vars = scope->locals; vars; pos++, vars = vars->next)
-	  if (strcmp(name, vars->var) == 0)
-	    return env_close(env, pos, offset);
-    }
-
+  if (strncasecmp(name, GLOBAL_ENV_PREFIX, strlen(GLOBAL_ENV_PREFIX)) == 0)
+    name += strlen(GLOBAL_ENV_PREFIX);
+  else
+    for (env = env_stack; env; env = env->next)
+      {
+	/* Look for variable in environment env */
+	vlist vars;
+	struct locals_list *scope;
+	ulong pos;
+	
+	for (scope = env->locals; scope; scope = scope->next)
+	  for (pos = scope->index, vars = scope->locals; vars; pos++, vars = vars->next)
+	    if (strcmp(name, vars->var) == 0)
+	      return env_close(env, pos, offset);
+      }
+  
   /* Not found, is global */
   *offset = global_lookup(name);
   return global_var;

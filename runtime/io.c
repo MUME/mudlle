@@ -1,99 +1,30 @@
-/* $Log: io.c,v $
- * Revision 1.25  1995/07/15  15:25:01  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.24  1995/06/04  14:24:37  arda
- * Rename/move some files, misc. junk
- *
- * Revision 1.23  1995/04/29  20:05:32  arda
- * fix
- *
- * Revision 1.22  1995/01/22  15:11:58  arda
- * Linux patches.
- *
- * Revision 1.21  1994/10/09  06:44:09  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.20  1994/08/31  13:03:38  arda
- * Bug fixes (argh, no, new version of characters structures! (MD))
- *
- * Revision 1.19  1994/08/22  18:03:37  arda
- * Primitives for compiler.
- *
- * Revision 1.18  1994/08/17  10:19:56  arda
- * Improved make depend.
- * basic_load for compiler, select_reactor.
- *
- * Revision 1.17  1994/08/16  19:17:07  arda
- * Added flags to primitives for better calling sequences.
- *
- * Revision 1.14  1994/03/10  19:13:35  arda
- * Last version.
- *
- * Revision 1.13  1994/03/08  01:50:53  arda
- * (MD) New Istari.
- *
- * Revision 1.12  1993/12/07  22:10:49  arda
- * align on zones
- *
- * Revision 1.11  1993/05/02  13:03:06  un_mec
- * Owl: ARGH! Bugs.
- *
- * Revision 1.10  1993/04/24  15:21:07  un_mec
- * Owl: Code cleanup.
- *
- * Revision 1.8  1993/04/10  09:17:48  un_mec
- * Owl: Debug mudlle.
- *
- * Revision 1.7  1993/03/29  09:25:44  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:16:41  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.5  1993/01/30  12:14:10  un_mec
- * Owl: Mudlle reactions installed, with loading and editing commands.
- * Also new: room commands, actions (only tell for now).
- *
- * Revision 1.4  1993/01/26  09:49:21  un_mec
- * Owl:
- * - Limit mudlle execution time (prevent infinite loops).
- * - Add mudlle reaction procedures.
- *
- * Revision 1.3  1993/01/11  16:15:42  un_mec
- * Run emacs with security installed. Users may only edit in
- * /home/mud/mume/lib/mudlle/<their name>/.
- * Arata and higher can edit any user's directory.
- * /mudlle can now be opened to all gods (on disun8 initially).
- *
- * Add read-only variables error message.
- *
- * Add some object ops.
- *
- * Revision 1.2  1992/12/30  14:11:58  un_mec
- * Owl:
- * Several changes:
- * - Variables don't have separate value & function cells, instead their are
- *   now 2 types: type_function & type_variable.
- * 	-> new functions store, recall. Removed store-xx, recall-xx.
- * - New types: list (Lisp style pair), vector (array)
- *
- * Revision 1.1  1992/12/27  21:42:18  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: io.c,v 1.25 1995/07/15 15:25:01 arda Exp $";
 
 #include "runtime/runtime.h"
 #include "print.h"
 #include "utils.h"
 #include "mparser.h"
 #include "interpret.h"
+#include "call.h"
 #include <time.h>
 #ifndef AMIGA
 #include <sys/time.h>
@@ -111,7 +42,7 @@ OPERATION(newline, " -> . Print a newline", 0, (void),
 	  OP_LEAF | OP_NOESCAPE)
 {
   mputs(EOL, mudout);
-  mflush(mudout);
+  if (mudout) mflush(mudout);
   undefined();
 }
 
@@ -140,6 +71,8 @@ TYPEDOP(ctime,
   if (timer(clock)) runtime_error(error_bad_value);
 
   return (makeint(1000 * (clock[0] % 86400) + clock[1] / 1000));
+#elif defined(hpux)
+  return makeint(0);
 #else
   struct rusage usage;
 
@@ -216,13 +149,210 @@ TYPEDOP(asctime,
   ISINT(vgmt->data[7]); gmt.tm_yday = intval(vgmt->data[7]);
 
   gmt.tm_isdst = FALSE;
-#ifndef linux
+#ifdef HAVE_TM_ZONE
   gmt.tm_zone = "GMT";
   gmt.tm_gmtoff = 0;
 #endif
 
   return alloc_string(asctime(&gmt));
 }
+
+TYPEDOP(strftime,
+       "s v -> s. Convert a gmtime vector into text, as specified by a strftime format string. Return zero on error.",
+	2, (struct string *fmt, struct vector *vgmt),
+	OP_LEAF | OP_NOESCAPE, "v.s")
+{
+#ifdef MAX_STRING_LENGTH
+  char buffer[MAX_STRING_LENGTH];
+#else
+  char buffer[4096];
+#endif
+
+  struct tm gmt;
+
+  TYPEIS(fmt, type_string);
+  TYPEIS(vgmt, type_vector);
+  if (vector_len(vgmt) < 8) runtime_error(error_bad_value);
+  ISINT(vgmt->data[0]); gmt.tm_sec = intval(vgmt->data[0]);
+  ISINT(vgmt->data[1]); gmt.tm_min = intval(vgmt->data[1]);
+  ISINT(vgmt->data[2]); gmt.tm_hour = intval(vgmt->data[2]);
+  ISINT(vgmt->data[3]); gmt.tm_mday = intval(vgmt->data[3]);
+  ISINT(vgmt->data[4]); gmt.tm_mon = intval(vgmt->data[4]);
+  ISINT(vgmt->data[5]); gmt.tm_year = intval(vgmt->data[5]);
+  ISINT(vgmt->data[6]); gmt.tm_wday = intval(vgmt->data[6]);
+  ISINT(vgmt->data[7]); gmt.tm_yday = intval(vgmt->data[7]);
+
+  gmt.tm_isdst = FALSE;
+#ifdef HAVE_TM_ZONE
+  gmt.tm_zone = "GMT";
+  gmt.tm_gmtoff = 0;
+#endif
+
+#ifdef MAX_STRING_LENGTH
+  if (strftime(buffer, MAX_STRING_LENGTH, fmt->str, &gmt))
+#else
+  if (strftime(buffer, 4096, fmt->str, &gmt))
+#endif
+    return alloc_string(buffer);
+  else
+    return makeint(0);
+}
+
+OPERATION(with_output, "oport fn -> . Evaluates fn() with output sent to port.\n\
+If p is not a port, just evaluates fn() (no error).\n\
+Output is restored when done",
+	  2, (value out, value code),
+	  0)
+{
+  struct session_context newp;
+  value result, data;
+  Mio newout = mudout, newerr = muderr;
+
+  callable(code, 0);
+  if (TYPE(out, type_outputport)) newout = newerr = out;
+
+  session_start(&newp, minlevel, muduser, newout, newerr);
+  session_context->data = session_context->parent->data;
+  result = mcatch_call0(code);
+  data = session_context->data;
+  session_end();
+  session_context->data = data;
+
+  if (exception_signal) /* Continue with exception handling */
+    mthrow(exception_signal, exception_value);
+
+  return result;
+}
+
+static void pformat(struct oport *p, struct string *str,
+		    struct vector *args, int i, int nargs)
+{
+  ulong l, spos;
+  struct gcpro gcpro1, gcpro2, gcpro3;
+
+  GCPRO2(args, str);
+  GCPRO(gcpro3, p);
+
+  l = string_len(str);
+  spos = 0;
+  while (spos < l)
+    if (str->str[spos] == '%')
+      {
+	spos++;
+	if (spos == l) runtime_error(error_bad_value);
+	switch (str->str[spos])
+	  {
+	  default: runtime_error(error_bad_value);
+	  case '%': pputc('%', p); break;
+	  case 'c':
+	    if (i >= nargs) runtime_error(error_wrong_parameters);
+	    ISINT(args->data[i]);
+	    pputc(intval(args->data[i++]), p);
+	    break;
+	  case 'n': pputs(EOL, p); break;
+	  case 'p':
+	    if (i >= nargs) runtime_error(error_wrong_parameters);
+	    ISINT(args->data[i]);
+	    if (intval(args->data[i++]) != 1) pputc('s', p);
+	    break;
+	  case 'P':
+	    if (i >= nargs) runtime_error(error_wrong_parameters);
+	    ISINT(args->data[i]);
+	    if (intval(args->data[i++]) != 1) pputs("ies", p);
+	    else pputc('y', p);
+	    break;
+	  case 's':
+	    if (i >= nargs) runtime_error(error_wrong_parameters);
+	    output_value(p, prt_display, args->data[i++]);
+	    break;
+	  case 'w':
+	    if (i >= nargs) runtime_error(error_wrong_parameters);
+	    output_value(p, prt_print, args->data[i++]);
+	    break;
+	  }
+	spos++;
+      }
+    else
+      {
+	pputc(str->str[spos], p);
+	spos++;
+      }
+
+  if (i != nargs) runtime_error(error_wrong_parameters);
+
+  UNGCPRO();
+}
+
+VAROP(pformat, "oport s x1 x2 ... -> . Outputs formatted string s to port, with parameters x1, ... See format() for syntax",
+      OP_LEAF)
+{
+  struct string *str;
+  struct oport *p;
+
+  if (nargs < 2) runtime_error(error_wrong_parameters);
+  p = args->data[0];
+  TYPEIS(p, type_outputport);
+
+  str = args->data[1];
+  TYPEIS(str, type_string);
+
+  pformat(p, str, args, 2, nargs);
+
+  undefined();
+}
+
+VAROP(format, 
+      "s x1 x2 ... -> s. Formats string s with parameters x1, ..." EOL
+      "Special entries are %x, where x can be:" EOL
+      "  %   a % sign" EOL
+      "  c   the character in the next parameter (an int)" EOL
+      "  n   end of line" EOL
+      "  p   if the next param is 1 \"\", else \"s\"" EOL
+      "  P   if the next param is 1 \"y\", else \"ies\"" EOL
+      "  s   a string repr. of the next param (like display)" EOL
+      "  w   a string repr. of the next param (like write)",
+      OP_LEAF)
+{
+  struct string *str;
+  struct gcpro gcpro1;
+  struct oport *p;
+
+  if (nargs < 1) runtime_error(error_wrong_parameters);
+  GCPRO1(args);
+  p = make_string_outputport();
+  UNGCPRO();
+  str = args->data[0];
+  TYPEIS(str, type_string);
+
+  GCPRO1(p);
+  pformat(p, str, args, 1, nargs);
+  str = port_string(p);
+  UNGCPRO();
+  opclose(p);
+  return str;
+}
+
+TYPEDOP(make_string_oport,
+       " -> oport. Returns a new string output port.",
+	0, (void),
+	OP_LEAF, ".o")
+{
+  return make_string_outputport();
+}
+
+TYPEDOP(port_string,
+       "oport -> s. Returns the contents of string port oport.",
+	1, (struct oport *p),
+	OP_LEAF, "o.s")
+{
+  TYPEIS(p, type_outputport);
+  /* Warning: need to check that this is a string output port!
+     But: the only externally visible output ports are of that kind,
+     so not a problem so far. */
+
+  return port_string(p);
+}
+
 
 void io_init(void)
 {
@@ -233,5 +363,12 @@ void io_init(void)
   DEFINE("ctime", ctime);
   DEFINE("time", time);
   DEFINE("asctime", asctime);
+  DEFINE("strftime", strftime);
   DEFINE("gmtime", gmtime);
+  DEFINE("localtime", localtime);
+  DEFINE("with_output", with_output);
+  DEFINE("make_string_oport", make_string_oport);
+  DEFINE("port_string", port_string);
+  DEFINE("pformat", pformat);
+  DEFINE("format", format);
 }

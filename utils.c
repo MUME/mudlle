@@ -1,49 +1,23 @@
-/* $Log: utils.c,v $
- * Revision 1.9  1994/10/09  06:43:11  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.8  1994/09/16  13:07:15  arda
- * Rename protect to catch.
- * New protect/unprotect functions (like dynpro/undynpro).
- *
- * Revision 1.7  1994/02/11  09:59:30  dgay
- * Owl: -Wall
- *      new shared string handling
- *      configuration file
- *
- * Revision 1.6  1993/12/23  20:48:56  dgay
- * Owl: New alloc.c: semi-generational collector.
- *      Included Amiga makefile for convenience.
- *
- * Revision 1.5  1993/12/06  19:20:54  arda
- * divers CLI
- *
- * Revision 1.4  1993/11/27  11:29:12  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.3  1993/08/15  21:00:34  un_mec
- * Owl: Overload [].
- *      Added xcalloc, xrealloc.
- *
- * Revision 1.2  1993/03/29  09:24:50  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:15:18  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:45  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: utils.c,v 1.9 1994/10/09 06:43:11 arda Exp $";
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -52,13 +26,14 @@ static char rcsid[] = "$Id: utils.c,v 1.9 1994/10/09 06:43:11 arda Exp $";
 #include "mudlle.h"
 #include "mudio.h"
 #include "utils.h"
-#ifdef MUME
-#include "macro.h"
-#endif
+#include "options.h"
+
+extern int lineno;
+extern const char *filename;
 
 int erred;
 
-void error(const char *msg, ...)
+void log_error(const char *msg, ...)
 {
   va_list args;
   char err[4096];
@@ -66,8 +41,23 @@ void error(const char *msg, ...)
   va_start(args, msg);
   vsprintf(err, msg, args);
   va_end(args);
-  mflush(mudout);
+  if (mudout) mflush(mudout);
   mprintf(muderr, "%s" EOL, err);
+  if (muderr) mflush(muderr);
+  erred = 1;
+}
+
+void compile_error(const char *msg, ...)
+{
+  va_list args;
+  char err[4096];
+
+  va_start(args, msg);
+  vsprintf(err, msg, args);
+  va_end(args);
+  if (mudout) mflush(mudout);
+  mprintf(muderr, "%s:%d: %s" EOL, filename, lineno, err);
+  if (muderr) mflush(muderr);
   erred = 1;
 }
 
@@ -79,81 +69,82 @@ void warning(const char *msg, ...)
   va_start(args, msg);
   vsprintf(err, msg, args);
   va_end(args);
-  mflush(mudout);
+  if (mudout) mflush(mudout);
   mprintf(muderr, "warning: %s" EOL, err);
+  if (muderr) mflush(muderr);
 }
 
 #ifdef DEBUG_MEMORY
 void *debug_xmalloc(const char *file, int line, int size)
 {
-  void *new = debug_malloc(file, line, size);
+  void *newp = debug_malloc(file, line, size);
 
-  if (!new)
+  if (!newp)
     {
       fprintf(stderr, "No memory!\n");
       abort();
     }
 
-  return new;
+  return newp;
 }
 
 void *debug_xcalloc(const char *file, int line, int number, int size)
 {
-  void *new = debug_calloc(file, line, number, size);
+  void *newp = debug_calloc(file, line, number, size);
 
-  if (!new) abort();
+  if (!newp) abort();
 
-  return new;
+  return newp;
 }
 
 void *debug_xrealloc(const char *file, int line, void *old, int size)
 {
-  void *new = debug_realloc(file, line, old, size);
+  void *newp = debug_realloc(file, line, old, size);
 
-  if (!new) abort();
+  if (!newp) abort();
 
-  return new;
+  return newp;
 }
 
-char *debug_xstrdup(const char *file, int line, char *s)
+char *debug_xstrdup(const char *file, int line, const char *s)
 {
-  char *new = debug_xmalloc(file, line, strlen(s) + 1);
+  char *newp = debug_xmalloc(file, line, strlen(s) + 1);
 
-  return strcpy(new, s);
+  return strcpy(newp, s);
 }
 #else
 void *xmalloc(int size)
 {
-  void *new = malloc(size);
+  void *newp = malloc(size);
 
-  if (!new) abort();
+  if (!newp) abort();
 
-  return new;
+  return newp;
 }
 
 void *xcalloc(int number, int size)
 {
-  void *new = calloc(number, size);
+  void *newp = calloc(number, size);
 
-  if (!new) abort();
+  if (!newp) abort();
 
-  return new;
+  return newp;
 }
 
 void *xrealloc(void *old, int size)
 {
-  void *new = realloc(old, size);
+  void *newp = realloc(old, size);
 
-  if (!new) abort();
+  if (!newp) abort();
 
-  return new;
+  return newp;
 }
 
 char *xstrdup(const char *s)
 {
-  char *new = xmalloc(strlen(s) + 1);
+  char *newp = xmalloc(strlen(s) + 1);
 
-  return strcpy(new, s);
+  return strcpy(newp, s);
 }
 #endif
 
@@ -166,7 +157,7 @@ char *strlwr(char *s)
   return s;
 }
 
-#ifndef HAVE_MEMMOVE
+#if (!HAVE_MEMMOVE)
 void memmove(char *to, const char *from, int n)
 {
   if (to == from) return;

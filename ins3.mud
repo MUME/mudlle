@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library ins3 // 3-address (not really) instructions for intermediate representation
 requires system, compiler, vars, misc, dlist, sequences
 defines
@@ -480,14 +501,19 @@ be generated in fncode" (fcode, label)
       else fail()
     ];
 
-  mc:set_closure_vars! = fn (ins, b)
+  mc:set_closure_vars! = fn (ins, rwmask, b)
     [
       | vars |
 
       vars = ins[mc:i_ffunction][mc:c_fclosure];
       while (vars != null)
 	[
-	  set_bit!(b, car(vars)[mc:v_cparent][mc:v_number]);
+	  | v |
+	  
+	  v = car(vars);
+	  if (rwmask == (mc:closure_read | mc:closure_write) ||
+	      (mc:var_base(v)[mc:v_lclosure_uses] & rwmask))
+	    set_bit!(b, v[mc:v_cparent][mc:v_number]);
 	  vars = cdr(vars);
 	]
     ];

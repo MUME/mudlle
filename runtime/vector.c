@@ -1,43 +1,23 @@
-/* $Log: vector.c,v $
- * Revision 1.9  1994/10/09  06:44:24  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.8  1994/08/29  15:44:55  arda
- * Mudlle stuff
- *
- * Revision 1.7  1994/08/22  11:19:08  arda
- * Changes for mudlle compiler in MUME.
- *
- * Revision 1.6  1994/08/16  19:17:22  arda
- * Added flags to primitives for better calling sequences.
- *
- * Revision 1.5  1993/10/03  14:07:28  dgay
- * Bumper disun8 update.
- *
- * Revision 1.4  1993/08/15  21:02:14  un_mec
- * Owl: Several extras functions.
- *      rent.
- *
- * Revision 1.3  1993/03/29  09:25:58  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:16:57  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/30  14:12:04  un_mec
- * Owl:
- * Several changes:
- * - Variables don't have separate value & function cells, instead their are
- *   now 2 types: type_function & type_variable.
- * 	-> new functions store, recall. Removed store-xx, recall-xx.
- * - New types: list (Lisp style pair), vector (array)
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: vector.c,v 1.9 1994/10/09 06:44:24 arda Exp $";
 
 #include "runtime/runtime.h"
 #include "vector.h"
@@ -52,11 +32,13 @@ TYPEDOP(make_vector, "n -> v. Create an empty vector of length n",
 	1, (value size),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
-  struct vector *new;
+  struct vector *newp;
 
   ISINT(size);
-  new = alloc_vector(intval(size));
-  return (new);
+  if(intval(size) < 0)
+    runtime_error(error_bad_value);
+  newp = alloc_vector(intval(size));
+  return (newp);
 }
 
 TYPEDOP(vector_length, "v -> n. Return length of vector", 1, (struct vector *vec),
@@ -84,29 +66,29 @@ TYPEDOP(vector_ref, "v n -> x. Return the n'th element of v",
 	2, (struct vector *vec, value c),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
 {
-  long index;
+  long idx;
 
   TYPEIS(vec, type_vector);
   ISINT(c);
 
-  index = intval(c);
-  if (index < 0 || index >= vector_len(vec)) runtime_error(error_bad_index);
-  return (vec->data[index]);
+  idx = intval(c);
+  if (idx < 0 || idx >= vector_len(vec)) runtime_error(error_bad_index);
+  return (vec->data[idx]);
 }
 
 TYPEDOP(vector_set, "v n x -> x. Set the n'th element of v to x",
 	3, (struct vector *vec, value i, value c),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.")
 {
-  long index;
+  long idx;
 
   TYPEIS(vec, type_vector);
   if (vec->o.flags & OBJ_READONLY) runtime_error(error_value_read_only);
   ISINT(i);
 
-  index = intval(i);
-  if (index < 0 || index >= vector_len(vec)) runtime_error(error_bad_index);
-  vec->data[index] = c;
+  idx = intval(i);
+  if (idx < 0 || idx >= vector_len(vec)) runtime_error(error_bad_index);
+  vec->data[idx] = c;
 
   return c;
 }

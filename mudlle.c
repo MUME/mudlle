@@ -1,69 +1,26 @@
-/* $Log: mudlle.c,v $
- * Revision 1.15  1995/07/15  15:24:34  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.14  1995/01/22  15:11:46  arda
- * Linux patches.
- *
- * Revision 1.13  1994/10/09  06:42:40  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.12  1994/09/16  13:07:14  arda
- * Rename protect to catch.
- * New protect/unprotect functions (like dynpro/undynpro).
- *
- * Revision 1.11  1994/09/15  19:46:43  arda
- * Performance improvements:
- *   setjmp -> _setjmp (setjmp is horrendously slow)
- *   cold_protect
- * reset_limits split from reset_interpreter
- * fix division of negative numbers
- * Add ?\{n,r,t}
- * gc_size returns "mutable" size
- *
- * Revision 1.10  1994/08/26  08:51:43  arda
- * Keep free block list for string ports.
- *
- * Revision 1.9  1994/08/22  18:03:01  arda
- * Minor fixes.
- *
- * Revision 1.8  1994/08/17  16:29:57  arda
- * Seclevel fixes.
- *
- * Revision 1.7  1994/08/16  19:16:06  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.4  1994/02/24  08:33:00  arda
- * Owl: New error messages.
- *
- * Revision 1.3  1994/01/29  19:50:34  dgay
- * Owl: add file & line information to functions.
- *
- * Revision 1.2  1993/11/27  11:29:02  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.1  1993/07/21  20:36:53  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-static char rcsid[] = "$Id: mudlle.c,v 1.15 1995/07/15 15:24:34 arda Exp $";
-
 #include <stdio.h>
+#include <stdlib.h>
 #include "mudlle.h"
 #include "mparser.h"
 #include "lexer.h"
@@ -76,14 +33,18 @@ static char rcsid[] = "$Id: mudlle.c,v 1.15 1995/07/15 15:24:34 arda Exp $";
 #include "module.h"
 #include "mcompile.h"
 #include "call.h"
+#include "interpret.h"
 #include "runtime/runtime.h"
 
-block_t memory;
+#ifdef USE_READLINE
+#  include <readline/history.h>
+#  include <readline/readline.h>
+#endif
 
 extern FILE *yyin;
 int debug_level = 0;
 
-int load_file(char *name)
+int load_file(const char *name, const char *nicename, int seclev, int reload)
 {
   FILE *f;
   value result;
@@ -92,8 +53,8 @@ int load_file(char *name)
   if (!(f = fopen(name, "r")))
     runtime_error(error_bad_value);
 
-  read_from_file(f, name);
-  ok = interpret(&result, 1, TRUE);
+  read_from_file(f, nicename);
+  ok = interpret(&result, seclev, reload);
   fclose(f);
 
   return ok;
@@ -101,7 +62,9 @@ int load_file(char *name)
 
 struct pload
 {
-  char *name;
+  const char *name;
+  const char *nicename;
+  int seclev, reload;
   int result;
 };
 
@@ -109,15 +72,16 @@ static void pload(void *_data)
 {
   struct pload *data = _data;
 
-  data->result = load_file(data->name);
+  data->result = load_file(data->name, data->nicename, data->seclev, data->reload);
 }
 
-int catch_load_file(char *name)
+int catch_load_file(const char *name, const char *nicename, int seclev, int reload)
 {
   struct pload data;
 
-  data.name = name;
-  if (catch(pload, &data, TRUE)) return data.result;
+  data.name = name; data.nicename = nicename; data.seclev = seclev;
+  data.reload = reload;
+  if (mcatch(pload, &data, TRUE)) return data.result;
   else return FALSE;
 }
 
@@ -129,15 +93,19 @@ static void execute(char *line)
   if (interpret(&result, 1, TRUE))
     {
       printf("Result: ");
-      mprint(stdout, prt_print, result);
+      mprint(mudout, prt_print, result);
       printf("\n");
     }
 }
 
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
-  char line[512];
   struct session_context context;
+  struct oport *out;
+
+#ifdef USE_READLINE
+  rl_bind_key('\t', rl_insert);
+#endif
 
   garbage_init();
   global_init();
@@ -153,13 +121,33 @@ main(int argc, char **argv)
   ports_init();
   context_init();
 
-  session_start(&context, 0, 0, stdout, stdout);
-  do
+  out = make_file_outputport(stdout);
+  session_start(&context, 0, 0, out, out);
+  for (;;)
     {
-      printf("mudlle> ");
-      if (!gets(line)) break;
-      execute(line);
+#ifdef USE_READLINE
+      char *line = readline((char *)"mudlle> ");
+
+      if (!line)
+	break;
+      if (*line)
+        {
+	  add_history(line);
+	  execute(line);
+        }
+      free(line);
+#else
+      char line[512];
+
+      fputs("mudlle> ", stdout);
+      if (!fgets(line, sizeof line, stdin))
+	break;
+      if (*line)
+        execute(line);
+#endif
     }
-  while (1);
   session_end();
+
+  return 0;
 }
+

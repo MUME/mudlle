@@ -1,105 +1,27 @@
-/* $Log: ports.c,v $
- * Revision 1.25  1995/04/29  20:05:22  arda
- * fix
- *
- * Revision 1.24  1995/03/06  20:28:46  arda
- * make server
- *
- * Revision 1.23  1995/02/12  18:20:04  arda
- * (CLI) Unknown...
- *
- * Revision 1.22  1995/01/21  17:47:46  arda
- * Cli mods
- *
- * Revision 1.21  1995/01/09  17:33:58  arda
- * First masun1 commit?
- *
- * Revision 1.20  1994/10/09  06:42:52  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.19  1994/08/26  08:51:43  arda
- * Keep free block list for string ports.
- *
- * Revision 1.18  1994/08/22  11:18:39  arda
- * Moved code allocation to ins.c
- * Changes for mudlle compiler in MUME.
- *
- * Revision 1.17  1994/08/16  19:16:13  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.14  1994/02/11  09:59:18  dgay
- * Owl: -Wall
- *      new shared string handling
- *      configuration file
- *
- * Revision 1.13  1994/01/02  15:50:14  arda
- * bug fix
- *
- * Revision 1.12  1993/11/27  17:24:11  arda
- * Owl: The promised bug fixes.
- *
- * Revision 1.11  1993/11/27  11:29:05  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.10  1993/08/28  17:01:27  un_autre
- * SIZE OF ARMORS (CLI)
- *
- * Revision 1.9  1993/08/14  16:43:15  un_mec
- * Owl: Improved vpprintf
- *      New input system (with an input stack) => small changes to interact
- *      New identifier rules (lexer.l)
- *
- * Revision 1.8  1993/07/21  20:36:58  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
- * Revision 1.7  1993/06/28  21:04:07  un_mec
- * Last protocol bugs fixed :-) ?
- *
- * Revision 1.6  1993/06/28  19:12:08  un_autre
- * Bug fix of previous changes:
- *   - /num <x> <regexp>
- *   - improved cprintf (field width)
- *   - edit("person/file")
- *
- * Revision 1.5  1993/06/25  15:37:57  un_autre
- * *** empty log message ***
- *
- * Revision 1.4  1993/06/20  13:35:21  un_mec
- * Owl: edit protocol bug fix.
- *
- * Revision 1.3  1993/05/29  11:42:10  un_mec
- * Owl: MUME protocol added.
- *
- * Revision 1.2  1993/05/07  23:23:59  un_autre
- * *** empty log message ***
- *
- * Revision 1.1  1993/05/02  07:37:57  un_mec
- * Owl: New output (mudlle ports).
- *
- * Revision 1.2  1992/04/11  14:44:11  gay_d
- * Nothing important
- *
- * Revision 1.1  1992/02/20  17:48:08  gay_d
- * Initial revision
- * */
-
-static char rcsid[] = "$Id: ports.c,v 1.25 1995/04/29 20:05:22 arda Exp $";
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
 
 #include <assert.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <ctype.h>
@@ -108,11 +30,7 @@ static char rcsid[] = "$Id: ports.c,v 1.25 1995/04/29 20:05:22 arda Exp $";
 #include "alloc.h"
 #include "ports.h"
 #include "utils.h"
-
-#ifdef MUME
-#include "handler.socket.h"
-#include "../server/comm.h"
-#endif
+#include "utils.charset.h"
 
 /* The various types of input & output ports */
 
@@ -135,22 +53,26 @@ struct string_oport /* Output to a string */
   value pos;
 };
 
+struct file_oport /* Output to a FILE * */
+{
+  struct oport p;
+  struct gtemp *file;
+};
+
+
 static struct string_oport_block *free_blocks;
 
 /* Creation & code for the various types of ports */
 /* ---------------------------------------------- */
 
-static void init_outputport(struct oport *p, struct oport_methods *m)
-{
-}
-
 static struct string_oport_block *new_string_block(void)
 {
-  struct string_oport_block *new;
+  struct string_oport_block *newp;
 
   if (free_blocks) 
     {
-      new = free_blocks;
+      newp = free_blocks;
+      GCCHECK(newp);
       free_blocks = free_blocks->next;
     }
   else
@@ -160,14 +82,15 @@ static struct string_oport_block *new_string_block(void)
 
       s = (struct string *)allocate_string(type_internal, STRING_BLOCK_SIZE);
       GCPRO1(s);
-      new = (struct string_oport_block *)allocate_record(type_internal, 2);
+      newp = (struct string_oport_block *)allocate_record(type_internal, 2);
       UNGCPRO();
-      new->data = s;
+      newp->data = s;
+      GCCHECK(newp);
     }
 
-  new->next = NULL;
+  newp->next = NULL;
   
-  return new;
+  return newp;
 }
 
 static void output_string_close(struct oport *_p)
@@ -175,6 +98,13 @@ static void output_string_close(struct oport *_p)
   struct string_oport *p = (struct string_oport *)_p;
   
   p->p.methods = NULL;
+
+  {
+    struct string_oport_block *b;
+
+    for (b = p->first; b; b = b->next)
+      GCCHECK(b);
+  }
 
   /* Free data (add blocks to free block list) */
   p->current->next = free_blocks;
@@ -195,9 +125,9 @@ static void string_putc(struct oport *_p, char c)
   if (pos == STRING_BLOCK_SIZE)
     {
       struct string_oport_block *blk;
-      struct gcpro gcpro1;
+      struct gcpro gcpro1, gcpro2;
 
-      GCPRO1(p);
+      GCPRO2(p, current);
       blk = new_string_block();
       UNGCPRO();
       p->current = current->next = blk;
@@ -267,7 +197,7 @@ static struct oport_methods string_port_methods = {
   string_flush
 };
 
-value make_string_outputport()
+value make_string_outputport(void)
 {
   struct string_oport *p = (struct string_oport *) allocate_record(type_outputport, 4);
   struct gcpro gcpro1;
@@ -283,6 +213,150 @@ value make_string_outputport()
   UNGCPRO();
 
   return p;
+}
+
+static void string_7bit_putc(struct oport *_p, char c)
+{
+  string_putc(_p, TO_7PRINT(c));
+}
+
+static void string_7bit_write(struct oport *p, const char *data, int nchars)
+{
+  char buf[STRING_BLOCK_SIZE];
+  struct gcpro gcpro1;
+
+  GCPRO1(p);
+  while (nchars)
+    {
+      int i, fit = sizeof buf < nchars ? sizeof buf : nchars;
+
+      for (i = 0; i < fit; ++i)
+	buf[i] = TO_7PRINT(*data++);
+      string_write(p, buf, fit);
+      nchars -= fit;
+    }
+  UNGCPRO();
+}
+
+static void string_7bit_swrite(struct oport *p, struct string *s, int from, int nchars)
+{
+  char buf[STRING_BLOCK_SIZE];
+  struct gcpro gcpro1, gcpro2;
+
+  GCPRO2(p, s);
+  while (nchars)
+    {
+      int i, fit = sizeof buf < nchars ? sizeof buf : nchars;
+
+      for (i = 0; i < fit; ++i)
+	buf[i] = TO_7PRINT(s->str[from + i]);
+      string_write(p, buf, fit);
+      nchars -= fit;
+      from += fit;
+    }
+  UNGCPRO();
+}
+
+static struct oport_methods string_7bit_port_methods = {
+  output_string_close,
+  string_7bit_putc,
+  string_7bit_write,
+  string_7bit_swrite,
+  string_flush
+};
+
+value make_string_7bit_outputport(void)
+{
+  struct string_oport *p = (struct string_oport *) allocate_record(type_outputport, 4);
+  struct gcpro gcpro1;
+  struct gtemp *m;
+  struct string_oport_block *blk;
+
+  GCPRO1(p);
+  m = allocate_temp(type_internal, &string_7bit_port_methods);
+  p->p.methods = m;
+  blk = new_string_block();
+  p->first = p->current = blk;
+  p->pos = makeint(0);
+  UNGCPRO();
+
+  return p;
+}
+
+static void output_file_close(struct oport *_p)
+{
+  struct file_oport *p = (struct file_oport *)_p;
+  FILE *f = p->file->external;
+
+  fclose(f);
+  p->file->external = NULL;
+}
+
+static void file_flush(struct oport *_p)
+{
+  struct file_oport *p = (struct file_oport *)_p;
+  FILE *f = p->file->external;
+
+  fflush(f);
+}
+     
+static void file_putc(struct oport *_p, char c)
+{
+  struct file_oport *p = (struct file_oport *)_p;
+  FILE *f = p->file->external;
+
+  if (f) putc(c, f);
+}
+
+static void file_write(struct oport *_p, const char *data, int nchars)
+{
+  struct file_oport *p = (struct file_oport *)_p;
+  FILE *f = p->file->external;
+
+  if (f) fwrite(data, nchars, 1, f);
+}
+
+static void file_swrite(struct oport *_p, struct string *s, int from, int nchars)
+{
+  struct file_oport *p = (struct file_oport *)_p;
+  FILE *f = p->file->external;
+
+  if (f) fwrite(s->str + from, nchars, 1, f);
+}
+
+static struct oport_methods file_port_methods = {
+  output_file_close,
+  file_putc,
+  file_write,
+  file_swrite,
+  file_flush
+};
+
+value make_file_outputport(FILE *f)
+{
+  struct file_oport *p = (struct file_oport *) allocate_record(type_outputport, 2);
+  struct gcpro gcpro1;
+  struct gtemp *m;
+
+  GCPRO1(p);
+  m = allocate_temp(type_internal, &file_port_methods);
+  p->p.methods = m;
+  m = allocate_temp(type_internal, f);
+  p->file = m;
+  UNGCPRO();
+
+  return p;
+}
+
+int port_empty(struct oport *_p)
+/* Return: true if the port is empty
+   Requires: p be a string-type output port
+*/
+{
+  struct string_oport *p = (struct string_oport *)_p;
+  struct string_oport_block *current = p->first;
+
+  return !current->next && intval(p->pos) == 0;
 }
 
 static ulong port_length(struct string_oport *p)
@@ -361,76 +435,15 @@ void port_append(struct oport *p1, struct oport *_p2)
   UNGCPRO();
 }
 
-#ifdef MUME
-int port_dump(struct descriptor_data *t)
-/* Effects: Sends all data sent to port p to descriptor fd, except for
-     the first 'from' characters.
-   Returns: 0 if all output sent,
-     -1 in case of an error (errno contains more information)
-     the # of characters sent otherwise.
-   Requires: p be a string-type output port
-*/
-{
-  ulong sent = 0;
-  int cnt, tosend;
-
-  struct oport *_p = t->sending.obj;
-  int fd = t->descriptor;
-  ulong from = t->sendpos;
-
-  struct string_oport *p = (struct string_oport *)_p;
-  struct string_oport_block *current = p->first;
-
-  while (current->next)
-    {
-      if (from >= STRING_BLOCK_SIZE)
-	{
-	  from -= STRING_BLOCK_SIZE;
-	  current = current->next;
-	}
-      else
-	{
-	  tosend = STRING_BLOCK_SIZE - from;
-
-	  cnt = server_mux_send(t,current->data->str + from, tosend);
-
-	  if (cnt < 0)
-	    if (errno == EWOULDBLOCK && sent)
-	      return sent;	/* 0 is for send complete */
-	    else
-	      return -1;
-
-	  sent += cnt;
-	  if (cnt != tosend) return sent;
-	  current = current->next;
-	  from = 0;
-	}
-    }
-  tosend = intval(p->pos) - from;
-  if (tosend <= 0) return 0;	/* All done */
-
-  cnt = server_mux_send(t,current->data->str + from, tosend);
-
-  if (cnt == tosend) return 0;	/* All done */
-  if (cnt < 0)
-    if (errno == EWOULDBLOCK && sent)
-      return sent;		/* 0 is for send complete */
-    else
-      return -1;
-
-  return sent + cnt;
-}
-#endif
-
 /* C I/O routines for use with the ports */
 /* ------------------------------------- */
 
 void pputs(const char *s, struct oport *p)
 {
-  pwrite(p, s, strlen(s));
+  opwrite(p, s, strlen(s));
 }
 
-static char basechars[16] = "0123456789abcdef";
+static char basechars[17] = "0123456789abcdef";
 
 char *int2str(char *str, int base, ulong n, int is_signed)
 /* Requires: base be 2, 8, 10 or 16. str be at least INTSTRLEN characters long.
@@ -451,6 +464,12 @@ char *int2str(char *str, int base, ulong n, int is_signed)
   if (is_signed && (long)n < 0)
     {
       minus = TRUE;
+      if ((long)n <= -16)
+	{
+	  /* this is to take care of LONG_MIN */
+	  *--pos = basechars[abs((long)n % base)];
+	  (long)n /= base;
+	}
       n = -(long)n;
     }
   else minus = FALSE;
@@ -464,37 +483,106 @@ char *int2str(char *str, int base, ulong n, int is_signed)
   return pos;
 }
 
+char *int2str_wide(char *str, ulong n, int is_signed)
+/* Requires: str be at least INTSTRLEN characters long.
+   Effects: Prints the ASCII representation of n in base 10 with
+     1000-separation by commas
+     If is_signed is TRUE, n is actually a long
+   Returns: A pointer to the start of the result.
+*/
+{
+  char *pos;
+  int minus, i;
+
+  pos = str + INTSTRLEN - 1;
+  *--pos = '\0';
+
+  i = 3;
+
+  if (is_signed && (long)n < 0)
+    {
+      minus = TRUE;
+      if (n <= -16)
+	{
+	  /* this is to take care of LONG_MIN */
+	  *--pos = basechars[abs(n % 10)];
+	  n /= 10;
+	  --i;
+	}
+      n = -(long)n;
+    }
+  else minus = FALSE;
+
+  do {
+    if (!i)
+      {
+	*--pos = ',';
+	i = 3;
+      }
+    *--pos = basechars[n % 10];
+    n /= 10;
+    --i;
+  } while (n > 0);
+  if (minus) *--pos = '-';
+
+  return pos;
+}
+
 void vpprintf(struct oport *p, const char *fmt, va_list args)
 {
   const char *percent, *add = NULL;
-  char buf[INTSTRLEN];
-  int longfmt, padright, fsize, addlen, cap;
+  char buf[INTSTRLEN], padchar;
+  int longfmt, padright, fsize, fprec, addlen, cap, widefmt;
   struct gcpro gcpro1;
 
+  if (!p || !p->methods) return;
   GCPRO1(p);
-  while (percent = strchr(fmt, '%'))
+  while ((percent = strchr(fmt, '%')))
     {
-      pwrite(p, fmt, percent - fmt);
+      opwrite(p, fmt, percent - fmt);
       fmt = percent + 1;
       longfmt = FALSE;
       fsize = 0;
+      fprec = -1;
       padright = FALSE;
       cap = FALSE;
+      widefmt = FALSE;
       if (*fmt == '-')
 	{
 	  padright = TRUE;
 	  fmt++;
 	}
+
+      if (*fmt == '0')
+	padchar = '0';
+      else
+	padchar = ' ';
+
+      if (*fmt == '\'')
+	{
+	  widefmt = TRUE;
+	  fmt++;
+	}
+
       while (isdigit(*fmt))
 	{
 	  fsize = fsize * 10 + *fmt - '0';
 	  fmt++;
 	}
+
+      if (*fmt == '.')
+	{
+	  fprec = 0;
+	  while (isdigit(*++fmt))
+	    fprec = fprec * 10 + *fmt - '0';
+	}
+
       if (*fmt == 'l')
 	{
 	  longfmt = TRUE;
 	  fmt++;
 	}
+
       switch (*fmt)
 	{
 	case '%':
@@ -502,15 +590,27 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	  break;
 	case 'd': case 'i':
 	  if (longfmt)
-	    add = int2str(buf, 10, va_arg(args, long), TRUE);
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, long), TRUE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, long), TRUE);
 	  else
-	    add = int2str(buf, 10, va_arg(args, int), TRUE);
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, int), TRUE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, int), TRUE);
 	  break;
 	case 'u':
 	  if (longfmt)
-	    add = int2str(buf, 10, va_arg(args, unsigned long), FALSE);
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, long), FALSE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, long), FALSE);
 	  else
-	    add = int2str(buf, 10, va_arg(args, unsigned int), FALSE);
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, int), FALSE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, int), FALSE);
 	  break;
 	case 'x':
 	  if (longfmt)
@@ -529,13 +629,23 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	case 's':
 	  add = va_arg(args, const char *);
 	  if (!add) add = "(null)";
+	  if (fprec > 0 &&
+	      strlen(add) > fprec)
+	    {
+	      strncpy(buf, add, fprec);
+	      buf[fprec] = 0;
+	      add = buf;
+	    }
 	  break;
 	case 'c':
 	  add = buf;
 	  buf[0] = va_arg(args, int); buf[1] = '\0';
 	  break;
 	case 'f':
-	  sprintf(buf, "%f", va_arg(args, double));
+	  if (fprec >= 0)
+	    sprintf(buf, "%.*f", fprec, va_arg(args, double));
+	  else
+	    sprintf(buf, "%f", va_arg(args, double));
 	  add = buf;
 	  break;
 	default: assert(0);
@@ -547,15 +657,15 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	{
 	  int i = fsize - addlen;
 
-	  while (--i >= 0) pputc(' ', p);
+	  while (--i >= 0) pputc(padchar, p);
 	}
       if (cap && addlen > 0)
 	{
 	  pputc(toupper(add[0]), p);
-	  pwrite(p, add + 1, addlen - 1);
+	  opwrite(p, add + 1, addlen - 1);
 	}
       else
-	pwrite(p, add, addlen);
+	opwrite(p, add, addlen);
       if (fsize > 0 && padright)
 	{
 	  int i = fsize - addlen;

@@ -1,54 +1,30 @@
-/* $Log: ports.h,v $
- * Revision 1.12  1995/07/15  15:24:36  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.11  1995/02/12  18:20:05  arda
- * (CLI) Unknown...
- *
- * Revision 1.10  1995/01/22  15:11:50  arda
- * Linux patches.
- *
- * Revision 1.9  1995/01/21  17:47:47  arda
- * Cli mods
- *
- * Revision 1.8  1994/08/26  18:15:42  arda
- * Minor fixes
- *
- * Revision 1.7  1994/08/26  08:51:44  arda
- * Keep free block list for string ports.
- *
- * Revision 1.6  1994/08/16  19:16:14  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.3  1993/11/27  11:29:07  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.2  1993/05/29  11:42:13  un_mec
- * Owl: MUME protocol added.
- *
- * Revision 1.1  1993/05/02  07:37:59  un_mec
- * Owl: New output (mudlle ports).
- *
- * Revision 1.1  1992/02/20  17:58:09  gay_d
- * Initial revision
- * */
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
 
 #ifndef PORTS_H
 #define PORTS_H
 
 #include <stdarg.h>
+#include <stdio.h>
 #include "mvalues.h"
-#ifdef MUME
-#include "struct.socket.h"
-#endif
 
 struct oport;
 
@@ -73,6 +49,17 @@ value make_string_outputport(void);
 /* Returns: A new string-type output port, with nothing in it.
 */
 
+value make_string_7bit_outputport(void);
+/* Returns: A new 7 bit string-type output port, with nothing in it.
+*/
+
+value make_file_outputport(FILE *f);
+/* Returns: A new file-type output port on file f.
+   Note: As there is no finalization, you are responsible for closing f,
+     either by closing the port or by closing f.
+     Also there is no report of any errors that may occur on f
+*/
+
 struct string *port_string(struct oport *p);
 /* Returns: A mudlle string representing all the data send to port p.
    Requires: p be a string-type output port
@@ -84,16 +71,10 @@ char *port_cstring(struct oport *p);
    Requires: p be a string-type output port
 */
 
-#ifdef MUME
-int port_dump(struct descriptor_data *t);
-/* Effects: Sends all data sent to port p to descriptor fd, except for
-     the first 'from' characters.
-   Returns: 0 if all output sent,
-     -1 in case of an error (errno contains more information)
-     the # of characters sent otherwise.
+int port_empty(struct oport *p);
+/* Return: true if the port is empty
    Requires: p be a string-type output port
 */
-#endif
 
 void port_append(struct oport *p1, struct oport *p2);
 /* Effects: The characters of port p2 are appended to the end of port p1.
@@ -102,20 +83,25 @@ void port_append(struct oport *p1, struct oport *p2);
 */
 
 /* C-like I/O routines for ports */
-/* These do not check the validity of the port (closed, gone, etc) */
+/* They check that the port is not null or closed */
 
 #define opclose(op) \
-  (((struct oport_methods *)(op)->methods->external)->close((op)))
+  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->close((op))); } while (0)
+
 #define pputc(c, op) \
-  (((struct oport_methods *)(op)->methods->external)->putch((op), (c)))
-#define pwrite(op, s, n) \
-  (((struct oport_methods *)(op)->methods->external)->write((op), (s), (n)))
+    do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->putch((op), (c))); } while (0)
+
+#define opwrite(op, s, n) \
+  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->write((op), (s), (n))); } while (0)
+
 #define pswrite(op, s, f, n) \
-  (((struct oport_methods *)(op)->methods->external)->swrite((op), (s), (f), (n)))
+  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->swrite((op), (s), (f), (n))); } while (0)
+
 #define pputs_cst(s, op) \
-  (((struct oport_methods *)(op)->methods->external)->write((op), (s), (sizeof((s)) - 1)))
+  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->write((op), (s), (sizeof((s)) - 1))); } while (0)
+
 #define pflush(op) \
-  ((struct oport_methods *)((op)->methods->external)->flush((op)))
+  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->flush((op))); } while (0)
 
 void pputs(const char *s, struct oport *p);
 void pprintf(struct oport *p, const char *fmt, ...);
@@ -131,6 +117,7 @@ char *int2str(char *str, int base, ulong n, int is_signed);
      If signed is TRUE, n is actually a signed long
    Returns: A pointer to the start of the result.
 */
+char *int2str_wide(char *str, ulong n, int is_signed);
 
 void ports_init(void);
 

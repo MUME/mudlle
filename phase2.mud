@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library phase2 // Phase 2: 3-address (not really) generation
 requires system, sequences, dlist, misc,
   compiler, vars, ins3
@@ -20,7 +41,7 @@ writes mc:this_function
 // them.
 
 [
-  | cundefined, ctrue, cfalse, closure_count, builtin_branch,
+  | cundefined, ctrue, cfalse, closure_count, builtin_branch, builtin_call?,
     builtin_branch_not, comp_undefined, comp_true, comp_false, vset, phase2,
     gen_clist, gen_component, gen_if, gen_while, gen_condition, make_bf,
     builtin_functions, builtin_branches, make_bb, make_btype |
@@ -62,6 +83,8 @@ writes mc:this_function
      make_btype("closure?", type_closure),
      make_btype("primitive?", type_primitive),
      make_btype("integer?", type_integer),
+     make_btype("float?", type_float),
+     make_btype("bigint?", type_bigint),
      make_btype("string?", type_string),
      make_btype("vector?", type_vector),
      make_btype("pair?", type_pair),
@@ -73,6 +96,17 @@ writes mc:this_function
      make_btype("object?", type_object),
      make_btype("character?", type_character),
      make_btype("gone?", type_gone));
+
+  builtin_call? = fn (function, args, builtins)
+    [
+      | bf |
+
+      if ((bf = vexists?(fn (builtin) builtin[0] == function, builtins)) &&
+	  (bf[1] < 0 || bf[1] == llength(args) - 1))
+	bf
+      else
+	false
+    ];
 
   closure_count = 0;
 
@@ -189,9 +223,7 @@ writes mc:this_function
 	  function = car(args);
 
 	  // Check for builtin functions
-	  if ((bf = vexists?(fn (builtin) builtin[0] == function,
-			     builtin_functions)) &&
-	      (bf[1] < 0 || bf[1] == llength(args) - 1))
+	  if (bf = builtin_call?(function, args, builtin_functions))
 	    mc:ins_compute(fcode, bf[2], result, cdr(args))
 	  else
 	    mc:ins_call(fcode, result, args);
@@ -412,9 +444,7 @@ writes mc:this_function
 	  function = car(bargs);
 
 	  // Check for builtin functions
-	  if ((bf = vexists?(fn (builtin) builtin[0] == function,
-			     builtin_branches)) &&
-	      (bf[1] < 0 || bf[1] == llength(bargs) - 1))
+	  if (bf = builtin_call?(function, bargs, builtin_branches))
 	    [
 	      bargs = cdr(bargs);
 	      branch_succeed = bf[2];
@@ -425,7 +455,10 @@ writes mc:this_function
 	      | result |
 
 	      result = mc:new_local(fcode);
-	      mc:ins_call(fcode, result, bargs);
+	      if (bf = builtin_call?(function, bargs, builtin_functions))
+		mc:ins_compute(fcode, bf[2], result, cdr(bargs))
+	      else
+		mc:ins_call(fcode, result, bargs);
 	      bargs = result . null;
 	      branch_fail = mc:branch_false;
 	      branch_succeed = mc:branch_true;
@@ -455,4 +488,5 @@ writes mc:this_function
 	    ];
 	]
     ];
+
 ];

@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 // Provide a consistent set of operations on sequences: 
 // lists, dlists, vectors, strings
 library sequences
@@ -86,7 +107,7 @@ scopy = fn "s1 -> s2. Returns a copy of s1" (s) s + ""; // easy ...
 vcopy = fn "v1 -> v2. Returns a copy of v1" (v1)
   [
     | l, v2 |
-    l = vlength(v1);
+    l = vector_length(v1);
     v2 = make_vector(l);
     while ((l = l - 1) >= 0) v2[l] = v1[l];
     v2
@@ -143,7 +164,7 @@ dreverse = fn "d1 -> d2. Returns a list with the contents of d1 in reverse order
 sreverse = fn "s1 -> s2. Returns string with all characters reversed" (s1)
   [
     | l, s2, i |
-    i = l = slength(s1);
+    i = l = string_length(s1);
     s2 = make_string(l);
     l = l - 1;
     while ((i = i - 1) >= 0) s2[i] = s1[l - i];
@@ -153,7 +174,7 @@ sreverse = fn "s1 -> s2. Returns string with all characters reversed" (s1)
 vreverse = fn "v1 -> v2. Returns vector with all elements reversed" (v1)
   [
     | l, v2, i |
-    i = l = vlength(v1);
+    i = l = vector_length(v1);
     v2 = make_vector(l);
     l = l - 1;
     while ((i = i - 1) >= 0) v2[i] = v1[l - i];
@@ -203,9 +224,9 @@ dreverse! = fn "d1 -> d2. Reverses list d1, destructively" (d1)
 sreverse! = fn "s1 -> s2. Returns string with all elements reversed" (s1)
   [
     | l, i, swap |
-    l = slength(s1);
+    l = string_length(s1);
 
-    i = l / 2;
+    i = l >> 1;
     l = l - 1;
 
     while ((i = i - 1) >= 0)
@@ -220,9 +241,9 @@ sreverse! = fn "s1 -> s2. Returns string with all elements reversed" (s1)
 vreverse! = fn "v1 -> v2. Returns vector with all elements reversed" (v1)
   [
     | l, i, swap |
-    l = vlength(v1);
+    l = vector_length(v1);
 
-    i = l / 2;
+    i = l >> 1;
     l = l - 1;
 
     while ((i = i - 1) >= 0)
@@ -658,7 +679,7 @@ vfilter = fn "fn v1 -> v2. Returns v1 filtered by function fn" (f, v)
     i = count = 0;
     while (i < l)
       [
-	if (keep[i] = f(v[i])) count = count + 1;
+	if (keep[i] = (f(v[i]) != 0)) count = count + 1;
 	i = i + 1;
       ];
 
@@ -685,7 +706,7 @@ sfilter = fn "fn s1 -> s2. Returns s1 filtered by function fn" (f, s)
     i = count = 0;
     while (i < l)
       [
-	if (keep[i] = f(s[i])) count = count + 1;
+	if (keep[i] = (f(s[i]) != 0)) count = count + 1;
 	i = i + 1;
       ];
 

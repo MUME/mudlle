@@ -1,3 +1,24 @@
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 %{
 #include "mudlle.h"
 #include "tree.h"
@@ -6,7 +27,6 @@
 #include "types.h"
 #include "compile.h"
 #include <stdlib.h>
-#include <alloca.h>
 #include <string.h>
 %}
 
@@ -14,27 +34,39 @@
   char *string;
   char *symbol;
   int integer;
-  constant constant;
-  block block;
-  function function;
-  clist clist;
-  vlist vlist;
-  cstlist cstlist;
-  component component;
-  mtype mtype;
+  int operator;
+  double mudlle_float;
+  char *bigint_str;
+  constant tconstant;
+  block tblock;
+  function tfunction;
+  clist tclist;
+  vlist tvlist;
+  cstlist tcstlist;
+  cstpair tcstpair;
+  component tcomponent;
+  mtype tmtype;
   struct {
     int varargs;
     char *var;
     vlist args;
-  } parameters;
-  file file;
+  } tparameters;
+  mfile tfile;
+  pattern tpattern;
+  patternlist tpatternlist;
+  matchnode tmatchnode;
+  matchnodelist tmatchnodelist;
 }
 
 %token FUNCTION IF ELSE WHILE ASSIGN QUOTE MEXIT LOOP
-%token INTEGER STRING SYMBOL
-%token MODULE LIBRARY IMPORTS DEFINES READS WRITES
+%token INTEGER STRING SYMBOL GLOBAL_SYMBOL FLOAT BIGINT SINK MATCH PATTERN_MATCH 
+%token ELLIPSIS INCREMENTER
+%token MODULE LIBRARY IMPORTS DEFINES READS WRITES OP_ASSIGN
+
+%expect 2              /* if-else and constant . */
 
 %right '.'
+%left XOR
 %left SC_OR OR
 %left SC_AND AND
 %left EQ NE LT LE GT GE
@@ -45,78 +77,177 @@
 %left '*' '/' '%'
 %left NOT '~' UMINUS
 
-%type <clist> expression_list expression_list1 call_list call_list1
-%type <component> expression e0 e1 e2 loop exit
-%type <component> labeled_expression function_call array_ref control_expression
-%type <component> if while optional_else
-%type <vlist> variable_list variable_list1 plist plist1
-%type <vlist> imports defines reads writes
-%type <parameters> parameters
-%type <mtype> type optional_type
+%type <tclist> expression_list expression_list1 call_list call_list1
+%type <tcomponent> expression e0 e1 e2 loop exit match
+%type <tcomponent> labeled_expression function_call array_ref 
+%type <tcomponent> control_expression opt_match_condition
+%type <tcomponent> if while optional_else
+%type <tvlist> variable_list plist plist1 optional_variable_list
+%type <tvlist> imports defines reads writes
+%type <tparameters> parameters
+%type <tmtype> type optional_type
 %type <string> optional_help STRING
-%type <symbol> variable SYMBOL label optional_label optional_symbol
+%type <symbol> variable SYMBOL label optional_label optional_symbol GLOBAL_SYMBOL
+%type <symbol> variable_name
 %type <integer> INTEGER
-%type <constant> constant simple_constant
-%type <block> code_block
-%type <function> function_expression
-%type <cstlist> constant_list
-%type <file> entry_types simple module library
+%type <mudlle_float> FLOAT
+%type <bigint_str> BIGINT
+%type <tconstant> constant simple_constant optional_constant_tail table_entry
+%type <tconstant> string_constant
+%type <tblock> code_block
+%type <tfunction> function_expression
+%type <tcstlist> constant_list optional_constant_list table_entry_list
+%type <tfile> entry_types simple module library
+%type <tpattern> pattern pattern_list pattern_array pattern_atom 
+%type <tpattern> opt_pattern_list_tail pattern_atom_expr
+%type <tpatternlist> opt_pattern_sequence pattern_sequence
+%type <tmatchnode> match_node
+%type <tmatchnodelist> match_list
+%type <operator> OP_ASSIGN INCREMENTER
 
 %{
 
 #include "lexer.h"
 
-file parsed_code;
+static mfile parsed_code;
+block_t parser_memory;
 
 void yyerror(const char *s)
 {
-  error("%s around line %d of %s", s, lineno, filename);
+  compile_error("%s", s);
 }
 
-component make_binary(unsigned int op, component arg1, component arg2)
+static component make_binary(unsigned int op, component arg1, component arg2)
 {
-  return new_component(c_builtin, op, 2, arg1, arg2);
+  if (op == b_xor)
+    return new_xor_component(parser_memory, arg1, arg2);
+  return new_component(parser_memory, c_builtin, op, 2, arg1, arg2);
 }
 
-component make_unary(unsigned int op, component arg)
+static component make_unary(unsigned int op, component arg)
 {
-  return new_component(c_builtin, op, 1, arg);
+  return new_component(parser_memory, c_builtin, op, 1, arg);
+}
+
+static component make_ref_set_increment(component exp0, component exp1, 
+					int op, component exp2,
+					int is_postfix)
+{
+    /* prefix:
+     *  [
+     *    | ~exp, ~ref |
+     *    ~exp = <exp0>; ~ref = <exp1>;
+     *    ~exp[~ref] = ~exp[~ref] <op> <exp2>;
+     *  ]
+     *
+     * postfix:
+     *  [
+     *    | ~exp, ~ref, ~val |
+     *    ~exp = <exp0>; ~ref = <exp1>;
+     *    ~val = ~exp[~ref];
+     *    ~exp[~ref] = ~val <op> <exp2>;
+     *    ~val;
+     *  ]
+     */
+    vlist vl = new_vlist(parser_memory, "~exp", stype_any,
+			 new_vlist(parser_memory, "~ref", stype_any,
+				   NULL));
+    component val;
+    clist cl;
+
+    if (is_postfix)
+      vl = new_vlist(parser_memory, "~val", stype_any,
+		     vl);
+
+    cl = new_clist(parser_memory,
+		   new_component(parser_memory, c_assign, "~exp", exp0),
+		   NULL);
+    cl = new_clist(parser_memory,
+		   new_component(parser_memory, c_assign, "~ref", exp1),
+		   cl);
+
+    val = new_component(parser_memory, c_builtin, b_ref, 2,
+			new_component(parser_memory, c_recall, "~exp"),
+			new_component(parser_memory, c_recall, "~ref"));
+
+    if (is_postfix)
+      {
+	cl = new_clist(parser_memory, 
+		       new_component(parser_memory, c_assign, "~val", val),
+		       cl);
+	val = new_component(parser_memory, c_recall, "~val");
+      }
+
+    cl = new_clist(parser_memory,
+		   new_component(parser_memory, c_builtin, b_set, 3, 
+				 new_component(parser_memory, c_recall, "~exp"),
+				 new_component(parser_memory, c_recall, "~ref"),
+				 make_binary(op, val, exp2)),
+		   cl);
+
+    if (is_postfix)
+      cl = new_clist(parser_memory,
+		     new_component(parser_memory, c_recall, "~val"),
+		     cl);
+
+    return new_component(parser_memory, c_block,
+			 new_codeblock(parser_memory,
+				       vl,
+				       reverse_clist(cl)));
 }
 
 void parser_init(void)
 {
 }
 
-struct lstack {
+static block_t line_memory;
+
+int yyparse();
+
+mfile parse(block_t heap)
+{
+  int result;
+
+  parser_memory = heap;
+  line_memory = new_block();
+  erred = FALSE;
+  result = yyparse();
+  free_block(line_memory);
+  line_memory = parser_memory = NULL;
+
+  return result == 0 && !erred ? parsed_code : NULL;
+}
+
+static struct lstack {
   struct lstack *next;
   int lineno;
   const char *filename;
 } *lstack;
 
-void lpush(int lineno, const char *filename)
+static void lpush(int alineno, const char *afilename)
 {
-  struct lstack *new = allocate(memory, sizeof *new);
+  struct lstack *newp = allocate(line_memory, sizeof *newp);
 
-  new->next = lstack;
-  lstack = new;
+  newp->next = lstack;
+  lstack = newp;
 
-  new->lineno = lineno;
-  new->filename = filename;
+  newp->lineno = alineno;
+  newp->filename = afilename;
 }
 
-void lpop(int *lineno, const char **filename)
+static void lpop(int *alineno, const char **afilename)
 {
-  *lineno = lstack->lineno;
-  *filename = lstack->filename;
+  *alineno = lstack->lineno;
+  *afilename = lstack->filename;
   lstack = lstack->next;
 }
 
-struct keyword {
-  char *name;
-  int value;
+struct mkeyword {
+  const char *name;
+  mtype value;
 };
 
-static struct keyword types[] = {
+static struct mkeyword types[] = {
   { "int", type_integer },
   { "string", type_string },
   { "vector", type_vector },
@@ -125,6 +256,8 @@ static struct keyword types[] = {
   { "table", type_table },
   { "object", type_object },
   { "character", type_character },
+  { "float", type_float },
+  { "bigint", type_bigint },
   { "gone", type_gone },
   { "function", stype_function },
   { "list", stype_list },
@@ -132,7 +265,7 @@ static struct keyword types[] = {
   { "any", stype_any },
   { "null", type_null }
 };
-#define NTYPES (sizeof types / sizeof(struct keyword))
+#define NTYPES (sizeof types / sizeof(struct mkeyword))
 
 mtype find_type(char *name)
 {
@@ -142,11 +275,13 @@ mtype find_type(char *name)
     if (!stricmp(name, types[i].name))
       return types[i].value;
 
-  error("unknown type %s", name);
+  compile_error("unknown type %s", name);
   return stype_none;
 }
 
 %}
+
+%expect 1
 
 %%
 
@@ -158,13 +293,13 @@ entry_types :
   module ;
 
 simple : expression_list 
- { $$ = new_file(f_plain, NULL, NULL, NULL, NULL, NULL, new_codeblock(NULL, $1)); } ;
+ { $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, new_codeblock(parser_memory, NULL, $1)); } ;
 
 module : MODULE optional_symbol imports reads writes code_block optional_semi
-  { $$ = new_file(f_module, $2, $3, NULL, $4, $5, $6); } ;
+  { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $6); } ;
 
 library : LIBRARY SYMBOL imports defines reads writes code_block optional_semi
-  { $$ = new_file(f_library, $2, $3, $4, $5, $6, $7); } ;
+  { $$ = new_file(parser_memory, f_library, $2, $3, $4, $5, $6, $7); } ;
 
 optional_symbol :
   SYMBOL |
@@ -189,8 +324,8 @@ expression_list :
   expression_list1 optional_semi { $$ = reverse_clist($1); } ;
 
 expression_list1 :
-  expression_list1 ';' expression { $$ = new_clist($3, $1); } |
-  expression { $$ = new_clist($1, NULL); } ;
+  expression_list1 ';' expression { $$ = new_clist(parser_memory, $3, $1); } |
+  expression { $$ = new_clist(parser_memory, $1, NULL); } ;
 
 optional_semi : /* empty */ | ';' ;
 
@@ -198,7 +333,7 @@ expression : labeled_expression | e0 ;
 
 labeled_expression : label expression 
   { 
-    $$ = new_component(c_labeled, $1, $2); 
+    $$ = new_component(parser_memory, c_labeled, $1, $2); 
   } ;
 
 label : LT SYMBOL GT { $$ = $2; } ;
@@ -207,22 +342,32 @@ optional_label : label { $$ = $1; }
 	       | /* empty */ { $$ = NULL; } ;
 
 e0 :
+  '@' pattern ASSIGN expression { $$ = new_pattern_component(parser_memory, $2, $4); } |
   control_expression |
-  function_expression { $$ = new_component(c_closure, $1); } |
-  variable ASSIGN expression { $$ = new_component(c_assign, $1, $3); } |
+  function_expression { $$ = new_component(parser_memory, c_closure, $1); } |
+  variable ASSIGN expression { $$ = new_component(parser_memory, c_assign, $1, $3); } |
+  variable OP_ASSIGN expression {
+      $$ = new_component(parser_memory, c_assign,
+			 $1, make_binary($2,
+					 new_component(parser_memory, c_recall, $1),
+					 $3));
+  } |
   e2 '[' expression ']' ASSIGN expression
-    { $$ = new_component(c_builtin, b_set, 3, $1, $3, $6); } |
+    { $$ = new_component(parser_memory, c_builtin, b_set, 3, $1, $3, $6); } |
+  e2 '[' expression ']' OP_ASSIGN expression {
+    $$ = make_ref_set_increment($1, $3, $5, $6, 0);
+  } |
   e1 ;
 
-control_expression : if | while | loop | exit ;
+control_expression : if | while | loop | exit | match ;
 
 if : 
   IF '(' expression ')' expression optional_else 
     {
       if ($6)
-        $$ = new_component(c_builtin, b_ifelse, 3, $3, $5, $6);
+        $$ = new_component(parser_memory, c_builtin, b_ifelse, 3, $3, $5, $6);
       else
-        $$ = new_component(c_builtin, b_if, 2, $3, $5);
+        $$ = new_component(parser_memory, c_builtin, b_if, 2, $3, $5);
     } ;		
 
 optional_else : 
@@ -232,19 +377,38 @@ optional_else :
 while : 
   WHILE '(' expression ')' expression
     {
-      $$ = new_component(c_builtin, b_while, 2, $3, $5);
+      $$ = new_component(parser_memory, c_builtin, b_while, 2, $3, $5);
     } ;
 
 loop :
   LOOP expression
     {
-      $$ = new_component(c_builtin, b_loop, 1, $2);
+      $$ = new_component(parser_memory, c_builtin, b_loop, 1, $2);
     } ;
+
+match :
+  MATCH '(' expression ')' '[' match_list optional_semi ']' {
+    $$ = new_match_component(parser_memory, $3, $6);
+  } ;
+
+match_list :
+  match_node { $$ = new_match_list(parser_memory, $1, NULL); } |
+  match_list ';' match_node { $$ = new_match_list(parser_memory, $3, $1); } ;
+
+opt_match_condition :
+  /* nothing */ { $$ = NULL; } |
+  SC_AND expression { $$ = $2; } ;
+
+match_node :
+  pattern_atom opt_match_condition PATTERN_MATCH expression {
+    
+    $$ = new_match_node(parser_memory, $1, $2, $4); 
+  } ;
 
 exit :
   MEXIT optional_label e0
     {
-      $$ = new_component(c_exit, $2, $3);
+      $$ = new_component(parser_memory, c_exit, $2, $3);
     } ;
 
 function_expression :
@@ -256,9 +420,9 @@ function_expression :
 
       lpop(&l, &f);
       if ($5.varargs)
-	$$ = new_vfunction($1, $4, $5.var, $6, l, f);
+	$$ = new_vfunction(parser_memory, $1, $4, $5.var, $6, l, f);
       else
-        $$ = new_function($1, $4, $5.args, $6, l, f);
+        $$ = new_function(parser_memory, $1, $4, $5.args, $6, l, f);
     }
   ;
 
@@ -268,17 +432,17 @@ optional_help :
 
 parameters : 
   '(' plist ')' { $$.varargs = FALSE; $$.args = $2; } |
-  variable { $$.varargs = TRUE; $$.var = $1; } ;
+  variable_name { $$.varargs = TRUE; $$.var = $1; } ;
 
 plist :
   /* empty */ { $$ = NULL; } |
   plist1 ;
 
 plist1 :
-  plist1 ',' type variable { $$ = new_vlist($4, $3, $1); } |
-  plist1 ',' variable { $$ = new_vlist($3, stype_any, $1); } |
-  type variable { $$ = new_vlist($2, $1, NULL); } |
-  variable { $$ = new_vlist($1, stype_any, NULL); } ;
+  plist1 ',' type variable_name { $$ = new_vlist(parser_memory, $4, $3, $1); } |
+  plist1 ',' variable_name { $$ = new_vlist(parser_memory, $3, stype_any, $1); } |
+  type variable_name { $$ = new_vlist(parser_memory, $2, $1, NULL); } |
+  variable_name { $$ = new_vlist(parser_memory, $1, stype_any, NULL); } ;
 
 optional_type :
   /* empty */ { $$ = stype_any; } |
@@ -289,6 +453,7 @@ type :
 
 e1 :
   e1 '.' e1 { $$ = make_binary(b_cons, $1, $3); } |
+  e1 XOR e1 { $$ = make_binary(b_xor, $1, $3); } |
   e1 SC_OR e1 { $$ = make_binary(b_sc_or, $1, $3); } |
   e1 OR e1 { $$ = make_binary(b_or, $1, $3); } |
   e1 SC_AND e1 { $$ = make_binary(b_sc_and, $1, $3); } |
@@ -312,63 +477,162 @@ e1 :
   '-' e1 %prec UMINUS { $$ = make_unary(b_negate, $2); } |
   NOT e1  { $$ = make_unary(b_not, $2); } |
   '~' e1  { $$ = make_unary(b_bitnot, $2); } |
+  INCREMENTER variable {
+    $$ = new_component
+      (parser_memory, c_assign, 
+       $2, 
+       make_binary($1,
+		   new_component(parser_memory, c_recall, $2),
+		   new_component(parser_memory, c_constant,
+				 new_constant(parser_memory, cst_int, 1))));
+  } |
+  variable INCREMENTER { 
+    $$ = new_postfix_inc_component(parser_memory, $1, $2); } |
+  INCREMENTER e2 '[' expression ']' {
+    $$ = make_ref_set_increment
+      ($2, $4, $1,
+       new_component(parser_memory, c_constant,
+		     new_constant(parser_memory, cst_int, 1)),
+       0);
+  } |
+  e2 '[' expression ']' INCREMENTER {
+    $$ = make_ref_set_increment
+      ($1, $3, $5,
+       new_component(parser_memory, c_constant,
+		     new_constant(parser_memory, cst_int, 1)),
+       1);
+  } |
   e2 ;
 
 e2 :
   function_call |
   array_ref |
-  variable { $$ = new_component(c_recall, $1); } |
-  simple_constant { $$ = new_component(c_constant, $1); } |
-  QUOTE constant { $$ = new_component(c_constant, $2); } |
-  code_block { $$ = new_component(c_block, $1); } |
+  variable { $$ = new_component(parser_memory, c_recall, $1); } |
+  simple_constant { $$ = new_component(parser_memory, c_constant, $1); } |
+  QUOTE constant { $$ = new_component(parser_memory, c_constant, $2); } |
+  code_block { $$ = new_component(parser_memory, c_block, $1); } |
   '(' expression ')' { $$ = $2; } ;
 
 array_ref :
   e2 '[' expression ']'
-    { $$ = new_component(c_builtin, b_ref, 2, $1, $3); } ;
+    { $$ = new_component(parser_memory, c_builtin, b_ref, 2, $1, $3); } ;
 
 function_call :
   e2 '(' call_list ')'
-    { $$ = new_component(c_execute, new_clist($1, $3)); } ;
+    { $$ = new_component(parser_memory, c_execute, new_clist(parser_memory, $1, $3)); } ;
 
 call_list :
   /* empty */ { $$ = NULL; } |
   call_list1 { $$ = reverse_clist($1); } ;
 
 call_list1 :
-  call_list1 ',' expression { $$ = new_clist($3, $1); } |
-  expression { $$ = new_clist($1, NULL); } ;
+  call_list1 ',' expression { $$ = new_clist(parser_memory, $3, $1); } |
+  expression { $$ = new_clist(parser_memory, $1, NULL); } ;
 
 constant :
   simple_constant |
-  '[' constant_list ']' { $$ = new_constant(cst_array, $2); } |
-  '(' constant_list ')' { $$ = new_constant(cst_list, $2); } ;
+  '{' table_entry_list '}' { $$ = new_constant(parser_memory, cst_table, $2); } |
+  '{' '}' { $$ = new_constant(parser_memory, cst_table, NULL); } |
+  '[' optional_constant_list ']' { $$ = new_constant(parser_memory, cst_array, $2); } |
+  '(' constant_list optional_constant_tail ')' { 
+    $$ = new_constant(parser_memory, cst_list, new_cstlist(parser_memory, $3, $2));
+  } |
+  '(' ')' { $$ = new_constant(parser_memory, cst_list, NULL); } ;
+
+optional_constant_tail :
+  /* empty */ { $$ = NULL; } |
+  '.' constant { $$ = $2; } ;
 
 simple_constant :
-  INTEGER { $$ = new_constant(cst_int, $1); } |
-  STRING { $$ = new_constant(cst_string, $1); } ;
+  string_constant |
+  INTEGER { $$ = new_constant(parser_memory, cst_int, $1); } |
+  FLOAT { $$ = new_constant(parser_memory, cst_float, $1); }; |
+  BIGINT { $$ = new_constant(parser_memory, cst_bigint, $1); }
+
+string_constant :
+  STRING { $$ = new_constant(parser_memory, cst_string, $1); } ;
+
+optional_constant_list :
+  /* empty */ { $$ = NULL; } |
+  constant_list;
 
 constant_list :
-  /* empty */ { $$ = NULL; } |
-  constant_list constant { $$ = new_cstlist($2, $1); } ;
+  constant { $$ = new_cstlist(parser_memory, $1, NULL); } |
+  constant_list constant { $$ = new_cstlist(parser_memory, $2, $1); } ;
+
+table_entry_list :
+  table_entry { $$ = new_cstlist(parser_memory, $1, NULL); } |
+  table_entry_list table_entry { $$ = new_cstlist(parser_memory, $2, $1); } ;
+
+table_entry :
+  string_constant ASSIGN constant { 
+    $$ = new_constant(parser_memory, cst_symbol, 
+		      new_cstpair(parser_memory, $1, $3));
+  } ;
+
+pattern :
+  pattern_list |
+  pattern_array ;
+
+pattern_atom :
+  pattern |
+  SINK { $$ = new_pattern_sink(parser_memory); } |
+  variable { $$ = new_pattern_symbol(parser_memory, $1, stype_any); } |
+  simple_constant { $$ = new_pattern_constant(parser_memory, $1); } |
+  ',' pattern_atom_expr { $$ = $2; } ;
+
+pattern_atom_expr :
+  variable { 
+    $$ = new_pattern_expression(parser_memory, 
+				new_component(parser_memory, c_recall, $1));
+  } |
+  '(' expression ')' { $$ = new_pattern_expression(parser_memory, $2); } ;
+
+pattern_sequence :
+  pattern_atom { $$ = new_pattern_list(parser_memory, $1, NULL); } |
+  pattern_sequence pattern_atom { $$ = new_pattern_list(parser_memory, $2, $1); } ;
+
+opt_pattern_sequence :
+  /**/ { $$ = NULL; } |
+  pattern_sequence ;
+
+opt_pattern_list_tail :
+  /**/ { $$ = NULL; } |
+  '.' pattern_atom { $$ = $2; } ;
+
+pattern_list :
+  '(' pattern_sequence opt_pattern_list_tail ')' { 
+    $$ = new_pattern_compound(parser_memory, pat_list, 
+			      new_pattern_list(parser_memory, $3, $2), 0);
+  } |
+  '(' ')' { $$ = new_pattern_compound(parser_memory, pat_list, NULL, 0); } ;
+
+pattern_array :
+  '[' opt_pattern_sequence ELLIPSIS ']' { 
+    $$ = new_pattern_compound(parser_memory, pat_array, $2, 1); 
+  } |
+  '[' opt_pattern_sequence ']' {
+    $$ = new_pattern_compound(parser_memory, pat_array, $2, 0);
+  } ;
 
 variable :
+  GLOBAL_SYMBOL |
   SYMBOL ;
 
-code_block : /* This junk to make grammar LALR(1) */
-  '[' expression optional_semi ']'
-    { $$ = new_codeblock(NULL, new_clist($2, NULL)); } |
-  '[' expression ';' expression_list ']' 
-    { $$ = new_codeblock(NULL, new_clist($2, $4)); } |
-  '[' '|' variable_list '|' expression_list ']' 
-    { $$ = new_codeblock($3, $5); } ;
+variable_name :
+  SYMBOL ;
+
+code_block :
+  '[' optional_variable_list expression_list ']' { 
+    $$ = new_codeblock(parser_memory, $2, $3);
+  } ;
+
+optional_variable_list :
+  /* empty */ { $$ = NULL; } |
+  '|' variable_list '|' { $$ = $2; } ;
 
 variable_list :
-  /* empty */ { $$ = NULL; } |
-  variable_list1 ;
-
-variable_list1 :
-  variable_list1 ',' variable { $$ = new_vlist($3, stype_none, $1); } |
-  variable { $$ = new_vlist($1, stype_none, NULL); } ;
+  variable_list ',' variable_name { $$ = new_vlist(parser_memory, $3, stype_none, $1); } |
+  variable_name { $$ = new_vlist(parser_memory, $1, stype_none, NULL); } ;
 
 %%

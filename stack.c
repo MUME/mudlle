@@ -1,46 +1,23 @@
-/* $Log: stack.c,v $
- * Revision 1.10  1995/07/15  15:24:37  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.9  1994/02/24  08:33:06  arda
- * Owl: New error messages.
- *
- * Revision 1.8  1994/02/03  22:50:02  dgay
- * Owl: C closures.
- *
- * Revision 1.7  1993/11/21  14:47:42  arda
- * Miscellaneous
- *
- * Revision 1.6  1993/05/02  07:38:04  un_mec
- * Owl: New output (mudlle ports).
- *
- * Revision 1.5  1993/04/22  18:58:51  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.4  1993/03/29  09:24:26  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:52  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.2  1992/12/30  14:10:55  un_mec
- * Owl:
- * Several changes:
- * - Variables don't have separate value & function cells, instead their are
- *   now 2 types: type_function & type_variable.
- * - print_value: New types (list, vector), printing rationalised.
- * - New type: list (Lisp style pair)
- * - lexer.l: Debug read_from_string
- * - debug_level & DEBUG macro provided to help debugging.
- *
- * Revision 1.1  1992/12/27  21:41:33  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: stack.c,v 1.10 1995/07/15 15:24:37 arda Exp $";
 
 #include <string.h>
 #include "runtime/runtime.h"
@@ -84,21 +61,21 @@ void stack_push(value v)
   ENV_ADD_ENTRY(stack, v);
 }
 
-value stack_get(ulong index)
+value stack_get(ulong aindex)
 {
   ulong used = intval(stack->used);
 
-  if (used <= index) runtime_error(error_stack_underflow);
-  return stack->values->data[used - index - 1];
+  if (used <= aindex) runtime_error(error_stack_underflow);
+  return stack->values->data[used - aindex - 1];
 }
 
-void stack_set(ulong index, value v)
+void stack_set(ulong aindex, value v)
 {
   ulong used = intval(stack->used);
 
   GCCHECK(v);
-  if (used <= index) runtime_error(error_stack_underflow);
-  stack->values->data[used - index - 1] = v;
+  if (used <= aindex) runtime_error(error_stack_underflow);
+  stack->values->data[used - aindex - 1] = v;
 }
 
 ulong stack_depth(void)

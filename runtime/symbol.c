@@ -1,54 +1,23 @@
-/* $Log: symbol.c,v $
- * Revision 1.13  1994/10/09  06:44:23  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.12  1994/09/15  19:48:10  arda
- * Performance improvements:
- *   improve reaction list rep
- *   make timed action lists C arrays
- * Check for readonly symbols
- *
- * Revision 1.11  1994/09/09  19:36:37  arda
- * Table prefixes.
- *
- * Revision 1.10  1994/09/06  13:54:03  arda
- * *** empty log message ***
- *
- * Revision 1.9  1994/08/16  19:17:21  arda
- * Added flags to primitives for better calling sequences.
- *
- * Revision 1.7  1993/11/27  11:29:25  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.6  1993/10/03  14:07:28  dgay
- * Bumper disun8 update.
- *
- * Revision 1.5  1993/08/15  21:02:13  un_mec
- * Owl: Several extras functions.
- *      rent.
- *
- * Revision 1.4  1993/04/22  18:59:30  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.3  1993/03/29  09:25:56  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:16:54  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:42:25  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: symbol.c,v 1.13 1994/10/09 06:44:23 arda Exp $";
 
 #include <string.h>
 #include "runtime/runtime.h"
@@ -132,11 +101,27 @@ TYPEDOP(table_ref, "table s -> x. Returns the value of s in symbol table",
   return sym->data;
 }
 
+TYPEDOP(table_lookup, "table s -> x. Returns the symbol for s in symbol table, or false if none",
+	  2, (struct table *table, struct string *s),
+	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
+{
+  struct symbol *sym;
+
+  TYPEIS(table, type_table);
+  TYPEIS(s, type_string);
+
+  if (!table_lookup(table, s->str, &sym) || !sym->data) return makebool(FALSE);
+  return sym;
+}
+
 static value table_mset(struct table *table, struct string *s, value x)
 {
   struct symbol *sym;
 
   TYPEIS(s, type_string);
+
+  if (((struct obj *)table)->flags & OBJ_READONLY) 
+    runtime_error(error_value_read_only);
 
   if (table_lookup(table, s->str, &sym)) 
     {
@@ -151,13 +136,13 @@ static value table_mset(struct table *table, struct string *s, value x)
       if (!(s->o.flags & OBJ_READONLY))
 	{
 	  struct string *news;
-	  struct gcpro gcpro1;
+	  struct gcpro gcpro3;
 
 	  /* Make a copy of index string (otherwise it may get modified...) */
-	  GCPRO1(s);
-	  news = (struct string *)allocate_string(type_string, strlen(s->str) + 1);
+	  GCPRO(gcpro3, s);
+	  news = (struct string *)allocate_string(type_string, string_len(s) + 1);
 	  strcpy(news->str, s->str);
-	  UNGCPRO();
+	  UNGCPRO1(gcpro3);
 	  
 	  s = news;
 	  s->o.flags |= OBJ_READONLY;
@@ -176,56 +161,32 @@ TYPEDOP(table_set, "table s x -> x. Sets the value of entry s in symbol table to
   return table_mset(table, s, x);
 }
 
-#ifdef MUME
-/* Support for mume instance symbol tables */
-
-struct table *mume_table(struct dynpro *table)
-{
-  if (!table->obj) 
-    {
-      dynpro(table, alloc_table(DEF_TABLE_SIZE));
-    }
-  else if (!TYPE(table->obj, type_table)) /* Somehow, some tables got corrupted */
-    {
-      mlog("BUG: Symbol table corrupted.");
-      table->obj = alloc_table(DEF_TABLE_SIZE);
-    }
-  return table->obj;
-}
-
-value mume_ref(struct dynpro *tab, struct string *s)
+TYPEDOP(table_remove, "table s -> b. Removes the entry for s in the table x. "
+	"Returns true if such an entry was found.",
+	2, (struct table *table, struct string *s),
+	OP_LEAF | OP_NOESCAPE, "tsx.")
 {
   struct gcpro gcpro1;
-  struct table *table;
-  struct symbol *sym;
+  int r;
 
+  TYPEIS(table, type_table);
   TYPEIS(s, type_string);
-  if (!tab->obj) return NULL;
+  if (((struct obj *)table)->flags & OBJ_READONLY)
+    runtime_error(error_value_read_only);
   GCPRO1(s);
-  table = mume_table(tab);
+  r = table_remove(table, s->str);
   UNGCPRO();
-  if (!table_lookup(table, s->str, &sym)) return NULL;
-  return sym->data;
+  return makebool(r);
 }
-
-value mume_set(struct dynpro *tab, struct string *s, value x)
-{
-  struct gcpro gcpro1, gcpro2;
-  struct table *table;
-
-  GCPRO2(s, x);
-  table = mume_table(tab);
-  UNGCPRO();
-  return table_mset(table, s, x);
-}
-#endif
 
 void symbol_init(void)
 {
   DEFINE("table?", tablep);
   DEFINE("make_table", make_table);
   DEFINE("table_ref", table_ref);
+  DEFINE("table_lookup", table_lookup);
   DEFINE("table_set!", table_set);
+  DEFINE("table_remove!", table_remove);
 
   DEFINE("table_list", table_list);
   DEFINE("table_prefix", table_prefix);

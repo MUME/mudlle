@@ -1,126 +1,22 @@
-/* $Log: alloc.h,v $
- * Revision 1.31  1995/07/16  09:16:48  arda
- * Add GCSTATS option.
- * Misc bug fixes.
- *
- * Revision 1.30  1995/07/15  15:24:10  arda
- * Context cleanup.
- * Remove GCDEBUG.
- *
- * Revision 1.29  1995/01/22  15:11:36  arda
- * Linux patches.
- *
- * Revision 1.28  1994/10/09  06:41:43  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.27  1994/09/16  13:07:09  arda
- * Rename protect to catch.
- * New protect/unprotect functions (like dynpro/undynpro).
- *
- * Revision 1.26  1994/09/15  19:46:35  arda
- * Performance improvements:
- *   setjmp -> _setjmp (setjmp is horrendously slow)
- *   cold_protect
- * reset_limits split from reset_interpreter
- * fix division of negative numbers
- * Add ?\{n,r,t}
- * gc_size returns "mutable" size
- *
- * Revision 1.25  1994/09/06  07:50:28  arda
- * Constant support: detect_immutability, global_set!, string_{i}search.
- *
- * Revision 1.24  1994/09/04  09:54:55  arda
- * Proper delayed actions, including mudlle interface. Affect mobs too.
- *
- * Revision 1.23  1994/08/29  13:17:11  arda
- * Contagious immutability.
- * Global array of values instead of variables.
- * Direct recursion.
- *
- * Revision 1.22  1994/08/22  11:18:19  arda
- * Moved code allocation to ins.c
- * Changes for mudlle compiler in MUME.
- *
- * Revision 1.21  1994/08/16  19:15:43  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.18  1994/05/08  14:13:28  arda
- * Event review
- *
- * Revision 1.17  1994/04/12  20:11:45  arda
- * (MD) Alignments and fixes + unknown from others...
- *
- * Revision 1.16  1994/02/24  08:32:46  arda
- * Owl: New error messages.
- *
- * Revision 1.15  1994/02/12  17:24:38  arda
- * Owl: Better code generated.
- *
- * Revision 1.14  1994/02/03  19:21:27  arda
- * nothing special(2)
- *
- * Revision 1.13  1994/01/29  19:50:21  dgay
- * Owl: add file & line information to functions.
- *
- * Revision 1.12  1994/01/27  21:59:29  dgay
- * Owl: Improve the collector (yet again).
- *      Now has just one zone for generation 0 (one extra copy involved).
- *
- * Revision 1.11  1994/01/27  17:07:59  arda
- * Hmm.
- *
- * Revision 1.10  1994/01/07  13:09:27  arda
- * Owl: Spec countdown continues.
- *
- * Revision 1.9  1994/01/02  15:50:12  arda
- * bug fix
- *
- * Revision 1.8  1993/12/23  20:48:48  dgay
- * Owl: New alloc.c: semi-generational collector.
- *      Included Amiga makefile for convenience.
- *
- * Revision 1.7  1993/12/06  19:20:49  arda
- * divers CLI
- *
- * Revision 1.6  1993/11/27  11:28:57  arda
- * Owl: Major changes to affect.
- *      Save mudlle data with players & objects.
- *      Change skill format on disk.
- *      Other minor changes.
- *      Still needs full debugging.
- *
- * Revision 1.5  1993/07/21  20:36:32  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
- * Revision 1.4  1993/04/22  18:58:31  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.3  1993/03/29  09:23:36  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.4  1993/03/17  12:49:24  dgay
- * Fixed GC of help strings in code blocks.
- * Added security features.
- *
- * Revision 1.3  1993/03/14  16:13:49  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.2  1993/01/08  23:57:05  un_mec
- * Owl: Allow characters and objects to appear in mudlle.
- *
- * Revision 1.1  1992/12/27  21:40:54  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef ALLOC_H
@@ -130,6 +26,13 @@
 
 void garbage_cleanup(void);
 void garbage_init(void);
+
+/* The GC block */
+extern ubyte *gcblock;
+extern ulong gcblocksize;
+
+#define ALIGN(x, n) (((x) + (n) - 1) & ~((n) - 1))
+#define CODE_ALIGNMENT 16
 
 #ifdef GCDEBUG
 extern ulong majorgen, minorgen;
@@ -142,6 +45,18 @@ extern ubyte *endgen1;
 #else
 #define GCCHECK(x) ;
 #endif
+#elif defined(GCQDEBUG)
+extern ulong maxobjsize;
+#define GCCHECK(x)							\
+  do if (pointerp(x) &&							\
+	 (((long)(x) & 2) ||						\
+	  (((struct obj *)(x))->size > maxobjsize && 			\
+	   ((struct obj *)(x))->garbage_type != garbage_forwarded) ||	\
+	  ((struct obj *)(x))->size < 8 ||				\
+	  ((struct obj *)(x))->garbage_type > garbage_mcode ||		\
+	  ((struct obj *)(x))->type >= last_type ||			\
+	  ((struct obj *)(x))->flags & ~3))				\
+     assert(0); while (0)
 #else
 #define GCCHECK(x) ;
 #endif
@@ -263,7 +178,7 @@ void detect_immutability(void);
    Note: not extremely efficient, to be called only occasionnally
 */
 
-unsigned long gc_size(value x, unsigned long *mutable);
+unsigned long gc_size(value x, unsigned long *mutble);
 /* Effects: Returns number of bytes accessible from x
      Sets mutable (if not NULL) to the # of mutable bytes in x
    Modifies: mutable
@@ -292,12 +207,16 @@ void *gc_save(value x, unsigned long *size);
 */
 
 value gc_load(void *_load, unsigned long size);
+#ifdef GCDEBUG
+#define gc_load_debug gc_load
+#else
 value gc_load_debug(void *_load, unsigned long size);
 /* Effects: Reloads a value saved with gc_save. <load,size> delimits
      the zone of memory containing gc_save's results.
      See gc_save for details.
    Returns: The loaded value
 */
+#endif
 
 #ifdef GCSTATS
 struct gcstats
@@ -323,15 +242,15 @@ void garbage_collect(long n);
    Modifies: the world
 */
 
-#ifdef sparc
-extern ulong *frame_start, *frame_end;
-#endif
-
 #ifdef AMIGA
 void push_registers(void);
 void pop_registers(void);
 extern struct vector *activation_stack;
 extern int registers_valid;		/* TRUE if static area is being used */
+#endif
+
+#ifdef i386
+void patch_globals_stack(value oldglobals, value newglobals);
 #endif
 
 #endif

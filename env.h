@@ -1,24 +1,22 @@
-/* $Log: env.h,v $
- * Revision 1.4  1994/10/09  06:42:00  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.3  1994/01/08  12:49:45  dgay
- * Owl: Improved code generation for blocks (they are not implemented
- * as 0 argument functions anymore, they are folded into the current
- * function instead).
- *
- * Revision 1.2  1993/03/29  09:23:48  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:14:10  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:05  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef ENV_H
@@ -28,10 +26,13 @@
 #include "code.h"
 #include "ins.h"
 
-typedef struct varlist
+/* if you change this, make sure to fix the lexer too */
+#define GLOBAL_ENV_PREFIX ":"
+
+typedef struct _varlist
 {
-  struct varlist *next;
-  variable_class class;
+  struct _varlist *next;
+  variable_class vclass;
   ulong offset;
 } *varlist;
 
@@ -39,16 +40,15 @@ void env_reset(void);
 /* Effects: Clears the environment stack
 */
 
-void env_push(vlist locals);
+void env_push(vlist locals, fncode fn);
 /* Effects: Starts a new environment (for a new function), with local
-     variables 'locals'.
+     variables 'locals' in function 'fn'.
 */
 
-void env_block_push(vlist locals, fncode fn);
+void env_block_push(vlist locals);
 /* Effects: We have entered a local scope of the environment at the top
      of the stack. Add locals to the list of variables for this scope,
      and initialise them to null if necessary.
-   Modifies: fn
 */
 
 void env_block_pop(void);

@@ -1,0 +1,11 @@
+load("regression/test.mud");
+load("regression/branch.mud");
+load("regression/calls.mud");
+load("regression/compute.mud");
+load("regression/gc.mud");
+load("regression/misc.mud");
+load("regression/prologs.mud");
+load("regression/s1.mud");
+load("regression/s2.mud");
+load("regression/s3.mud");
+load("regression/types.mud");

@@ -1,11 +1,23 @@
-/* $Log: bitset.c,v $
- * Revision 1.3  1994/10/09  06:44:03  arda
- * Libraries
- * Type inference
- * Many minor improvements
- * */
-
-static char rcsid[] = "$Id: bitset.c,v 1.3 1994/10/09 06:44:03 arda Exp $";
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+ */
 
 #include "runtime/runtime.h"
 #include "interpret.h"
@@ -16,21 +28,21 @@ TYPEDOP(new_bitset, "n -> bitset. Returns a bitset usable for storing n bits",
 	OP_LEAF | OP_NOESCAPE, ".s")
 {
   long size;
-  struct string *new;
+  struct string *newp;
   
   ISINT(n);
   size = (intval(n) + 7) >> 3;
-  new = (struct string *)allocate_string(type_string, size + 1);
-  new->str[size] = '\0';
+  newp = (struct string *)allocate_string(type_string, size + 1);
+  newp->str[size] = '\0';
   
-  return new;
+  return newp;
 }
 
 TYPEDOP(bcopy, "bitset1 -> bitset2. Makes a copy of bitset1",
 	1, (struct string *b),
 	OP_LEAF | OP_NOESCAPE, "s.s")
 {
-  struct string *new;
+  struct string *newp;
   struct gcpro gcpro1;
   long l;
   
@@ -38,11 +50,11 @@ TYPEDOP(bcopy, "bitset1 -> bitset2. Makes a copy of bitset1",
   
   GCPRO1(b);
   l = string_len(b) + 1;
-  new = (struct string *)allocate_string(type_string, l);
-  memcpy(new->str, b->str, l);
+  newp = (struct string *)allocate_string(type_string, l);
+  memcpy(newp->str, b->str, l);
   UNGCPRO();
   
-  return new;
+  return newp;
 }
 
 TYPEDOP(bclear, "bitset -> bitset. Clears all bits of bitset and returns it",

@@ -1,26 +1,26 @@
-/* $Log: calloc.c,v $
- * Revision 1.3  1993/05/02  07:37:37  un_mec
- * Owl: New output (mudlle ports).
- *
- * Revision 1.2  1993/03/29  09:23:37  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:13:53  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:40:55  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-static char rcsid[] = "$Id: calloc.c,v 1.3 1993/05/02 07:37:37 un_mec Exp $";
 
 #include <stdlib.h>
 #include <stdio.h>
-#ifdef MUME
-#include <malloc.h>
-#endif
 #include "mudlle.h"
 #include "calloc.h"
 #include "utils.h"
@@ -33,58 +33,59 @@ static char rcsid[] = "$Id: calloc.c,v 1.3 1993/05/02 07:37:37 un_mec Exp $";
        Individual deallocations are not possible.
 */
 
-#define ALIGN(x, n) ((x) + ((n) - 1) & ~((n) - 1))
-
 #define BLOCK_SIZE 10000	/* Should probably be chosen w/ respect to
 				   malloc implementation */
 
-struct block
+struct memblock
 {
     char *pos;			/* Where next to allocate from */
     char *end;			/* End of block */
-    struct block *previous;
+    struct memblock *previous;
     char data[BLOCK_SIZE];
 };
 
-static struct block *make_block(void)
+static struct memblock *make_block(void)
 {
-    struct block *new = malloc(sizeof(struct block));
+    struct memblock *newp = malloc(sizeof(struct memblock));
 
-    if (!new)
+    if (!newp)
     {
 	fprintf(stderr, "No memory left\n");
 	exit(1);
     }
-    new->pos = new->data;
-    new->end = new->data + BLOCK_SIZE;
-    new->previous = 0;
+    newp->pos = newp->data;
+    newp->end = newp->data + BLOCK_SIZE;
+    newp->previous = 0;
 
-    return new;
+    return newp;
 }
 
 block_t new_block(void)
 /* Return: A new block from which to allocate some memory.
 */
 {
-    block_t new = xmalloc(sizeof *new);
+    block_t newp = xmalloc(sizeof *newp);
 
-    *new = make_block();
-    return new;
+    *newp = make_block();
+    return newp;
 }
 
 void free_block(block_t b)
 /* Effect: Free all memory allocated in block b.
 */
 {
-    struct block *blk = *b;
+#if 1
+    struct memblock *blk = *b;
 
     while (blk)
     {
-	struct block *prev = blk->previous;
+	struct memblock *prev = blk->previous;
 
 	free(blk);
 	blk = prev;
     }
+    free(b); /* A good idea, 9 years late. */
+#endif
 }
 
 void *allocate(block_t b, unsigned long size)
@@ -95,7 +96,7 @@ void *allocate(block_t b, unsigned long size)
      for every BLOCK_SIZE bytes allocated.
 */
 {
-    struct block *blk = *b;
+    struct memblock *blk = *b;
     void *result;
 
     /* This could depend on the machine */
@@ -105,13 +106,13 @@ void *allocate(block_t b, unsigned long size)
     if ((blk->pos += size) >= blk->end)
     {
 	/* Block full, get new one */
-	struct block *new = make_block();
+	struct memblock *newp = make_block();
 
 	assert(size < BLOCK_SIZE);
-	new->previous = blk;
-	*b = new;
-	result = new->pos;
-	new->pos += size;
+	newp->previous = blk;
+	*b = newp;
+	result = newp->pos;
+	newp->pos += size;
     }
     return result;
 }

@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 /* Simple type inference for mudlle
 
   Based on a "constraint model":
@@ -201,11 +222,11 @@
   instruction to produce the real constraints.
 
   Branches: like compute instructions, these have constraint
-  templates. The only difference is that their constraints have
-  no consequence component (see also the "Some notes" section
-  below for a possible improvement).
+  templates, though with no consequence. In addition, basic blocks
+  that end in a branch may have an additional constraint for the
+  true branch, and another for the false branch.
 
-  Traps: like branches.
+  Traps: like compute instructions, again with no consequence.
 
   Memory: these are added after the optimisation phase, so can
   be ignored.
@@ -276,12 +297,6 @@
   reduces the number of loops were that information is missing
   b) the first iteration of a loop could be unrolled (not done)
 
-  Another possible improvement is to generate different type_exit()
-  sets for all the exits of a block (this is useful, eg if the block
-  terminates with a test of a == b. Success implies that a and b are
-  equal and therefore have the same type set, while failure implies
-  nothing).
-
   The framework does not consider the use of the same variable
   as multiple arguments (eg a[i] = i). Consider. (Correct solution
   appears to be that typeset for var is *intersection* of the 
@@ -336,7 +351,7 @@
 */
 
 library inference // type inference
-requires system, misc, sequences, graph,
+requires system, misc, sequences, graph, dlist,
   compiler, vars, flow, optimise, ins3
 defines mc:infer_types, mc:show_type_info, mc:constant?, mc:itypemap,
   itype_none, itype_function, itype_integer, itype_string, itype_vector,
@@ -348,7 +363,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
     make_condition2, instantiate_constraint, build_iconstraint, new_typesets,
     generate_constraints, evaluate_condition, apply_iconstraint, typeset_eq?,
     typeset_union!, extract_types, show_typesets, showset, show_constraints,
-    show_constraint, show_c, show_condition |
+    show_constraint, show_c, show_condition, generate_branch_constraints |
 
   itype_none = 0;		// no type
 
@@ -436,30 +451,32 @@ writes tnargs, tncstargs, tnfull, tnpartial
   protect(typesets);
 
   mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
-    (itype_other,
-     itype_function,
-     itype_other,
-     itype_other,
-     itype_function,
-     itype_function,
-     itype_function,
-     itype_integer,
-     itype_string,
-     itype_vector,
-     itype_pair,
-     itype_symbol,
-     itype_table,
-     itype_other,
-     itype_other,
-     itype_other,
-     itype_other,
-     itype_other,
-     itype_other,
-     itype_null,
-     itype_none,
-     itype_any,
-     itype_function,
-     itype_pair | itype_null);
+    (itype_other,	// type_code
+     itype_function,	// type_closure
+     itype_other,	// type_variable
+     itype_other,	// type_internal
+     itype_function,	// type_primitive
+     itype_function,	// type_varargs
+     itype_function,	// type_secure
+     itype_integer,	// type_integer
+     itype_string,	// type_string
+     itype_vector,	// type_vector
+     itype_pair,	// type_pair
+     itype_symbol,	// type_symbol
+     itype_table,	// type_table
+     itype_other,	// type_private
+     itype_other,	// type_object
+     itype_other,	// type_character
+     itype_other,	// type_gone
+     itype_other,	// type_outputport
+     itype_other,	// type_mcode
+     itype_other,	// type_float
+     itype_other,	// type_bigint
+     itype_null,	// type_null
+     itype_none,	// stype_none
+     itype_any,		// stype_any
+     itype_function,	// stype_function
+     itype_pair | itype_null);	// stype_list
   
   // traps are handled explicitly (only trap_type is of interest and
   // it is special)
@@ -712,6 +729,60 @@ writes tnargs, tncstargs, tnfull, tnpartial
       else constraints
     ];
 
+  generate_branch_constraints = fn (block)
+    // Types: block: cfg block
+    // Returns: a pair of constraints for blocks that end in "interesting"
+    //   branches, false otherwise
+    //   The first element of the pair is applied when the branch is taken,
+    //   the 2nd when it isn't.
+    [
+      | lastins, lastil, op, type, reversed, ctrue, cfalse, var |
+
+      lastil = dget(dprev(block[mc:f_ilist]));
+      lastins = lastil[mc:il_ins];
+      // type branches are interesting, so is == and != null.
+      if (lastins[mc:i_class] != mc:i_branch)
+	exit<function> false;
+
+      op = lastins[mc:i_bop];
+      if (op >= mc:branch_type?)
+	[
+	  var = car(lastins[mc:i_bargs]);
+	  if (op >= mc:branch_ntype?)
+	    [
+	      type = op - mc:branch_ntype?;
+	      reversed = true;
+	    ]
+	  else
+	    [
+	      type = op - mc:branch_type?;
+	      reversed = false;
+	    ]
+	]
+      else if ((op == mc:branch_eq || op == mc:branch_ne) &&
+	       lfind?(fn (v) mc:constant?(v) == itype_null,
+		      lastins[mc:i_bargs])) // comparison to null
+	[
+	  type = type_null;
+	  // constant folding prevents null == null
+	  var = lfind?(fn (v) mc:constant?(v) != itype_null,
+		       lastins[mc:i_bargs]);
+	  reversed = op == mc:branch_ne;
+	]
+      else
+	exit<function> false; // not interesting
+
+      type = mc:itypemap[type];
+      ctrue = sequence(make_condition1(type, var) . null, false, null);
+      ctrue = build_iconstraint(lastil, ctrue . null);
+      cfalse = sequence(make_condition1(itype_any & ~type, var) . null,
+			false, null);
+      cfalse = build_iconstraint(lastil, cfalse . null);
+
+      if (reversed) cfalse . ctrue
+      else ctrue . cfalse
+    ];
+
   evaluate_condition = fn (condition, typeset)
     // Types: condition: condition
     //        typeset: vector of typesets
@@ -826,6 +897,9 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	  | ins, class, vtype, qvtype, iconstraint, typeset |
 
 	  ins = il[mc:il_ins];
+	  //mc:print_ins(ins, null);
+	  //display("  types:"); show_typesets(car(types));
+	  //newline();
 	  class = ins[mc:i_class];
 	  typeset = car(types);
 
@@ -861,18 +935,25 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	    ];
 
 	  if (class == mc:i_compute)
-	    if (ins[mc:i_aop] != mc:b_assign)
-	      ins[mc:i_atypes] = lmap(vtype, ins[mc:i_aargs])
+	    [
+	      if (ins[mc:i_aop] != mc:b_assign)
+		ins[mc:i_atypes] = lmap(vtype, ins[mc:i_aargs])
+	    ]
 	  else if (class == mc:i_branch)
-	    if (ins[mc:i_bop] >= mc:branch_lt)
-	      ins[mc:i_btypes] = lmap(vtype, ins[mc:i_bargs])
-	    else 0
+	    [
+	      if (ins[mc:i_bop] >= mc:branch_lt)
+		ins[mc:i_btypes] = lmap(vtype, ins[mc:i_bargs]);
+	    ]
 	  else if (class == mc:i_trap && ins[mc:i_top] == mc:trap_type)
 	    ins[mc:i_ttypes] = lmap(vtype, ins[mc:i_targs]);
 
 	  if (cdr(types) != null && (iconstraint = cadr(types))[0] == il)
-	    // this instruction has a constraint
-	    apply_iconstraint(iconstraint, typeset) . cddr(types)
+	    [
+	      // this instruction has a constraint
+	      //display("applying "); show_constraint(iconstraint);
+	      //newline();
+	      apply_iconstraint(iconstraint, typeset) . cddr(types)
+	    ]
 	  else
 	    types
 	];
@@ -884,6 +965,8 @@ writes tnargs, tncstargs, tnfull, tnpartial
 
 	   block = graph_node_get(n);
 	   types = block[mc:f_types];
+	   //mc:ins_list1(block[mc:f_ilist]);
+	   //mc:show_type_info(types);
 	   dreduce(compute_types, types[mc:flow_in] . types[mc:flow_gen],
 		   block[mc:f_ilist]);
 	 ], cdr(fg));
@@ -913,7 +996,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	  newline();
 	];
       mc:recompute_vars(ifn, true);
-      mc:flow_ambiguous(ifn);
+      mc:flow_ambiguous(ifn, mc:closure_write);
 
       fg = ifn[mc:c_fvalue];
       nvars = ifn[mc:c_fnvars];
@@ -930,8 +1013,9 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	   block = graph_node_get(n);
 	   block[mc:f_types] = vector
 	     (lreverse!(mc:scan_ambiguous(generate_constraints, null,
-					  block, globals)),
-	      null, // kill is unused (complex gen)
+					  block, globals, mc:closure_write)),
+	      // use kill slot for per-edge constraint
+	      generate_branch_constraints(block),
 	      new_typesets(ifn),
 	      new_typesets(ifn)); // no map
 	 ], cdr(fg));
@@ -958,7 +1042,25 @@ writes tnargs, tncstargs, tnfull, tnpartial
 
 	  // compute in as 'union' of out's of predecessors
 	  new_in = types[mc:flow_in];
-	  graph_edges_in_apply(fn (predecessor) typeset_union!(new_in, graph_node_get(graph_edge_from(predecessor))[mc:f_types][mc:flow_out]), n);
+	  graph_edges_in_apply
+	    (fn (predecessor)
+	     [
+	       | pnode, ptypes, branch_constraints, flow_out |
+
+	       pnode = graph_node_get(graph_edge_from(predecessor));
+	       ptypes = pnode[mc:f_types];
+	       flow_out = ptypes[mc:flow_out];
+	       branch_constraints = ptypes[mc:flow_kill]; // slot reuse
+	       if (branch_constraints)
+		 flow_out = apply_iconstraint
+		   (if (graph_edge_get(predecessor))
+		      // fallthrough, ie false edge
+		      cdr(branch_constraints)
+		    else // branch, ie true edge
+		      car(branch_constraints),
+		    flow_out);
+	       typeset_union!(new_in, flow_out);
+	     ], n);
 	  types[mc:flow_in] = new_in;
 
 	  // compute new out

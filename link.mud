@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library link // A linker.
 requires compiler, vars, system, sequences
 defines mc:prelink
@@ -89,7 +110,8 @@ writes mc:this_module, mc:erred, mc:linkrun
 	      | code |
 	  
 	      code = make_code(prelinked_module[pmodule_body], seclev);
-	      catch_error(fn () [ ok = true . make_closure(code)() ], false);
+	      ok = true;
+	      catch_error(fn () make_closure(code)(), false);
 	    ];
 
 	  if (mname)
@@ -282,12 +304,12 @@ writes mc:this_module, mc:erred, mc:linkrun
 	     top[mc:c_ffilename],
 	     top[mc:c_flineno],
 	     lmap(fn (foffset) prelink(car(foffset)) . cdr(foffset),
-		  info[2]), // sub-functions
-	     info[1], // constants
-	     info[0], // builtins
-	     info[3], // globals (offsets)
-	     info[4], // globals (constant)
-	     info[5]) // primitives
+		  info[mc:a_subfns]), // sub-functions
+	     info[mc:a_constants], // constants
+	     info[mc:a_builtins], // builtins
+	     info[mc:a_globals], // globals (offsets)
+	     info[mc:a_kglobals], // globals (constant)
+	     info[mc:a_primitives]) // primitives
     ];
 
 

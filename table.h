@@ -1,29 +1,22 @@
-/* $Log: table.h,v $
- * Revision 1.6  1994/10/09  06:43:03  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.5  1994/09/09  19:36:18  arda
- * TAble prefixes.
- *
- * Revision 1.4  1993/08/15  21:00:29  un_mec
- * Owl: Overload [].
- *      Added xcalloc, xrealloc.
- *
- * Revision 1.3  1993/04/22  18:58:55  un_autre
- * (MD) & Owl. Bug fixes. /player fixes. EVER_WHINER flag. saving_spells adjusted.
- *
- * Revision 1.2  1993/03/29  09:24:31  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:15:01  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:38  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef TABLE_H
@@ -42,6 +35,12 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym);
      Otherwise, returns FALSE. table_add_fast can be called immediately
      if you wish to add an entry to name to the symbol table (but no intervening
      call to the module should be made).
+*/
+
+int table_remove(struct table *table, const char *name);
+/* Effects: Removes table[name] from data. Rehashes nescessary values.
+   Modifies: table
+   Returns: FALSE if the entry wasn't found
 */
 
 int table_set(struct table *table, const char *name, value data);
@@ -75,6 +74,13 @@ struct list *table_prefix(struct table *table, struct string *prefix);
      prefix (case insensitive, like all table ops)
 */
 
-#define DEF_TABLE_SIZE 32	/* Convenient initial size */
+void protect_table(struct table *table);
+void immutable_table(struct table *table);
+
+struct symbol *table_exists(struct table *table, int (*check)(struct symbol *));
+void table_foreach(struct table *table, void (*action)(struct symbol *));
+int table_entries(struct table *table);
+
+#define DEF_TABLE_SIZE 8	/* Convenient initial size */
 
 #endif

@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library optimise // The actual optimisations
 requires compiler, vars, flow, ins3, 
   system, graph, dlist, sequences, misc
@@ -6,7 +27,7 @@ reads mc:verbose
 [
   | fold, compute_ops, trap_ops, branch_ops, useless_instructions,
     remove_instruction, fold_constants, propagate_copies,
-    eliminate_dead_code, change, fold_branch |
+    eliminate_dead_code, change, fold_branch, pfoldbranch, partialfold |
 
   fold = fn (ops, op, args, dofold)
     // Types: ops: array of function
@@ -33,7 +54,9 @@ reads mc:verbose
 	  fail();
 	if (val) [ dofold(cdr(val)); true ]
 	else false
-      ];
+      ]
+    else
+      false;
 
   compute_ops = sequence
     (fn (x, y) true . x or y,
@@ -133,6 +156,34 @@ reads mc:verbose
 	];
     ];
 
+  partialfold = fn (args, pfold)
+    [
+      | arg1, arg2, t |
+
+      arg1 = car(args); arg2 = cadr(args);
+      if (arg1[mc:v_class] == mc:v_constant)
+	[
+	  t = arg1; arg1 = arg2; arg2 = t;
+	];
+      if (arg2[mc:v_class] == mc:v_constant)
+	pfold(arg1, arg2[mc:v_kvalue]);
+    ];
+
+  pfoldbranch = fn (il, bop, arg)
+    [
+      | ins |
+
+      ins = il[mc:il_ins];
+      ins[mc:i_bop] = bop;
+      ins[mc:i_bargs] = arg . null;
+      if (mc:verbose >= 3)
+	[
+	  display(format("FOLDOR %s", il[mc:il_number]));
+	  newline();
+	];      
+    ];
+
+
   fold_constants = fn (il)
     // Types: il : instruction
     // Effects: Does constant folding on given instruction
@@ -143,23 +194,75 @@ reads mc:verbose
       class = ins[mc:i_class];
 
       if (class == mc:i_compute)
-	fold(compute_ops, ins[mc:i_aop], ins[mc:i_aargs],
-	     fn (val) // folding function
-	     [
-	       ins[mc:i_aop] = mc:b_assign;
-	       ins[mc:i_aargs] = mc:var_make_constant(val) . null;
-	       if (mc:verbose >= 3)
+	[
+	  | op, args, foldtocst |
+
+	  op = ins[mc:i_aop]; args = ins[mc:i_aargs];
+	  foldtocst = fn (val) // folding function
+	    [
+	      ins[mc:i_aop] = mc:b_assign;
+	      ins[mc:i_aargs] = mc:var_make_constant(val) . null;
+	      if (mc:verbose >= 3)
+		[
+		  display(format("FOLD %s", il[mc:il_number]));
+		  newline();
+		];
+	      change = true;
+	    ];
+	  if (!fold(compute_ops, op, args, foldtocst))
+	    // special cases for partial constant folding
+	    if (op == mc:b_or || op == mc:b_and)
+	      partialfold
+		(args,
+		 fn (arg1, x)
 		 [
-		   display(format("FOLD %s", il[mc:il_number]));
-		   newline();
-		 ];
-	       change = true;
-	     ])
+		   // folds to: 'true', 'false', 'arg1 or false'
+		   if (op == mc:b_or && x)
+		     foldtocst(true)
+		   else if (op == mc:b_and && !x)
+		     foldtocst(false)
+		   else
+		     [
+		       ins[mc:i_aop] = mc:b_or;
+		       ins[mc:i_aargs] =
+			 arg1 . mc:var_make_constant(false) . null;
+		       // don't set change, doesn't enable further opt
+		       if (mc:verbose >= 3)
+			 [
+			   display(format("FOLDOR %s", il[mc:il_number]));
+			   newline();
+			 ];
+		     ]
+		 ])
+	]
       else if (class == mc:i_branch)
-	fold(branch_ops, ins[mc:i_bop], ins[mc:i_bargs],
-	     fn (val) fold_branch(il, val));
+	[
+	  | op, args |
+	  
+	  op = ins[mc:i_bop]; args = ins[mc:i_bargs];
+	  if (!fold(branch_ops, ins[mc:i_bop], ins[mc:i_bargs],
+		    fn (val) fold_branch(il, val)))
+	    // special cases for partial constant folding
+	    if (op == mc:branch_or || op == mc:branch_nor ||
+		op == mc:branch_and || op == mc:branch_nand)
+	      partialfold
+		(args,
+		 fn (arg1, x)
+		 [
+		   if (op == mc:branch_nand && !x ||
+		       op == mc:branch_or && x)
+		     fold_branch(il, true)
+		   else if (op == mc:branch_and && !x ||
+			    op == mc:branch_nor && x)
+		     fold_branch(il, false)
+		   else if (op == mc:branch_or || op == mc:branch_and)
+		     pfoldbranch(il, mc:branch_true, arg1)
+		   else
+		     pfoldbranch(il, mc:branch_false, arg1)
+		 ])
+	];
     ];
-    
+      
   propagate_copies = fn (f)
     // Misses copies that are born and die within a basic block
     // This would not seem to be a great problem, as phase2 generates an
@@ -168,17 +271,17 @@ reads mc:verbose
     // extra step is necessary anyway.
     [
       | propagate_copy, all_copies, globals |
-
+	  
       all_copies = mc:flow_copies(f);
       globals = mc:set_vars!(mc:new_varset(f), f[mc:c_fglobals]);
       mc:set_vars!(globals, f[mc:c_fclosure]);
-
+	  
       propagate_copy = fn (ncopy)
 	[
 	  | cblock, dvar, cins, repvar, cfirst, uses, local_uses, nrepvar,
 	    rep, replist, replaceable_use?, can_repall, scan, ndvar, umap,
-	    copy, repuse |
-
+	      copy, repuse |
+	      
 	  rep = fn (v) if (v == dvar) repvar else v;
 	  replist = fn (s) 
 	    while (s != null)
@@ -189,10 +292,10 @@ reads mc:verbose
 	  repuse = fn (use)
 	    [
 	      | ins, class |
-
+		  
 	      ins = use[mc:il_ins];
 	      if (ins == null) exit<function> 0; // instruction is gone
-
+	      
 	      if (mc:verbose >= 3)
 		[
 		  display(format("COPY %s to %s in %s",
@@ -200,9 +303,9 @@ reads mc:verbose
 		  newline();
 		];
 	      change = true;
-
+	      
 	      class = ins[mc:i_class];
-
+	      
 	      if (class == mc:i_compute)
 		replist(ins[mc:i_aargs])
 	      else if (class == mc:i_branch)
@@ -221,25 +324,25 @@ reads mc:verbose
 	      else if (class == mc:i_return)
 		ins[mc:i_rvalue] = rep(ins[mc:i_rvalue])
 	    ];
-
+	  
 	  replaceable_use? = fn (use)
 	    [
 	      | ublock, uins, first, uclass, ambvars |
-
+	      
 	      uins = use[mc:il_ins];
 	      if (uins == null) exit<function> true; // instruction was removed...
 	      uclass = uins[mc:i_class];
 	      ublock = graph_node_get(use[mc:il_node]);
 	      first = ublock[mc:f_ilist];
 	      ambvars = ublock[mc:f_ambiguous][mc:flow_out];
-
+	      
 	      // Note: can't replace use in closures
 	      if (uclass != mc:i_closure && 
 		  bit_set?(ublock[mc:f_copies][mc:flow_in], ncopy) &&
 		  !((uclass == mc:i_return ||
 		     uclass == mc:i_call) && // escapes from function ?
 		    (bit_set?(ambvars, ndvar) || bit_set?(globals, ndvar))))
-		loop // there must be no prior replacements
+		loop		// there must be no prior replacements
 		  [
 		    | fil, fins, fclass |
 		    
@@ -255,13 +358,13 @@ reads mc:verbose
 			(bit_set?(ambvars, nrepvar) || bit_set?(globals, nrepvar) ||
 			 bit_set?(ambvars, ndvar) || bit_set?(globals, ndvar)))
 		      exit false;
-			
+		    
 		    first = dnext(first);
 		  ]
 	      else
 		false
 	    ];
-
+	  
 	  copy = all_copies[ncopy];
 	  cblock = graph_node_get(copy[mc:il_node]);
 	  cins = copy[mc:il_ins];
@@ -270,34 +373,34 @@ reads mc:verbose
 	  repvar = car(cins[mc:i_aargs]);
 	  nrepvar = repvar[mc:v_number];
 	  umap = cblock[mc:f_uses][mc:flow_map];
-
+	  
 	  // Find all uses of this copy
 	  // we know that the copy statement defines all uses of x
 	  // which are available at the end of its block (otherwise 
 	  // it would not be a member of all_copies)
-
+	  
 	  uses = breduce(fn (nuse, l)
 			 [
 			   | use |
-
+			   
 			   use = umap[nuse];
 			   if (car(use) == dvar) cdr(use) . l
 			   else l
 			 ], null, cblock[mc:f_uses][mc:flow_out]);
-
+	  
 	  // add all local uses (in block of copy)
 	  cfirst = scan = cblock[mc:f_ilist];
 	  while (dget(scan) != copy) scan = dnext(scan);
-
+	  
 	  can_repall = true;
 	  // local uses may make complete replacement impossible
 	  loop
 	    [
 	      | il, ins, class |
-
+	      
 	      scan = dnext(scan);
 	      if (scan == cfirst) exit 0;
-
+	      
 	      il = dget(scan);
 	      ins = il[mc:il_ins];
 	      class = ins[mc:i_class];
@@ -309,12 +412,12 @@ reads mc:verbose
 			 bit_set?(globals, ndvar))))
 		[
 		  can_repall = false;
-		  exit 0 // and no further uses are legal
+		  exit 0		// and no further uses are legal
 		]
 	      else if (bit_set?(il[mc:il_arguments], ndvar))
 		local_uses = il . local_uses;
 	    ];
-
+	  
 	  // if repvar is a constant, propagate it anywhere it reaches
 	  if (repvar[mc:v_class] == mc:v_constant)
 	    [
@@ -328,48 +431,48 @@ reads mc:verbose
 	      lforeach(repuse, local_uses);
 	    ]
 	];
-
+      
       for (0, vector_length(all_copies) - 1, propagate_copy);
     ];
-
+  
   useless_instructions = fn (ifn, globals)
     [
       | useless |
-
+      
       graph_nodes_apply
 	(fn (n)
 	 [
 	   | block, uses, ilist, scan, defined, amblist, local_uses, vmap |
-
+	   
 	   block = graph_node_get(n);
 	   uses = bitset_to_list(block[mc:f_uses][mc:flow_out],
 				 block[mc:f_uses][mc:flow_map]);
 	   ilist = block[mc:f_ilist];
-
+	   
 	   // Precompute ambiguous information for each
 	   // instruction, in reverse order
 	   amblist = mc:scan_ambiguous(fn (il, ambiguous, amblist)
-				         ambiguous . amblist, null,
-				       block, globals);
-
+				       ambiguous . amblist, null,
+				       block, globals, mc:closure_write);
+	   
 	   defined = mc:new_varset(ifn);
 	   local_uses = mc:new_varset(ifn);
 	   vmap = ifn[mc:c_fallvars];
 	   scan = ilist;
-
+	   
 	   loop
 	     [
 	       | il, ins, class, args, ndvar |
-
+	       
 	       scan = dprev(scan);
 	       il = dget(scan);
 	       ins = il[mc:il_ins];
 	       class = ins[mc:i_class];
-
+	       
 	       ndvar = il[mc:il_defined_var];
 	       args = mc:barguments(il, car(amblist));
 	       amblist = cdr(amblist);
-
+	       
 	       if (class == mc:i_branch &&
 		   ins[mc:i_bop] == mc:branch_never ||
 		   class == mc:i_trap &&
@@ -380,9 +483,10 @@ reads mc:verbose
 		   (class == mc:i_compute ||
 		    class == mc:i_memory && ins[mc:i_mop] == mc:memory_read) &&
 		   bit_clear?(local_uses, ndvar) &&
-		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)))
+		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)) &&
+		   mc:var_base(vmap[ndvar])[mc:v_lclosure_uses] == 0)
 		 useless = scan . useless;
-
+	       
 	       if (ndvar)
 		 [
 		   set_bit!(defined, ndvar);
@@ -395,23 +499,23 @@ reads mc:verbose
 	 ], cdr(ifn[mc:c_fvalue]));
       useless
     ];
-
+  
   remove_instruction = fn (f, ilpos)
     [
       | il, ins, block, first, nblock, olabel |
-
+      
       il = dget(ilpos);
       ins = il[mc:il_ins];
       il[mc:il_ins] = null; // note removal of instruction
       block = il[mc:il_node];
       first = graph_node_get(block)[mc:f_ilist];
-
+      
       if (dnext(ilpos) != ilpos) // remains more than one instruction
 	[
 	  if (ilpos == first) // move second instruction up
 	    [
 	      | second |
-
+	      
 	      second = dnext(first);
 	      il[mc:il_ins] = dget(second)[mc:il_ins];
 	      dremove!(second, second)
@@ -423,48 +527,48 @@ reads mc:verbose
 	[
 	  // find fall through block
 	  graph_edges_out_apply(fn (e) if (graph_edge_get(e))
-				  nblock = graph_edge_to(e),
+				nblock = graph_edge_to(e),
 				block);
 	  assert(nblock != null);
-
+	  
 	  // if block was entry block, change
 	  if (car(f[mc:c_fvalue]) == block)
 	    set_car!(f[mc:c_fvalue], nblock);
-
+	  
 	  // edges into block becomes edges into nblock
 	  lforeach(fn (e)
 		   [
 		     graph_add_edge(graph_edge_from(e), nblock, graph_edge_get(e));
 		     graph_remove_edge(e)
 		   ], graph_edges_in(block));
-
+	  
 	  // set label (if any) to first instruction of nblock
 	  if (olabel = il[mc:il_label])
 	    mc:set_label(olabel, dget(graph_node_get(nblock)[mc:f_ilist]));
 	]
     ];
-
+  
   eliminate_dead_code = fn (f)
     [
       | fg, entry, rem, useless, fval |
-
+      
       // assumes that edges removed because of branch changes
       // have already been handled
-
+      
       // remove:
       //   useless branches
       //   useless traps
       //   unused definitions
-
+      
       // as a result:
       //   some labels may become unused
       //   some blocks may be mergeable (not done for now)
       //   some blocks may disappear (no instructions left)
       //   some blocks may be unreachable
-
+      
       fval = f[mc:c_fvalue];
       fg = cdr(fval);
-
+      
       useless = useless_instructions
 	(f, mc:set_vars!(mc:set_vars!(mc:new_varset(f), f[mc:c_fglobals_write]),
 			 f[mc:c_fclosure_write]));
@@ -480,27 +584,27 @@ reads mc:verbose
 	  change = true;
 	];
       lforeach(fn (ins) remove_instruction(f, ins), useless);
-
+      
       entry = car(fval);
       // remove useless nodes (never the entry node!)
       lforeach(fn (n) if (n != entry && graph_edges_in(n) == null)
-	         [
-		   // unreachable
-		   change = true;
-		   if (mc:verbose >= 3)
-		     [
-		       display("UNREACHABLE");
-		       newline();
-		     ];
-		   lforeach(fn (e) graph_remove_edge(e), graph_edges_out(n));
-		   graph_remove_node(n)
-		 ], graph_nodes(fg));
-
+	       [
+		 // unreachable
+		 change = true;
+		 if (mc:verbose >= 3)
+		   [
+		     display("UNREACHABLE");
+		     newline();
+		   ];
+		 lforeach(fn (e) graph_remove_edge(e), graph_edges_out(n));
+		 graph_remove_node(n)
+	       ], graph_nodes(fg));
+      
       // remove aliases and useless labels
       graph_nodes_apply(fn (n) mc:remove_aliases(graph_node_get(n)[mc:f_ilist]), fg);
       graph_nodes_apply(fn (n) mc:remove_labels(graph_node_get(n)[mc:f_ilist]), fg);
     ];
-
+  
   mc:recompute_vars = fn (ifn, dglobals?)
     // Types: ifn : intermediate function, dglobals?: boolean
     // Effects: Recomputes the variable lists (locals, closures, globals) of
@@ -510,13 +614,13 @@ reads mc:verbose
     [
       | locals, closures, globals, vars_read, vars_written, args_ins, allvars, 
 	defined, wlocals, wclosures, wglobals, vindex, dglobals_read |
-
+      
       vars_written = fn (il)
 	[
 	  | ins, dvar, class, new |
-
+	  
 	  ins = il[mc:il_ins];
-
+	  
 	  dvar = mc:defined_var(ins);
 	  if (dvar)
 	    [
@@ -534,7 +638,7 @@ reads mc:verbose
 		[
 		  if (!memq(dvar, wclosures)) new = wclosures = dvar . wclosures
 		];
-
+	      
 	      if (new)
 		[
 		  dvar[mc:v_number] = vindex = vindex + 1;
@@ -544,73 +648,73 @@ reads mc:verbose
 	    ]
 	  else
 	    il[mc:il_defined_var] = false;
-
+	  
 	];
-
+      
       vars_read = fn (il)
 	[
 	  | ins, args |
-
+	  
 	  ins = il[mc:il_ins];
-
+	  
 	  args = mc:arguments(ins, null);
 	  lforeach(fn (v)
-		  [
-		    | class, new |
-
-		    class = v[mc:v_class];
-		    new = false;
-		    if (class == mc:v_global)
-		      [
-			if (!memq(v, globals)) new = globals = v . globals
-		      ]
-		    else if (class == mc:v_local)
-		      [
-			if (!memq(v, locals)) new = locals = v . locals
-		      ]
-		    else if (class == mc:v_closure)
-		      [
-			if (!memq(v, closures)) new = closures = v . closures
-		      ]
-		    else
-		      v[mc:v_number] = 0;
-
-		    if (new)
-		      [
-			v[mc:v_number] = vindex = vindex + 1;
-			allvars = v . allvars
-		      ];
-		  ], args);
+		   [
+		     | class, new |
+		     
+		     class = v[mc:v_class];
+		     new = false;
+		     if (class == mc:v_global)
+		       [
+			 if (!memq(v, globals)) new = globals = v . globals
+		       ]
+		     else if (class == mc:v_local)
+		       [
+			 if (!memq(v, locals)) new = locals = v . locals
+		       ]
+		     else if (class == mc:v_closure)
+		       [
+			 if (!memq(v, closures)) new = closures = v . closures
+		       ]
+		     else
+		       v[mc:v_number] = 0;
+		     
+		     if (new)
+		       [
+			 v[mc:v_number] = vindex = vindex + 1;
+			 allvars = v . allvars
+		       ];
+		   ], args);
 	  il[mc:il_arguments] = args;
 	];
-
+      
       dglobals_read = fn (il)
 	lforeach(fn (v)
-		   if (v[mc:v_class] == mc:v_global_define &&
-		       !memq(v, globals)) 
-		     [
-		       globals = v . globals;
-		       v[mc:v_number] = vindex = vindex + 1;
-		       allvars = v . allvars;
-		     ],
+		 if (v[mc:v_class] == mc:v_global_define &&
+		     !memq(v, globals)) 
+		 [
+		   globals = v . globals;
+		   v[mc:v_number] = vindex = vindex + 1;
+		   allvars = v . allvars;
+		 ],
 		 il[mc:il_arguments]);
-
+      
       args_ins = fn (il)
 	[
 	  | args, ndvar |
-
+	  
 	  args = mc:new_varset(ifn);
 	  il[mc:il_arguments] = mc:set_vars!(args, il[mc:il_arguments]);
 	  clear_bit!(args, 0); // remove ref to constants
-
+	  
 	  if (ndvar = il[mc:il_defined_var])
 	    set_bit!(defined, ndvar);
 	];
-	  
+      
       // clear the index of argument variables (so that unused arguments
       // are easily ignored)
       lforeach(fn (arg) arg[mc:v_number] = 0, ifn[mc:c_fargs]);
-
+      
       // first find all variables that are written
       // then prepend those that are read (but not written)
       // the whole list, and the sublist of written vars are saved
@@ -623,7 +727,7 @@ reads mc:verbose
       if (dglobals?)
 	graph_nodes_apply(fn (n) dforeach(dglobals_read, graph_node_get(n)[mc:f_ilist]),
 			  cdr(ifn[mc:c_fvalue]));
-
+      
       ifn[mc:c_flocals] = locals;
       ifn[mc:c_fglobals] = globals;
       ifn[mc:c_fclosure] = closures;
@@ -632,14 +736,14 @@ reads mc:verbose
       ifn[mc:c_fclosure_write] = wclosures;
       ifn[mc:c_fnvars] = vindex + 1;
       ifn[mc:c_fallvars] = list_to_vector(null . lreverse!(allvars));
-
+      
       graph_nodes_apply
 	(fn (n)
 	 [
 	   | block |
-
+	   
 	   block = graph_node_get(n);
-	   block[mc:f_dvars] = defined = mc:new_varset(ifn);
+	      block[mc:f_dvars] = defined = mc:new_varset(ifn);
 	   dforeach(args_ins, block[mc:f_ilist])
 	 ], cdr(ifn[mc:c_fvalue]));
 
@@ -665,7 +769,7 @@ reads mc:verbose
 
 	  // compute basic information
 	  mc:recompute_vars(f, false);
-	  mc:flow_ambiguous(f);
+	  mc:flow_ambiguous(f, mc:closure_write);
 	  mc:flow_uses(f);
 
 	  eliminate_dead_code(f);

@@ -1,0 +1,68 @@
+mudlle: MUD Language for Little Extensions
+------------------------------------------
+
+This software is Copyright (C) 1993-1999 David Gay and Gustav Hållberg.
+Read the COPYRIGHT file for terms of use.
+
+Installation
+------------
+To compile this software on x86/linux, just type 'make'.
+To compile this software on sparc/solaris (using gcc), edit Makefile and
+runtime/Makefile and uncomment/comment the appropriate lines.
+
+Other 32-bit platforms should work as well, as long as: builtins.o and
+x86builtins.o are removed from OBJS in Makefile, and options.h is edited
+appropriately. Porting to 64-bit platforms will require changes to the
+garbage collector (alloc.c) and the basic type layout (mvalues.h).
+
+If you have the GNU gmp package installed, you can add -DUSE_GMP to the
+CFLAGS in the Makefiles (or to options.h) to enable "big" (unlimited
+precision) integers.
+
+Quick Introduction
+------------------
+
+mudlle is a small language designed for writing extensions to MUME, an
+online multi-user game. It is heavily inspired by Scheme. This
+distribution contains a stand-alone interpreter and compiler that can
+be used to experiment with the language. It is up to you to integrate
+it with your favourite application if you wish to use it as an
+extension language.
+
+Once compiled, run mudlle and check that basic stuff works:
+./mudlle
+mudlle> 2+3
+Result: 5
+mudlle>
+
+EOF (Ctrl-D), or evaluating quit() will exit the interpreter.
+
+doc/mudlle-intro.doc and doc/mudlle-ref.doc contain a somewhat out of date
+language introduction and reference. However, everything described in those
+documents should still work.
+
+A compiler is available for the x86/linux and sparc/solaris platforms. To
+load it, type 
+  load("sc.mud") // sparc/solaris compiler
+or
+  load("xc.mud") // x86/linux compiler
+at the 'mudlle>' prompt.
+
+To compile a file:
+  fcompile("<filename.mud>")
+This produces <filename.obj>.
+
+To load a compiled file:
+  fload("<filename.obj>");
+
+See "slow.mud" (compile sparc/solaris compiler) and "csc.mud" (load compiled
+sparc/solaris compiler) for other examples...
+
+Remember, the source code is the documentation.
+
+Contact Information
+-------------------
+
+You can contect me at dgay@acm.org. My response time varies from 3 minutes
+to 3 months...
+

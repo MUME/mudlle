@@ -1,3 +1,24 @@
+/* 
+ * Copyright (c) 1993-1999 David Gay
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+ * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
+ * GAY HAVE NO OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
+ * ENHANCEMENTS, OR MODIFICATIONS.
+ */
+
 library phase1 // Phase 1: name resolution
 requires system, sequences, dlist, misc, compiler, vars
 defines mc:phase1
@@ -44,7 +65,7 @@ writes mc:this_function
     env_lookup, env_enter_function, env_leave_function, env_enter_block, 
     env_leave_block, mstart, mcleanup, mlookup, imported?, all_readable,
     all_writable, readable, writable, definable, imported_modules, import,
-    env_toplevel?, import_protected |
+    env_toplevel?, import_protected, env_global_prefix |
 
   comp_null = list(vector(mc:c_recall, mc:var_make_constant(null)));
     
@@ -135,6 +156,8 @@ writes mc:this_function
       topenv[0] = vtable . topenv[0]
     ];
 
+  env_global_prefix = ":";
+
   env_lookup = fn (name, write)
     // Types: name : string
     //        result : var
@@ -154,6 +177,13 @@ writes mc:this_function
     //   function. 
     [
       | inenv, found, blocks |
+
+      if (abbrev?(env_global_prefix, name))
+	exit<function> 
+	  mlookup(substring(name, slength(env_global_prefix), 
+			    slength(name) - slength(env_global_prefix)), 
+		  write);
+
       inenv = env;
 
       <search> loop

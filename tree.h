@@ -1,67 +1,55 @@
-/* $Log: tree.h,v $
- * Revision 1.11  1994/10/09  06:43:06  arda
- * Libraries
- * Type inference
- * Many minor improvements
- *
- * Revision 1.10  1994/08/16  19:16:25  arda
- * Mudlle compiler for sparc now fully functional (68k compiler now needs
- * updating for primitives).
- * Changes to allow Sparc trap's for runtime errors.
- * Also added flags to primitives for better calling sequences.
- *
- * Revision 1.7  1994/02/24  08:33:09  arda
- * Owl: New error messages.
- *
- * Revision 1.6  1994/01/29  19:50:39  dgay
- * Owl: add file & line information to functions.
- *
- * Revision 1.5  1993/08/15  21:00:32  un_mec
- * Owl: Overload [].
- *      Added xcalloc, xrealloc.
- *
- * Revision 1.4  1993/07/21  20:37:02  un_mec
- * Owl: Added &&, ||, optimised if.
- *      Added branches to the intermediate language.
- *      Separated destiniation language generation into ins module
- *      (with some peephole optimisation)
- *      Standalone version of mudlle (mkf, runtime/mkf, mudlle.c) added to CVS
- *
- * Revision 1.3  1993/03/29  09:24:44  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:15:08  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:41:40  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
 #ifndef TREE_H
 #define TREE_H
 
 #include <stdio.h>
+#include "calloc.h"
 
-typedef struct component *component;
-typedef struct constant *constant;
+extern block_t parser_memory;
 
-typedef struct vlist {
-  struct vlist *next;
+typedef struct _component *component;
+typedef struct _constant *constant;
+typedef struct _pattern *pattern;
+
+typedef struct _vlist {
+  struct _vlist *next;
   const char *var;
   mtype type;
 } *vlist;
 
-typedef struct clist {
-  struct clist *next;
+typedef struct _clist {
+  struct _clist *next;
   component c;
 } *clist;
 
-typedef struct cstlist {
-  struct cstlist *next;
+typedef struct _cstlist {
+  struct _cstlist *next;
   constant cst;
 } *cstlist;
+
+typedef struct _cstpair {
+  constant cst1, cst2;
+} *cstpair;
 
 typedef struct {
   mtype type;			/* Return type */
@@ -79,41 +67,90 @@ typedef struct {
   clist sequence;
 } *block;
 
-struct constant {
-  enum { cst_int, cst_string, cst_list, cst_array } class;
+enum constant_class {
+  cst_int, cst_string, cst_list, cst_array, cst_float, cst_bigint, cst_table,
+  cst_symbol
+};
+
+struct _constant {
+  enum constant_class vclass;
   union {
     int integer;
     const char *string;
-    struct cstlist *constants;	/* Stored in reverse order ... */
+    double mudlle_float;
+    const char *bigint_str;
+    cstlist constants;	/* Stored in reverse order ... */
+    cstpair constpair;
   } u;
 };
+
+typedef struct _patternlist {
+  struct _patternlist *next;
+  pattern pat;
+} *patternlist;
+
+enum pattern_class {
+  pat_const, pat_list, pat_array, pat_symbol, pat_sink,
+  pat_expr
+};
+
+struct _pattern {
+  enum pattern_class vclass;
+  union {
+    constant constval;
+    component expr;
+    struct {
+      patternlist patlist;
+      int ellipsis;
+    } l;
+    struct {
+      const char *name;
+      mtype type;
+    } sym;
+  } u;
+};
+
+typedef struct _matchnode {
+  pattern pattern;
+  component expression, condition;
+} *matchnode;
+
+typedef struct _matchnodelist {
+  struct _matchnodelist *next;
+  matchnode match;
+} *matchnodelist;
 
 enum {
   b_or, b_and, b_sc_or, b_sc_and, b_eq, b_ne, b_lt, b_le, b_gt, b_ge,
   b_bitor, b_bitxor, b_bitand, b_shift_left, b_shift_right,
   b_add, b_subtract, b_multiply, b_divide, b_remainder, b_negate,
   b_not, b_bitnot, b_ifelse, b_if, b_while, b_loop, b_ref, b_set,
-  b_cons, last_builtin
+  b_cons, last_builtin, 
+  /* this one is only used by the parser */
+  b_xor
 };
 
-struct component {
-  enum { c_assign, c_recall, c_constant, c_closure, c_execute, c_builtin, c_block,
-	 c_labeled, c_exit }
-    class;
+enum component_class {
+  c_assign, c_recall, c_constant, c_closure, c_execute, c_builtin, c_block,
+  c_labeled, c_exit
+};
+
+struct _component {
+  enum component_class vclass;
   union {
     struct {
       const char *symbol;
       component value;
     } assign;
     const char *recall;
-    constant constant;
+    constant cst;
     function closure;
     clist execute;		/* 1st element is fn, rest are args */
     struct {
       unsigned int fn;
       clist args;
     } builtin;
-    block block;
+    block blk;
     struct {
       const char *name;
       component expression;
@@ -121,30 +158,54 @@ struct component {
   } u;
 };
 
+enum file_class { f_plain, f_module, f_library };
+
 typedef struct {
-  enum { f_plain, f_module, f_library } class;
+  enum file_class vclass;
   const char *name;
   vlist imports;
   vlist defines;
   vlist reads;
   vlist writes;
   block body;
-} *file;
+} *mfile;
 
-file new_file(int class, const char *name, vlist imports, vlist defines, vlist reads,
-	      vlist writes, block body);
-function new_function(mtype type, const char *help, vlist args, component value,
-		      int lineno, const char *filename);
-function new_vfunction(mtype type, const char *help, const char *arg, component value,
+mfile new_file(block_t heap, enum file_class vclass, const char *name,
+	       vlist imports, vlist defines, vlist reads, vlist writes,
+	       block body);
+function new_function(block_t heap, mtype type, const char *help, vlist args,
+		      component val, int lineno, const char *filename);
+function new_vfunction(block_t heap, mtype type, const char *help,
+		       const char *arg, component val,
 		       int lineno, const char *filename);
-block new_codeblock(vlist locals, clist sequence);
-clist new_clist(component c, clist next);
-cstlist new_cstlist(constant cst, cstlist next);
-vlist new_vlist(const char *var, mtype type, vlist next);
-constant new_constant(int class, ...);
-component new_component(int class, ...);
+block new_codeblock(block_t heap, vlist locals, clist sequence);
+clist new_clist(block_t heap, component c, clist next);
+cstpair new_cstpair(block_t heap, constant cst1, constant cst2);
+cstlist new_cstlist(block_t heap, constant cst, cstlist next);
+vlist new_vlist(block_t heap, const char *var, mtype type, vlist next);
+constant new_constant(block_t heap, enum constant_class vclass, ...);
+component new_component(block_t heap, enum component_class vclass, ...);
+
+component new_pattern_component(block_t heap, pattern pat, component e);
+pattern new_pattern_constant(block_t heap, constant c);
+pattern new_pattern_expression(block_t heap, component c);
+pattern new_pattern_symbol(block_t heap, const char *sym, mtype type);
+pattern new_pattern_compound(block_t heap, enum pattern_class class,
+			     patternlist list, int ellipsis);
+pattern new_pattern_sink(block_t heap);
+patternlist new_pattern_list(block_t heap, pattern pat, patternlist tail);
+
+component new_match_component(block_t heap, component e, 
+			      matchnodelist matches);
+matchnodelist new_match_list(block_t heap, matchnode node, matchnodelist tail);
+matchnode new_match_node(block_t heap, pattern pat, component cond, 
+			 component e);
+
+component new_xor_component(block_t heap, component e0, component e1);
+component new_postfix_inc_component(block_t heap, const char *var, int op);
+
 #ifdef PRINT_CODE
-void print_file(FILE *out, file f);
+void print_file(FILE *out, mfile f);
 #endif
 
 clist append_clist(clist l1, clist l2);
@@ -153,6 +214,6 @@ cstlist reverse_cstlist(cstlist l);
 vlist append_vlist(vlist l1, vlist l2);
 vlist reverse_vlist(vlist l);
 
-value mudlle_parse(file f);
+value mudlle_parse(block_t heap, mfile f);
 
 #endif

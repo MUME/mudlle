@@ -1,30 +1,23 @@
-/* $Log: calloc.h,v $
- * Revision 1.2  1993/03/29  09:23:39  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:13:56  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:40:57  un_mec
- * Mudlle source, without any Mume extensions.
- *
+/*
+ * Copyright (c) 1993-1999 David Gay and Gustav Hållberg
+ * All rights reserved.
+ * 
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose, without fee, and without written agreement is hereby granted,
+ * provided that the above copyright notice and the following two paragraphs
+ * appear in all copies of this software.
+ * 
+ * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
+ * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+ * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
+ * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
+ * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
+ * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
-
-/* $Log: calloc.h,v $
- * Revision 1.2  1993/03/29  09:23:39  un_mec
- * Owl: Changed descriptor I/O
- *      New interpreter / compiler structure.
- *
- * Revision 1.3  1993/03/14  16:13:56  dgay
- * Optimised stack & gc ops.
- *
- * Revision 1.1  1992/12/27  21:40:57  un_mec
- * Mudlle source, without any Mume extensions.
- *
- * Revision 1.1  1992/02/20  17:52:45  gay_d
- * Initial revision
- * */
 
 #ifndef CALLOC_H
 #define CALLOC_H
@@ -37,7 +30,7 @@
        Individual deallocations are not possible.
 */
 
-typedef struct block **block_t;
+typedef struct memblock **block_t;
 
 block_t new_block(void);
 /* Return: A new block from which to allocate some memory.
