@@ -21,7 +21,7 @@
 
 OBJS=  basic.o arith.o bool.o symbol.o runtime.o io.o string.o	 \
        list.o vector.o support.o bitset.o debug.o files.o float.o \
-       bigint.o pattern.o
+       bigint.o pattern.o mudllecst.o
 
 SRC = $(OBJS:%.o=%.c)
 
@@ -30,27 +30,38 @@ CFLAGS +=-fno-optimize-sibling-calls -I.. -DHAVE_PCRE_PCRE_H
 CC=gcc
 MAKEDEPEND=gcc -MM
 
+CSTFILES = files.h
+
 all: librun.a
 
+.PHONY: clean
 clean:
-	rm -f *.o librun.a
+	rm -f *.o librun.a mudllecst.c .depend
 
 librun.a: $(OBJS)
 	if [ -f librun.a ]; then rm -f librun.a; fi
 	ar r librun.a $(OBJS)
 	-ranlib librun.a
 
+mudllecst.c: consts.pl $(CSTFILES)
+	perl $^ > $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
 
-dep depend:
+
+.PHONY: dep depend
+dep depend: .depend
+
+.depend: $(SRC)
 	$(MAKEDEPEND) $(CFLAGS) $(SRC)> .depend
 
 lsimple.c: simple.l
 	flex -F -Psimple simple.l
 	mv lex.simple.c lsimple.c
 
-psimple.c psimple.h: simple.y
+psimple.c: psimple.h
+psimple.h: simple.y
 	bison -b psimple -d -p simple -t -v simple.y
 	mv psimple.tab.c psimple.c
 	mv psimple.tab.h psimple.h

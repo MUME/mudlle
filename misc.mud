@@ -606,9 +606,11 @@ list_index = fn "x l -> n. Returns the index of x or 0"
 
 /// STRING FUNCTIONS
 
-string_tail = fn "s n -> s. Returns the last letters from pos n" 
-   (str, from)
-   substring (str, from, string_length (str) - from);
+string_tail = fn "s n -> s. Returns the last letters from pos n" (str, from)
+  if (from < 0)
+    substring(str, from, -from)
+  else
+    substring (str, from, string_length (str) - from);
 
 string_head? = fn 
    "s1 s2 n -> b. True if s1 = first of s2, min n characters" 

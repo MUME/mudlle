@@ -427,7 +427,14 @@ vectorref:
 	ISINT(arg1)
 	je	E(error_bad_type)
 	add	arg1,arg1
+	jo	E(error_bad_index)
+	jns	vecnosign
+
+	add	object_size(arg0),arg1
+	sub	$object_offset,arg1
 	js	E(error_bad_index)
+	
+vecnosign:
 	add	$object_offset-2,arg1
 	cmp	object_size(arg0),arg1
 	jae	E(error_bad_index)
@@ -438,7 +445,13 @@ stringref:
 	ISINT(arg1)
 	je	E(error_bad_type)
 	INTVAL(arg1)
+	jns	strnosign
+
+	add	object_size(arg0),arg1
+	sub	$object_offset+1,arg1
 	js	E(error_bad_index)
+	
+strnosign:
 	add	$object_offset+1,arg1
 	cmp	object_size(arg0),arg1
 	jae	E(error_bad_index)
@@ -472,9 +485,16 @@ cset:	/* Call set! */
 vectorset:
 	ISINT(arg1)
 	je	E(error_bad_type)
-	add	arg1,arg1
-	js	E(error_bad_index)
 	ARG0_IS_READ_WRITE
+	add	arg1,arg1
+	jo	E(error_bad_index)
+	jns	vecsetnosign
+
+	add	object_size(arg0),arg1
+	sub	$object_offset,arg1
+	js	E(error_bad_index)
+
+vecsetnosign:
 	add	$object_offset-2,arg1
 	cmp	object_size(arg0),arg1
 	jae	E(error_bad_index)
@@ -484,15 +504,22 @@ vectorset:
 
 stringset:
 	INTVAL(%edx)
-	ISINT(arg1)
-	je	E(error_bad_type)
-	INTVAL(arg1)
-	js	E(error_bad_index)
+	jnc	E(error_bad_type)
 	ARG0_IS_READ_WRITE
+	INTVAL(arg1)
+	jnc	E(error_bad_type)
+	jns	strsetnosign
+
+	add	object_size(arg0),arg1
+	sub	$object_offset+1,arg1
+	js	E(error_bad_index)
+	
+strsetnosign:
 	add	$object_offset+1,arg1
 	cmp	object_size(arg0),arg1
 	jae	E(error_bad_index)
 	mov	%dl,-1(arg0,arg1)
+	movzbl	%dl,%edx
 	MAKEINT(%edx)
 	mov	%edx,arg0
 	ret

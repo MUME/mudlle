@@ -303,6 +303,8 @@ struct mudlle_float *alloc_mudlle_float(double d)
   return newp;
 }
 
+/* always run this before doing any operations on bi, in case a GC has
+   moved the data around */
 void check_bigint(struct bigint *bi)
 {
 #ifdef USE_GMP

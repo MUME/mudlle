@@ -29,6 +29,12 @@
 #include <glob.h>
 #include <string.h>
 #include <alloca.h>
+#include <grp.h>
+#include <pwd.h>
+
+#ifdef GLOB_TILDE
+#define _GNU_GLOB_
+#endif
 
 #include "runtime/runtime.h"
 #include "print.h"
@@ -38,8 +44,6 @@
 #include "runtime/files.h"
 #include "call.h"
 
-#ifdef GLOB_TILDE
-#endif
 
 OPERATION(load, "s -> b. Loads file s. Returns true if successful",
 	  1, (struct string *name), 0)
@@ -92,16 +96,24 @@ UNSAFEOP(directory_files, "s -> l. List all files of directory s (returns "
   return makebool(FALSE);	  
 }
 
-UNSAFEOP(glob_files, "s n -> l. Returns a list of all files matched by the "
-	 "glob pattern s, using flags in n (GLOB_xxx). Returns FALSE "
-	 "on error", 2, (struct string *pat, value n), OP_LEAF)
+UNSAFEOP(glob_files, "s0 s1 n -> l. Returns a list of all files matched by "
+	 "the glob pattern s1, executed in directory s0, using flags in n "
+	 "(GLOB_xxx). Returns FALSE on error", 
+	 3, (struct string *dir, struct string *pat, value n),
+	 OP_LEAF)
 {
   glob_t files;
   struct list *l = NULL;
   struct gcpro gcpro1;
   char **s;
-  long flags = intval(n);
+  long flags;
   TYPEIS(pat, type_string);
+  TYPEIS(dir, type_string);
+
+  int orig_wd, res;
+
+  ISINT(n);
+  flags = intval(n);
 
 #ifdef _GNU_GLOB_
   if (flags & ~(GLOB_TILDE | GLOB_BRACE | GLOB_MARK | GLOB_NOCHECK |
@@ -113,7 +125,26 @@ UNSAFEOP(glob_files, "s n -> l. Returns a list of all files matched by the "
 #endif
     runtime_error(error_bad_value);
 
-  if (glob(pat->str, flags, NULL, &files))
+  if ((orig_wd = open(".", 0)) < 0)
+    runtime_error(error_bad_value);
+
+  if (chdir(dir->str) < 0)
+    {
+      close(orig_wd);
+      runtime_error(error_bad_value);
+    }
+
+  res = glob(pat->str, flags, NULL, &files);
+  if (fchdir(orig_wd) < 0)
+    {
+      close(orig_wd);
+      globfree(&files);
+      runtime_error(error_bad_value);
+    }
+
+  close(orig_wd);
+
+  if (res)
     {
       globfree(&files);
       return makebool(FALSE);
@@ -322,6 +353,106 @@ UNSAFEOP(file_append, "s1 s2 -> n. Appends string s2 to file s1. Creates s1 "
   return makeint(errno);
 }
 
+OPERATION(passwd_file_entries, " -> l. Returns a list of [ pw_name pw_uid "
+	  "pw_gid pw_gecos pw_dir pw_shell ] from the contents of "
+	  "/etc/passwd. Cf. getpwent(3)",
+	 0, (void), OP_LEAF)
+{
+  struct list *res = NULL;
+  struct gcpro gcpro1, gcpro2;
+  struct passwd *pw;
+  struct vector *v = NULL;
+
+  GCPRO2(res, v);
+  
+  setpwent();
+  for (;;) 
+    {
+      do
+	{
+	  errno = 0;
+	  pw = getpwent();
+	}
+      while (pw == NULL && errno == EINTR);
+    
+      if (pw == NULL)
+	{
+	  int en = errno;
+	  endpwent();
+	  if (en)
+	    runtime_error(error_bad_value);
+	  break;
+	}
+
+      v = alloc_vector(6);
+      SET_VECTOR(v, PW_NAME,  alloc_string(pw->pw_name));
+      SET_VECTOR(v, PW_UID,   makeint(pw->pw_uid));
+      SET_VECTOR(v, PW_GID,   makeint(pw->pw_gid));
+      SET_VECTOR(v, PW_GECOS, alloc_string(pw->pw_gecos));
+      SET_VECTOR(v, PW_DIR,   alloc_string(pw->pw_dir));
+      SET_VECTOR(v, PW_SHELL, alloc_string(pw->pw_shell));
+
+      res = alloc_list(v, res);
+    }
+
+  UNGCPRO();
+
+  return res;
+}
+
+OPERATION(group_file_entries, " -> l. Returns a list of [ gr_name gr_gid "
+	  "( gr_mem ... ) ] from the contents of /etc/group. Cf. getgrent(3)",
+	 0, (void), OP_LEAF)
+{
+  struct list *res = NULL, *l = NULL;
+  struct gcpro gcpro1, gcpro2, gcpro3;
+  struct group *grp;
+  struct vector *v = NULL;
+
+  GCPRO3(res, v, l);
+  
+  setgrent();
+  for (;;) 
+    {
+      char **s;
+
+      do
+	{
+	  errno = 0;
+	  grp = getgrent();
+	}
+      while (grp == NULL && errno == EINTR);
+    
+      if (grp == NULL)
+	{
+	  int en = errno;
+	  endpwent();
+	  if (en)
+	    runtime_error(error_bad_value);
+	  break;
+	}
+
+      v = alloc_vector(3);
+      SET_VECTOR(v, GR_NAME, alloc_string(grp->gr_name));
+      SET_VECTOR(v, GR_GID, makeint(grp->gr_gid));
+
+      l = NULL;
+      for (s = grp->gr_mem; *s; ++s)
+	{
+	  struct string *str = alloc_string(*s);
+	  l = alloc_list(str, l);
+	}
+
+      SET_VECTOR(v, GR_MEM, l);
+
+      res = alloc_list(v, res);
+    }
+
+  UNGCPRO();
+
+  return res;
+}
+
 #define DEF(s) system_define(#s, makeint(s))
 
 void files_init(void)
@@ -335,6 +466,8 @@ void files_init(void)
   DEFINE("file_stat", file_stat);
   DEFINE("readlink", readlink);
   DEFINE("file_lstat", file_lstat);
+  DEFINE("passwd_file_entries", passwd_file_entries);
+  DEFINE("group_file_entries", group_file_entries);
 
   DEF(S_IFMT);
   DEF(S_IFSOCK);

@@ -32,42 +32,51 @@
 
 void runtime_init(void);
 
-#define FULLOP(x, helpmsg, nargs, args, seclevel, flags, type, static_func) \
-static_func value code_ ## x args; \
-static struct primitive_ext op_ ## x = { NULL, helpmsg, code_ ## x, nargs, flags, type, seclevel }; \
-\
-static_func value code_ ## x args
+#define FULLOP(x, helpmsg, nargs, args, seclevel,		\
+	       flags, type, storage_class)			\
+storage_class value code_ ## x args;				\
+static struct primitive_ext op_ ## x = {			\
+  NULL, helpmsg, code_ ## x, nargs, flags, type, seclevel	\
+};								\
+								\
+storage_class value code_ ## x args
 
-#define TYPEDOP(x, helpmsg, nargs, args, flags, type) \
-  MTYPE(type_ ## x, type); \
-  FULLOP(x, helpmsg, nargs, args, 0, flags, type_ ## x, static)
+#define TYPEDOP(x, helpmsg, nargs, args, flags, type)		\
+  MTYPE(type_ ## x, type);					\
+  FULLOP(x, helpmsg, nargs, args, 0, flags,			\
+	 type_ ## x, static)
 
-#define EXT_TYPEDOP(x, helpmsg, nargs, args, flags, type) \
-  MTYPE(type_ ## x, type); \
-  FULLOP(x, helpmsg, nargs, args, 0, flags, type_ ## x, /* extern */)
+#define EXT_TYPEDOP(x, helpmsg, nargs, args, flags, type)	\
+  MTYPE(type_ ## x, type);					\
+  FULLOP(x, helpmsg, nargs, args, 0, flags,			\
+	 type_ ## x, /* extern */)
 
-#define OPERATION(x, helpmsg, nargs, args, flags) \
+#define OPERATION(x, helpmsg, nargs, args, flags)		\
   FULLOP(x, helpmsg, nargs, args, 0, flags, NULL, static)
 
-#define EXT_OPERATION(x, helpmsg, nargs, args, flags) \
+#define EXT_OPERATION(x, helpmsg, nargs, args, flags)		\
   FULLOP(x, helpmsg, nargs, args, 0, flags, NULL, /* extern */)
 
-#define VAROP(x, helpmsg, flags) \
-  FULLOP(x, helpmsg, -1, (struct vector *args, ulong nargs), 0, flags, NULL, static)
+#define VAROP(x, helpmsg, flags)				\
+  FULLOP(x, helpmsg, -1, (struct vector *args, ulong nargs),	\
+	 0, flags, NULL, static)
 
-#define SECOP(x, helpmsg, nargs, args, seclevel, flags) \
-  FULLOP(x, helpmsg, nargs, args, seclevel, flags, NULL, static)
+#define SECOP(x, helpmsg, nargs, args, seclevel, flags)		\
+  FULLOP(x, helpmsg, nargs, args, seclevel, flags,		\
+	 NULL, static)
 
 #  define LVL_IMPLEMENTOR 1
 
-#define UNSAFEOP(x, helpmsg, nargs, args, flags) \
-  SECOP(x, "UNSAFE:" helpmsg, nargs, args, LVL_IMPLEMENTOR, flags)
+#define UNSAFEOP(x, helpmsg, nargs, args, flags)		\
+  SECOP(x, "UNSAFE:" helpmsg, nargs, args,			\
+	LVL_IMPLEMENTOR, flags)
 
-#define UNIMPLEMENTED(x, helpmsg, nargs, args, flags) \
-  FULLOP(x, "UNIMPLEMENTED: " helpmsg, nargs, args, 0, flags, NULL, static) \
-{ \
-  runtime_error(error_bad_function); \
-  undefined(); \
+#define UNIMPLEMENTED(x, helpmsg, nargs, args, flags)		\
+  FULLOP(x, "UNIMPLEMENTED: " helpmsg, nargs, args, 0, flags,	\
+	 NULL, static)						\
+{								\
+  runtime_error(error_bad_function);				\
+  undefined();							\
 }
 
 #define DEFINE(name, x) runtime_define(name, &op_ ## x)
@@ -84,16 +93,24 @@ void define_int_vector(const char *name, const int *vec, int count);
 
 void runtime_define(const char *name, struct primitive_ext *op);
 
-#define TYPEIS(v, want_type) \
-  if (!TYPE((v), (want_type))) runtime_error(error_bad_type)
+#define TYPEIS(v, want_type) do {				\
+  if (!TYPE((v), (want_type))) runtime_error(error_bad_type);	\
+} while (0)
 
-#define ISINT(v) if (!integerp((v))) runtime_error(error_bad_type)
+#define ISINT(v) do {						\
+  if (!integerp((v))) runtime_error(error_bad_type);		\
+} while (0)
+
+#define GETINT(v) (integerp(v)					\
+		   ? intval(v)					\
+		   : (runtime_error(error_bad_type), 0L))
 
 #define CHECK_FAST_LOOP() \
   if (!--xcount) runtime_error(error_loop);
 
 void check_interrupt(void);
-/* Effects: Causes a user_interrupt runtime error if user caused SIGINT or SIGQUIT
+/* Effects: Causes a user_interrupt runtime error if user caused
+   SIGINT or SIGQUIT
 */
 
 /* Return the undefined result */
@@ -128,6 +145,8 @@ extern value undefined_value;
 */
 
 #define MTYPE(name, sig) static typing name = { sig, NULL }
+
+void mudlle_consts_init(void);
 
 
 #endif

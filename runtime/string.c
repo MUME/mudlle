@@ -155,6 +155,8 @@ EXT_TYPEDOP(string_ref, "s n1 -> n2. Return the code (n2) of the n1'th character
   ISINT(c);
 
   idx = intval(c);
+  if (idx < 0)
+    idx += string_len(str);
   if (idx < 0 || idx >= string_len(str)) runtime_error(error_bad_index);
   return (makeint((unsigned char)str->str[idx]));
 }
@@ -172,10 +174,11 @@ EXT_TYPEDOP(string_set, "s n1 n2 -> n2. Set the n1'th character of s to the "
   ISINT(c);
 
   idx = intval(i);
+  if (idx < 0)
+    idx += string_len(str);
   if (idx < 0 || idx >= string_len(str)) runtime_error(error_bad_index);
-  str->str[idx] = intval(c);
 
-  return c;
+  return makeint((unsigned char)(str->str[idx] = intval(c)));
 }
 
 TYPEDOP(string_cmp, "s1 s2 -> n. Compare 2 strings. Returns 0 if s1 = s2, < 0 if s1 < s2 and > 0 if s1 > s2",
@@ -366,6 +369,8 @@ TYPEDOP(substring, "s1 n1 n2 -> s2. Extract substring of s starting at n1 of len
   GCPRO1(s);
 
   first = intval(start);
+  if (first < 0)
+    first += string_len(s);
   size = intval(length);
   if (first < 0 || size < 0 || first + size > string_len(s))
     runtime_error(error_bad_index);

@@ -163,8 +163,7 @@ OPERATION(bitoa_base, "bi n -> s. Return a string representation for bi, "
   return alloc_string(buf);
 }
 
-OPERATION(atobi, "s -> bi. Return the number in s as a bigint", 
-	  1, (struct string *s), OP_LEAF | OP_NOESCAPE)
+static value atobi(struct string *s, int base)
 {
   mpz_t mpz;
   struct bigint *bi;
@@ -173,7 +172,7 @@ OPERATION(atobi, "s -> bi. Return the number in s as a bigint",
   TYPEIS(s, type_string);
   GCPRO1(s);
 
-  if (mpz_init_set_str(mpz, s->str, 0))
+  if (mpz_init_set_str(mpz, s->str, base))
     runtime_error(error_bad_value);
 
   bi = alloc_bigint(mpz);
@@ -182,6 +181,22 @@ OPERATION(atobi, "s -> bi. Return the number in s as a bigint",
   free_mpz_temps();
 
   return bi;
+}
+
+OPERATION(atobi, "s -> bi. Return the number in s as a bigint", 
+	  1, (struct string *s), OP_LEAF | OP_NOESCAPE)
+{
+  return atobi(s, 0);
+}
+
+OPERATION(atobi_base, "s n -> bi. Return the number in s, encoded in"
+	  " base n (2 <= n <= 32), as a bigint", 
+	  2, (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE)
+{
+  int base = GETINT(mbase);
+  if (base < 2 || base > 32)
+    runtime_error(error_bad_value);
+  return atobi(s, base);
 }
 
 OPERATION(bitoi, "bi -> i. Return bi as an integer (error if overflow)", 
@@ -215,13 +230,15 @@ OPERATION(bicmp, "bi1 bi2 -> n. Returns < 0 if bi1 < bi2, 0 if bi1 == bi2, "
 	  OP_LEAF | OP_NOESCAPE)
 {
   struct gcpro gcpro1, gcpro2;
+  int res;
 
   GCPRO2(m1, m2);
   m1 = get_bigint(m1); 
   m2 = get_bigint(m2);
   UNGCPRO();
 
-  return makeint(mpz_cmp(m1->mpz, m2->mpz));
+  res = mpz_cmp(m1->mpz, m2->mpz);
+  return makeint(res < 0 ? -1 : res ? 1 : 0);
 }
 
 OPERATION(bishl, "bi1 n -> bi2. Returns bi1 << n",
@@ -368,6 +385,10 @@ UNIMPLEMENTED(bitoa_base, "bi n -> s. Return a string representation for bi, "
 UNIMPLEMENTED(atobi, "s -> bi. Return the number in s as a bigint", 
 	      1, (struct string *s), OP_LEAF | OP_NOESCAPE)
 
+UNIMPLEMENTED(atobi_base, "s n -> bi. Return the number in s, encoded in"
+	      " base n (2 <= n <= 32), as a bigint", 
+	      2, (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE)
+
 UNIMPLEMENTED(bitoi, "bi -> i. Return bi as an integer (error if overflow)", 
 	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
@@ -431,6 +452,7 @@ void bigint_init(void)
   DEFINE("itobi", itobi);
   DEFINE("bitoa", bitoa);
   DEFINE("atobi", atobi);
+  DEFINE("atobi_base", atobi_base);
   DEFINE("bitof", bitof);
   DEFINE("ftobi", ftobi);
   DEFINE("bitoa_base", bitoa_base);

@@ -49,9 +49,10 @@ puremud: $(OBJS) runlib
 runlib: 
 	$(MAKE) -C runtime -f Makefile
 
+.PHONY: clean
 clean:
-	rm -f *.o lexer.c tokens.h parser.c
 	$(MAKE) -C runtime -f Makefile clean
+	rm -f *.o lexer.c tokens.h parser.c .depend
 
 mytar:
 	tar cvf - *.[chylsa] *.mud smakefile.base Makefile.base Makefile SCOPTIONS runtime/*.[ch] runtime/smakefile runtime/SCOPTIONS runtime/Makefile.base runtime/Makefile doc/*.doc | gzip >mudlle.tar.gz
@@ -73,7 +74,8 @@ lexer.c: lexer.l
 	flex -F -8 lexer.l
 	mv lex.yy.c lexer.c
 
-tokens.h parser.c: parser.y
+tokens.h: parser.c
+parser.c: parser.y
 	bison -dtv parser.y
 	mv parser.tab.h tokens.h
 	mv parser.tab.c parser.c
@@ -84,9 +86,12 @@ builtins.o: builtins.S
 x86builtins.o: x86builtins.S
 	$(CC) -c x86builtins.S -o x86builtins.o
 
-dep depend: $(SRC)
-	$(MAKEDEPEND) $(CFLAGS) $(SRC) > .depend
+.PHONY: dep depend
+dep depend: .depend
 	$(MAKE) -C runtime -f Makefile depend
+
+.depend: $(SRC)
+	$(MAKEDEPEND) $(CFLAGS) $(SRC) > .depend
 
 compiler:
 	/bin/sh install-compiler

@@ -72,8 +72,10 @@ EXT_TYPEDOP(vector_ref, "v n -> x. Return the n'th element of v",
   ISINT(c);
 
   idx = intval(c);
+  if (idx < 0)
+    idx += vector_len(vec);
   if (idx < 0 || idx >= vector_len(vec)) runtime_error(error_bad_index);
-  return (vec->data[idx]);
+  return vec->data[idx];
 }
 
 EXT_TYPEDOP(vector_set, "v n x -> x. Set the n'th element of v to x",
@@ -87,6 +89,8 @@ EXT_TYPEDOP(vector_set, "v n x -> x. Set the n'th element of v to x",
   ISINT(i);
 
   idx = intval(i);
+  if (idx < 0)
+    idx += vector_len(vec);
   if (idx < 0 || idx >= vector_len(vec)) runtime_error(error_bad_index);
   vec->data[idx] = c;
 

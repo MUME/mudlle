@@ -79,7 +79,6 @@ void module_set(const char *name, enum module_status status, int seclev)
 /* Effects: Sets module status
 */
 {
-  struct gcpro gcpro1;
   struct symbol *sym;
   struct vector *v;
 
@@ -91,10 +90,8 @@ void module_set(const char *name, enum module_status status, int seclev)
     }
 
   v = alloc_vector(vmodule_size);
-  GCPRO1(v);
   v->data[vmodule_status] = makeint(status);
   v->data[vmodule_seclev] = makeint(seclev);
-  UNGCPRO();
 
   table_set(module_data, name, v);
 }

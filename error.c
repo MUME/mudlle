@@ -428,11 +428,12 @@ struct vector *get_mudlle_call_trace(void)
 	  stack_trace_res->data[stack_depth_count++] = scan->u.mudlle.fn;
 	  break;
 	case call_compiled:
-#ifndef NOCOMPILER
-	  cc = iterate_cc_frame(cc, get_cc_stack_trace);
-#endif
+#ifdef NOCOMPILER
 	  abort();
+#else
+	  cc = iterate_cc_frame(cc, get_cc_stack_trace);
 	  break;
+#endif
 	}
     }
   UNGCPRO();

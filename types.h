@@ -170,12 +170,14 @@ struct primitive_ext		/* The external structure */
   uword seclevel;		/* Only for type_secure */
 };
 
-#define OP_LEAF 1		/* Operation is leaf (calls no other mudlle code) */
-#define OP_NOALLOC 2		/* Operation does not allocate anything */
-#define OP_CLEAN 4		/* Operation can be called directly
-				   (guarantees GC integrity w/ respect to registers) */
-#define OP_NOESCAPE 8		/* Operation does not lead to any variables being
-				   changed (~= calls no other mudlle functions) */
+#define OP_LEAF     1           /* Operation is leaf (calls no other mudlle
+				   code) */
+#define OP_NOALLOC  2           /* Operation does not allocate anything */
+#define OP_CLEAN    4           /* Operation can be called directly (guarantees
+				   GC integrity w/ respect to registers) */
+#define OP_NOESCAPE 8           /* Operation does not lead to any variables
+				   being changed (~= calls no other mudlle
+				   functions) */
 
 struct vector			/* Is a record */
 {
@@ -240,6 +242,12 @@ struct grecord *alloc_private(int id, ulong size);
   local = alloca(__l);				\
   memcpy(local, from->str, __l);		\
 } while (0)
+
+#define SET_VECTOR(v, idx, val)			\
+do {						\
+  value __tmp = (val);				\
+  (v)->data[idx] = __tmp;			\
+} while(0)
 
 /*
  * Converts the string sp into an int i and returns 1.

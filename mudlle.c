@@ -100,6 +100,14 @@ static void execute(char *line)
     }
 }
 
+#ifdef USE_READLINE
+static void history_exit(void)
+{
+  write_history(HISTORY_FILE);
+}
+#endif
+
+
 int main(int argc, char **argv)
 {
   struct session_context context;
@@ -124,6 +132,11 @@ int main(int argc, char **argv)
   error_init();
   ports_init();
   context_init();
+
+#ifdef USE_READLINE
+  if (atexit(history_exit))
+    perror("atexit(history_exit)");
+#endif
 
   out = make_file_outputport(stdout);
   session_start(&context, 0, 0, out, out);
@@ -151,10 +164,6 @@ int main(int argc, char **argv)
 #endif
     }
   session_end();
-
-#ifdef USE_READLINE
-  write_history(HISTORY_FILE);
-#endif
 
   return 0;
 }

@@ -68,6 +68,8 @@ void system_define(const char *name, value val)
   aindex = global_lookup(name); /* may allocate ... */
   UNGCPRO();
 
+  assert(GVAR(aindex) == NULL);
+
   GVAR(aindex) = val;
   module_vset(aindex, var_module, system_module);
 }
@@ -474,6 +476,7 @@ void runtime_init(void)
   float_init();
   bigint_init();
   pattern_init();
+  mudlle_consts_init();
   module_set("system", module_protected, 0);
   if (ops) fclose(ops);
   if (binops) fclose(binops);

@@ -28,8 +28,7 @@ TYPEDOP(sqrt, "n1 -> n2. Returns square root of n1", 1, (value n),
 {
   long x;
 
-  ISINT(n);
-  x = intval(n);
+  x = GETINT(n);
   if (x < 0) runtime_error(error_bad_value);
 
   return makeint((long)sqrt((double)x));
