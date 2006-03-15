@@ -27,7 +27,7 @@
 #include "stringops.h"
 #include "print.h"
 #include "ports.h"
-#include "charset.h"
+#include "utils.charset.h"
 #include "call.h"
 
 
@@ -45,13 +45,13 @@
 #include <crypt.h>
 #endif
 
-TYPEDOP(stringp, "string?", "`x -> `b. TRUE if `x is a string", 1, (value v),
+TYPEDOP(stringp, "x -> b. TRUE if x is a string", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_string));
 }
 
-TYPEDOP(make_string, 0, "`n -> `s. Create a string of length `n", 1, (value size),
+TYPEDOP(make_string, "n -> s. Create a string of length n", 1, (value size),
 	OP_LEAF | OP_NOESCAPE, "n.s")
 {
   struct string *newp;
@@ -65,16 +65,14 @@ TYPEDOP(make_string, 0, "`n -> `s. Create a string of length `n", 1, (value size
   return (newp);
 }
 
-TYPEDOP(string_length, 0, "`s -> `n. Return length of string",
-        1, (struct string *str),
+TYPEDOP(string_length, "s -> n. Return length of string", 1, (struct string *str),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
   TYPEIS(str, type_string);
   return (makeint(string_len(str)));
 }
 
-TYPEDOP(string_downcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
-        " lower case",
+TYPEDOP(downcase, "s -> s. Returns a copy of s with all characters lower case",
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE, "s.s")
 {
@@ -94,8 +92,7 @@ TYPEDOP(string_downcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all characte
   return newp;
 }  
 
-TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
-        " upper case",
+TYPEDOP(upcase, "s -> s. Returns a copy of s with all characters upper case",
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE, "s.s")
 {
@@ -116,8 +113,7 @@ TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters
 }  
 
 
-TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
-        " character `n",
+TYPEDOP(string_fill, "s n -> s. Set all characters of s to character whose code is n",
 	2, (struct string *str, value c),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.1")
 {
@@ -128,8 +124,8 @@ TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
   return str;
 }
 
-TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
-        " converted to printable 7 bit form",
+TYPEDOP(strto7bit, "s -> s. Returns a copy of s with all characters converted to "
+	"printable 7 bit form",
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE, "s.s")
 {
@@ -149,8 +145,7 @@ TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
   return newp;
 }  
 
-EXT_TYPEDOP(string_ref, 0, "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
-            " character of `s",
+EXT_TYPEDOP(string_ref, "s n1 -> n2. Return the code (n2) of the n1'th character of s",
 	    2, (struct string *str, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
 {
@@ -166,8 +161,8 @@ EXT_TYPEDOP(string_ref, 0, "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
   return (makeint((unsigned char)str->str[idx]));
 }
 
-EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n2. Set the `n1'th"
-            " character of `s to the character whose code is `n2",
+EXT_TYPEDOP(string_set, "s n1 n2 -> n2. Set the n1'th character of s to the "
+	    "character whose code is n2",
 	    3, (struct string *str, value i, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "snn.n")
 {
@@ -186,8 +181,7 @@ EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n2. Set the `n1'th"
   return makeint((unsigned char)(str->str[idx] = intval(c)));
 }
 
-TYPEDOP(string_cmp, 0, "`s1 `s2 -> `n. Compare 2 strings."
-        " Returns 0 if `s1 = `s2, < 0 if `s1 < `s2 and > 0 if `s1 > `s2",
+TYPEDOP(string_cmp, "s1 s2 -> n. Compare 2 strings. Returns 0 if s1 = s2, < 0 if s1 < s2 and > 0 if s1 > s2",
 	2, (struct string *s1, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -214,8 +208,8 @@ TYPEDOP(string_cmp, 0, "`s1 `s2 -> `n. Compare 2 strings."
   return (makeint(res));
 }
 
-TYPEDOP(string_8icmp, 0, "`s1 `s2 -> `n. Compare 2 strings ignoring case."
-        " Returns 0 if `s1 = `s2, < 0 if `s1 < `s2 and > 0 if `s1 > `s2",
+TYPEDOP(string_8icmp, "s1 s2 -> n. Compare 2 strings ignoring case.\n\
+Returns 0 if s1 = s2, < 0 if s1 < s2 and > 0 if s1 > s2",
 	2, (struct string *s1, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -242,8 +236,8 @@ TYPEDOP(string_8icmp, 0, "`s1 `s2 -> `n. Compare 2 strings ignoring case."
   return (makeint(res));
 }
 
-TYPEDOP(string_icmp, 0, "`s1 `s2 -> `n. Compare 2 strings ignoring accentuation"
-        " and case. Returns 0 if `s1 = `s2, < 0 if `s1 < `s2 and > 0 if `s1 > `s2",
+TYPEDOP(string_icmp, "s1 s2 -> n. Compare 2 strings ignoring accentuation and case.\n\
+Returns 0 if s1 = s2, < 0 if s1 < s2 and > 0 if s1 > s2",
 	2, (struct string *s1, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -270,9 +264,8 @@ TYPEDOP(string_icmp, 0, "`s1 `s2 -> `n. Compare 2 strings ignoring accentuation"
   return (makeint(res));
 }
 
-TYPEDOP(string_search, 0, "`s1 `s2 -> `n. Searches in string `s1 for string `s2."
-        " Returns -1 if not found, index of first matching character"
-        " otherwise.",
+TYPEDOP(string_search, "s1 s2 -> n. Searches in string s1 for string s2.\n\
+Returns -1 if not found, index of first matching character otherwise.",
 	2, (struct string *s1, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -315,10 +308,8 @@ TYPEDOP(string_search, 0, "`s1 `s2 -> `n. Searches in string `s1 for string `s2.
     }
 }
 
-TYPEDOP(string_isearch, 0, "`s1 `s2 -> `n. Searches in string `s1 for string `s2"
-        " (case- and accentuation-insensitive)."
-        " Returns -1 if not found, index of first matching character"
-        " otherwise.",
+TYPEDOP(string_isearch, "s1 s2 -> n. Searches in string s1 for string s2 (case- and accentuation-insensitive).\n\
+Returns -1 if not found, index of first matching character otherwise.",
 	2, (struct string *s1, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -364,8 +355,7 @@ TYPEDOP(string_isearch, 0, "`s1 `s2 -> `n. Searches in string `s1 for string `s2
     }
 }
 
-TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting at `n1"
-        " of length `n2. The first character is numbered 0",
+TYPEDOP(substring, "s1 n1 n2 -> s2. Extract substring of s starting at n1 of length n2.\nThe first character is numbered 0",
 	3, (struct string *s, value start, value length),
 	OP_LEAF | OP_NOESCAPE, "snn.s")
 {
@@ -413,7 +403,7 @@ value string_append(struct string *s1, struct string *s2)
   return (newp);
 }
 
-EXT_TYPEDOP(string_append, 0, "`s1 `s2 -> `s. Concatenate `s1 and `s2",
+EXT_TYPEDOP(string_append, "s1 s2 -> s. Concatenate s1 and s2",
 	    2, (struct string *s1, struct string *s2),
 	    OP_LEAF | OP_NOESCAPE, "ss.s")
 {
@@ -422,7 +412,7 @@ EXT_TYPEDOP(string_append, 0, "`s1 `s2 -> `s. Concatenate `s1 and `s2",
   return string_append(s1, s2);
 }
 
-TYPEDOP(split_words, 0, "`s -> `l. Split string `s into words in list `l",
+TYPEDOP(split_words, "s -> l. Split string s into words in list l",
 	  1, (struct string *s),
 	  OP_LEAF | OP_NOESCAPE, "s.l")
 {
@@ -482,8 +472,7 @@ TYPEDOP(split_words, 0, "`s -> `l. Split string `s into words in list `l",
   return l;
 }
 
-TYPEDOP(atoi, 0, "`s -> `n|`s. Converts string into integer. Returns `s if"
-        " conversion failed",
+TYPEDOP(atoi, "s -> n. Converts string into integer. Returns s if conversion failed",
 	1, (struct string *s),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.S")
 {
@@ -496,7 +485,7 @@ TYPEDOP(atoi, 0, "`s -> `n|`s. Converts string into integer. Returns `s if"
     return makeint(n);
 }
 
-TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value n),
+TYPEDOP(itoa, "n -> s. Converts integer into string", 1, (value n),
 	  OP_LEAF | OP_NOESCAPE, "n.s")
 {
   char buf[16];
@@ -505,71 +494,60 @@ TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value n),
   return alloc_string(buf);
 }
 
-TYPEDOP(isalpha, "calpha?", "`n -> `b. TRUE if `n is a letter (allowed in"
-        " keywords)",
+TYPEDOP(isalpha, "n -> b. TRUE if n is a letter (allowed in keywords)",
 	1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makebool(IS_8NAME(GETINT(n)));
 }
 
-TYPEDOP(isdigit, "cdigit?", "`n -> `b. TRUE if `n is a digit",
+TYPEDOP(isdigit, "n -> b. TRUE if n is a digit",
 	1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makebool(isdigit((unsigned char)GETINT(n)));
 }
 
-TYPEDOP(isxdigit, "cxdigit?", "`n -> `b. TRUE if `n is a hexadecimal digit",
+TYPEDOP(isxdigit, "n -> b. TRUE if n is a hexadecimal digit",
 	1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makebool(isxdigit((unsigned char)GETINT(n)));
 }
 
-TYPEDOP(isprint, "cprint?", "`n -> `b. TRUE if `n is a printable character",
-        1, (value n),
+TYPEDOP(isprint, "n -> b. TRUE if n is a printable character", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makebool(IS_8PRINT(GETINT(n)));
 }
 
-TYPEDOP(isspace, "cspace?", "`n -> `b. TRUE if `n is a white space character",
-        1, (value n),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
-{
-  return makebool(isspace((unsigned char)GETINT(n)));
-}
-
-TYPEDOP(isupper, "cupper?", "`n -> `b. TRUE if `n is an upper case character",
-        1, (value n),
+TYPEDOP(isupper, "n -> b. TRUE if n is an upper case character", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   unsigned char c = GETINT(n);
   return makebool(TO_8LOWER(c) != c);
 }
 
-TYPEDOP(islower, "clower?", "`n -> `b. TRUE if `n is an lower case character",
-        1, (value n),
+TYPEDOP(islower, "n -> b. TRUE if n is an lower case character", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   unsigned char c = GETINT(n);
   return makebool(TO_8UPPER(c) != c);
 }
 
-TYPEDOP(cupper, 0, "`n0 -> `n1. Return `n0's upper case variant", 1, (value n),
+TYPEDOP(toupper, "n -> n. Return n's upper case variant", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makeint(TO_8UPPER(GETINT(n)));
 }
 
-TYPEDOP(clower, 0, "`n0 -> `n1. Return `n0's lower case variant", 1, (value n),
+TYPEDOP(tolower, "n -> n. Return n's lower case variant", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makeint(TO_8LOWER(GETINT(n)));
 }
 
-TYPEDOP(c7bit, 0, "`n0 -> `n1. Return `n0's 7 bit variant", 1, (value n),
+TYPEDOP(cto7bit, "n -> n. Return n's 7 bit variant", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   return makeint(TO_7PRINT(GETINT(n)));
@@ -603,9 +581,8 @@ static void regexp_free(void *p)
   regexp_str = NULL;
 }
 
-TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
-        " expression `s with flags `n."
-        " Returns cons(`errorstring, `erroroffset) on error",
+TYPEDOP(make_regexp, "s n -> r. Create a matcher for the regular expression "
+	"s with flags n. Returns pair of errorstring . erroroffset on error",
 	2, (struct string *pat, value flags),
 	OP_LEAF | OP_NOESCAPE, "sn.x")
 {
@@ -647,9 +624,8 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
 #	define PCRE_START_OFFSET
 #endif
 
-TYPEDOP(regexp_exec, 0,
-        "`r `s `n -> `v. Tries to match the string `s with regexp "
-	"matcher `r and flags `n. Returns a vector of submatches or false if "
+TYPEDOP(regexp_exec, "r s n -> v. Tries to match the string s with regexp "
+	"matcher r and flags n. Returns a vector of submatches or false if "
 	"no match", 3, (struct string *re, struct string *str, value flags),
 	OP_LEAF | OP_NOESCAPE, "ssn.x")
 {
@@ -701,7 +677,7 @@ TYPEDOP(regexp_exec, 0,
 #endif /* USE_PCRE */
 
 #if HAVE_CRYPT_H
-TYPEDOP(crypt, 0, "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
+TYPEDOP(crypt, "s1 s2 -> s. Encrypt s1 using s2 as salt",
 	2, (struct string *s, struct string *salt),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
@@ -728,7 +704,10 @@ TYPEDOP(crypt, 0, "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
 
 static void define_strings(void)
 {
-  struct string *s;
+  struct string *s = 0;
+  struct gcpro gcpro1;
+
+  GCPRO1(s);
 
   s = alloc_string("\n");
   s->o.flags |= OBJ_READONLY;
@@ -736,39 +715,40 @@ static void define_strings(void)
   s = alloc_string("\r\n");
   s->o.flags |= OBJ_READONLY;
   system_define("CRLF", s);
+
+  UNGCPRO();
 }
 
 void string_init(void)
 {
-  DEFINE(stringp);
-  DEFINE(make_string);
-  DEFINE(string_length);
-  DEFINE(string_fill);
-  DEFINE(string_ref);
-  DEFINE(string_set);
-  DEFINE(string_cmp);
-  DEFINE(string_icmp);
-  DEFINE(string_8icmp);
-  DEFINE(string_search);
-  DEFINE(string_isearch);
-  DEFINE(substring);
-  DEFINE(string_append);
-  DEFINE(split_words);
-  DEFINE(itoa);
-  DEFINE(atoi);
-  DEFINE(string_upcase);
-  DEFINE(string_downcase);
-  DEFINE(string_7bit);
-  DEFINE(isalpha);
-  DEFINE(isupper);
-  DEFINE(islower);
-  DEFINE(isdigit);
-  DEFINE(isxdigit);
-  DEFINE(isprint);
-  DEFINE(isspace);
-  DEFINE(cupper);
-  DEFINE(clower);
-  DEFINE(c7bit);
+  DEFINE("string?", stringp);
+  DEFINE("make_string", make_string);
+  DEFINE("string_length", string_length);
+  DEFINE("string_fill!", string_fill);
+  DEFINE("string_ref", string_ref);
+  DEFINE("string_set!", string_set);
+  DEFINE("string_cmp", string_cmp);
+  DEFINE("string_icmp", string_icmp);
+  DEFINE("string_8icmp", string_8icmp);
+  DEFINE("string_search", string_search);
+  DEFINE("string_isearch", string_isearch);
+  DEFINE("substring", substring);
+  DEFINE("string_append", string_append);
+  DEFINE("split_words", split_words);
+  DEFINE("itoa", itoa);
+  DEFINE("atoi", atoi);
+  DEFINE("string_upcase", upcase);
+  DEFINE("string_downcase", downcase);
+  DEFINE("string_7bit", strto7bit);
+  DEFINE("calpha?", isalpha);
+  DEFINE("cupper?", isupper);
+  DEFINE("clower?", islower);
+  DEFINE("cdigit?", isdigit);
+  DEFINE("cxdigit?", isxdigit);
+  DEFINE("cprint?", isprint);
+  DEFINE("cupper", toupper);
+  DEFINE("clower", tolower);
+  DEFINE("c7bit", cto7bit);
 
   define_strings();
 
@@ -776,8 +756,8 @@ void string_init(void)
 
 #ifdef USE_PCRE
 
-  DEFINE(make_regexp);
-  DEFINE(regexp_exec);
+  DEFINE("make_regexp", make_regexp);
+  DEFINE("regexp_exec", regexp_exec);
 
   /* PCRE options */
   def(PCRE_CASELESS);
@@ -793,7 +773,7 @@ void string_init(void)
 
 #endif
 #if HAVE_CRYPT_H
-  DEFINE(crypt);
+  DEFINE("crypt", crypt);
 #endif
   
 #undef def

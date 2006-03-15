@@ -52,8 +52,6 @@ const char *const mudlle_errors[] = {
 };
 CASSERT_VLEN(mudlle_errors, last_runtime_error);
 
-int suppress_extra_calltrace;
-
 static void print_error(int error)
 {
   if (error < last_runtime_error && error >= 0)
@@ -505,7 +503,7 @@ static void basic_error(runtime_errors error, int onstack)
       print_call_trace(error, onstack);
     }
 
-  if (mudcalltrace && !suppress_extra_calltrace)
+  if (mudcalltrace)
     {
       struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
       struct list *l = mudcalltrace;

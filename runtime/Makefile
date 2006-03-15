@@ -30,7 +30,7 @@ CFLAGS +=-fno-optimize-sibling-calls -I..
 CC=gcc
 MAKEDEPEND=gcc -MM
 
-CSTFILES = files.h io.h ../module.h
+CSTFILES = files.h io.h
 
 ifneq ($(USE_XML),)
 CFLAGS += -I/usr/include/libxml2
@@ -48,8 +48,8 @@ librun.a: $(OBJS)
 	ar r librun.a $(OBJS)
 	-ranlib librun.a
 
-mudllecst.c: consts.pl $(CSTFILES) Makefile
-	perl $< $(CSTFILES) > $@
+mudllecst.c: consts.pl $(CSTFILES)
+	perl $^ > $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
@@ -60,5 +60,15 @@ dep depend: .depend
 
 .depend: $(SRC)
 	$(MAKEDEPEND) $(CFLAGS) $(SRC)> .depend
+
+lsimple.c: simple.l
+	flex -F -Psimple simple.l
+	mv lex.simple.c lsimple.c
+
+psimple.c: psimple.h
+psimple.h: simple.y
+	bison -b psimple -d -p simple -t -v simple.y
+	mv psimple.tab.c psimple.c
+	mv psimple.tab.h psimple.h
 
 -include .depend

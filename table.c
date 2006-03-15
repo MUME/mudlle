@@ -25,7 +25,7 @@
 #include "types.h"
 #include "table.h"
 #include "alloc.h"
-#include "charset.h"
+#include "utils.charset.h"
 
 /* The hash table size must be a power of 2 */
 

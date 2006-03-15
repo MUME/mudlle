@@ -47,14 +47,14 @@ static ubyte builtin_ops[last_builtin];
 component component_undefined, component_true, component_false;
 
 static struct string *last_filename;
-static char *last_c_filename;
+static const char *last_c_filename;
 static uword compile_level;	/* Security level for generated code */
 
 struct string *make_filename(const char *fname)
 {
   if (strcmp(fname, last_c_filename))
     {
-      free(last_c_filename);
+      free((void *)last_c_filename);
       last_c_filename = xstrdup(fname);
       last_filename = alloc_string(fname);
       last_filename->o.flags |= OBJ_READONLY;
@@ -673,21 +673,14 @@ struct closure *compile_code(mfile f, int seclev)
   fncode top;
   block b = f->body;
 
-  const char *filename = (f->body->filename
-                          ? f->body->filename
-                          : "");
   compile_level = seclev;
   erred = FALSE;
   env_reset();
   top = new_fncode(TRUE);
   env_push(NULL, top);		/* Environment must not be totally empty */
-  function func = new_function(fnmemory(top), stype_any, sl, NULL,
-                               new_component(fnmemory(top), c_block, b),
-                               f->body->lineno,
-                               filename);
-  func->varname = "top-level";
-  cc = generate_function(func, TRUE, top);
-
+  cc = generate_function(new_function(fnmemory(top), stype_any, sl, NULL,
+				      new_component(fnmemory(top), c_block, b),
+				      0, ""), TRUE, top);
   GCPRO1(cc);
   generate_fncode(top, NULL, NULL, NULL, 0, seclev);
   env_pop(&dummy);
@@ -723,7 +716,7 @@ int interpret(value *result, int seclev, int reload)
 
 	  if (closure)
 	    {
-	      mwarn_module(f->name);
+	      mwarn_module();
 
 	      *result = mcatch_call0(closure);
 

@@ -65,16 +65,12 @@ static void vwarning(const char *fname, int line, const char *msg, va_list args)
 {
   char err[4096];
 
-  vsnprintf(err, sizeof err, msg, args);
+  vsprintf(err, msg, args);
   if (mudout) mflush(mudout);
-
-  if (fname == NULL)
-    mprintf(muderr, "warning: %s" EOL, err);
-  else if (line > 0)
+  if (fname && line >= 0)
     mprintf(muderr, "%s:%d: warning: %s" EOL, fname, line, err);
   else
-    mprintf(muderr, "%s: warning: %s" EOL, fname, err);
-
+    mprintf(muderr, "warning: %s" EOL, err);
   if (muderr) mflush(muderr);
 }
 

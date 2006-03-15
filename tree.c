@@ -27,11 +27,11 @@
 #include "error.h"
 #include "utils.h"
 #include "env.h"
-#include "charset.h"
+#include "utils.charset.h"
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
-	       block body, int lineno)
+	       block body)
 {
   mfile newp = allocate(heap, sizeof *newp);
 
@@ -42,7 +42,6 @@ mfile new_file(block_t heap, enum file_class vclass, const char *name,
   newp->reads = reads;
   newp->writes = writes;
   newp->body = body;
-  newp->lineno = lineno;
 
   return newp;
 }
@@ -438,7 +437,7 @@ static value mudlle_parse_component(component c)
 {
 #define B 2
   struct vector *mc;
-  static const char msize[] = { 2, 1, 1, 7, 1, 2, 2, 2, 2 };
+  static char msize[] = { 2, 1, 1, 7, 1, 2, 2, 2, 2 };
   struct gcpro gcpro1;
   struct string *sym;
   value val;
@@ -519,22 +518,24 @@ static value mudlle_parse_component(component c)
 
 value mudlle_parse(block_t heap, mfile f)
 {
-  struct vector *file = alloc_vector(8);
+  struct vector *file = alloc_vector(7);
   struct gcpro gcpro1;
+  value tmp;
 
   GCPRO1(file);
-
-  component cbody = new_component(heap, c_block, f->body);
-  cbody->lineno = f->lineno;
-
-  SET_VECTOR(file, 0, makeint(f->vclass));
-  SET_VECTOR(file, 1, f->name ? alloc_string(f->name) : makebool(FALSE));
-  SET_VECTOR(file, 2, mudlle_vlist(f->imports));
-  SET_VECTOR(file, 3, mudlle_vlist(f->defines));
-  SET_VECTOR(file, 4, mudlle_vlist(f->reads));
-  SET_VECTOR(file, 5, mudlle_vlist(f->writes));
-  SET_VECTOR(file, 6, mudlle_parse_component(cbody));
-  SET_VECTOR(file, 7, alloc_string(f->body->filename));
+  file->data[0] = makeint(f->vclass);
+  tmp = f->name ? alloc_string(f->name) : makebool(FALSE);
+  file->data[1] = tmp;
+  tmp = mudlle_vlist(f->imports);
+  file->data[2] = tmp;
+  tmp = mudlle_vlist(f->defines);
+  file->data[3] = tmp;
+  tmp = mudlle_vlist(f->reads);
+  file->data[4] = tmp;
+  tmp = mudlle_vlist(f->writes);
+  file->data[5] = tmp;
+  tmp = mudlle_parse_component(new_component(heap, c_block, f->body));
+  file->data[6] = tmp;
   UNGCPRO();
 
   return file;
@@ -686,7 +687,7 @@ static void print_component(FILE *f, component c)
 
 void print_file(FILE *out, mfile f)
 {
-  static const char *const fnames[] = { "", "module", "library" };
+  static const char *fnames[] = { "", "module", "library" };
 
   fputs(fnames[f->vclass], out);
   if (f->name) fprintf(out, " %s\n", f->name);

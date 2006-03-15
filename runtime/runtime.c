@@ -116,12 +116,14 @@ void define_int_vector(const char *name, const int *vec, int count)
   system_define(name, v);
 }
 
-void runtime_define(const struct primitive_ext *op)
+void runtime_define(const char *name, struct primitive_ext *op)
 {
   const char *const *type;
 
   struct primitive *prim;
   char bname[MAXNAME];
+
+  op->name = name;
 
   assert(op->nargs <= MAX_PRIMITIVE_ARGS);
 
@@ -157,15 +159,14 @@ void runtime_define(const struct primitive_ext *op)
   if (binops)
     {
       bname[MAXNAME - 1] = '\0';
-      strncpy(bname, op->name, MAXNAME - 1);
+      strncpy(bname, name, MAXNAME - 1);
       fwrite(bname, MAXNAME, 1, binops);
     }
 
   if (op->seclevel > 0)
     {
       prim = alloc_secure(op_count++, op);
-      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", op->name, op->help, 
-                       op->seclevel);
+      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", name, op->help, op->seclevel);
     }
   else
     {
@@ -176,9 +177,9 @@ void runtime_define(const struct primitive_ext *op)
           prim->o.type = type_varargs;
           assert(~op->flags & OP_NOALLOC);
         }
-      if (ops) fprintf(ops, "%-20s %s\n", op->name, op->help);
+      if (ops) fprintf(ops, "%-20s %s\n", name, op->help);
     }
-  system_define(op->name, prim);
+  system_define(name, prim);
 }
 
 #ifdef MUDLLE_INTERRUPT
@@ -480,15 +481,11 @@ void runtime_init(void)
     act.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
     sigemptyset(&act.sa_mask);
     sigaction(SIGINT, &act, NULL);
-#ifdef SIGQUIT
     sigaction(SIGQUIT, &act, NULL);
-#endif
   }    
 #else
   signal(SIGINT, catchint);
-#ifdef SIGQUIT
   signal(SIGQUIT, catchint);
-#endif
 #endif
 #endif
 
@@ -553,8 +550,6 @@ void runtime_init(void)
   pattern_init();
   mudlle_consts_init();
   xml_init();
-#if 0
-#endif
   module_set("system", module_protected, 0);
   if (ops) fclose(ops);
   if (binops) fclose(binops);

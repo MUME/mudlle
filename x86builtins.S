@@ -25,8 +25,6 @@
 
 #include "options.h"
 
-#  include "x86consts.h"
-
 .section	.text
 
 #ifndef NOCOMPILER
@@ -51,11 +49,102 @@
 #define closure_in %edx
 #define closure_inb %dl
 
+/* Runtime errors */
+#define error_bad_function       0
+#define error_stack_underflow    1
+#define error_bad_type           2
+#define error_divide_by_zero     3
+#define error_bad_index          4
+#define error_bad_value          5
+#define error_variable_read_only 6
+#define error_loop               7
+#define error_recurse            8
+#define error_wrong_parameters   9
+#define error_security_violation 10
+#define error_value_read_only    11
+#define error_user_interrupt     12
+#define error_no_match           13
+#define error_compile            14
+
+/* Types */
+#define type_code                0
+#define type_closure             1
+#define type_variable            2
+#define type_internal            3
+#define type_primitive           4
+#define type_varargs             5
+#define type_secure              6
+#define type_integer             7
+#define type_string              8
+#define type_vector              9
+#define type_list                10
+#define type_symbol              11
+#define type_table               12
+#define type_private             13
+#define type_object              14
+#define type_character           15
+#define type_gone                16
+#define type_outputport          17
+#define type_mcode               18
+#define type_float               19
+#define type_bigint              20
+#define type_null                21
+#define last_type                22
+
+/* Garbage types */
+#define garbage_string           0
+#define garbage_record           1
+#define garbage_code             2
+#define garbage_forwarded        3
+#define garbage_permanent        4
+#define garbage_temp             5
+#define garbage_mcode            6
+
+/* Flags */
+#define flag_readonly            1
+#define flag_immutable           2
+
+/* Basic object structure */
+#ifdef GCDEBUG
+#define object_offset 12	/* Size of object header */
+#define object_gen 8		/* Object generation */
+#else
+#define object_offset 8		/* Size of object header */
+#endif
+#define object_type 5		/* Type of object */
+#define object_size 0		/* Size of object */
+#define object_info 4		/* Object information (type, flags, etc) */
+#define object_flags 6		/* Flags of object */
+
+/* Offsets of fields in various types */
+#define pair_size (object_offset+8)
+#define env_ovalues 8		/* values field in environment */
+#define mcode_seclevel 0	/* seclevel in mcode */
+#define function_offset 40	/* start of code in mcode object */
+#define primitive_op 4		/* primitive_ext in primitive (sans object_offset) */
+#define primitive_call_count 8	/* call_count in primitive (sans object_offset) */
+#define primop_op 8		/* C function in primitive_ext */
+#define primop_nargs 12		/* nargs in primitive_ext */
+#define primop_seclevel 20	/* seclevel in primitive_ext */
+
 /* Stack frame information */
 #define argstart 8
 
+/* ccontext structure def */
+#define cc_frame_start 0
+#define cc_frame_end_sp 4
+#define cc_frame_end_bp 8
+#define cc_callee 12
+#define cc_caller 20
+#define cc_retadr 28
+#define cc_SIZE 32
+
 /* call_stack structure def */
+#define cs_next 0
+#define cs_type 4
 #define cs_compiled_SIZE 8 /* size for call_compiled */
+
+#define call_compiled 2
 
 /* External symbols used */
 	.globl	N(ccontext)
@@ -178,7 +267,7 @@
 	test	$3,x
 
 #define ARG0_IS_READ_WRITE				\
-	testb	$OBJ_READONLY,object_flags(arg0);	\
+	testb	$flag_readonly,object_flags(arg0);	\
 	jne	E(error_value_read_only)
 
 #ifdef GCDEBUG_CHECK
@@ -329,16 +418,16 @@ cadd:	/* Call string_append */
 N(btypeof):
         ISNULL(arg0)
         mov	$(2 * type_null) + 1,arg1
-        je	0f
+        je	.L0
 
         ISINT(arg0b)
         mov	$(2 * type_integer) + 1,arg1
-        jne	0f
+        jne	.L0
 
         movzbl	object_type(arg0),arg1
         MAKEINT(arg1)
 
-0:	mov	arg1,arg0
+.L0:    mov	arg1,arg0
         ret
 
 	.globl	N(bref)
@@ -656,7 +745,7 @@ N(balloc_closure):
 	mov	N(minorgen),arg1
 	mov	arg1,object_gen(arg0)
 #endif
-	movl	$garbage_record | type_closure << 8 | OBJ_READONLY << 16,object_info(arg0)
+	movl	$garbage_record | type_closure << 8 | flag_readonly << 16,object_info(arg0)
 	mov	arg0,arg1
 	ret
 
@@ -681,12 +770,12 @@ N(balloc_cons):
 	/* success */
 	mov	arg1,N(posgen0)
 	movl	$pair_size,object_size(arg1)
-	GCSTAT_ADD(type_pair, $pair_size)
+	GCSTAT_ADD(type_list, $pair_size)
 #ifdef GCDEBUG
 	mov	N(minorgen),arg0
 	mov	arg0,object_gen(arg1)
 #endif
-	movl	$garbage_record | type_pair << 8,object_info(arg1)
+	movl	$garbage_record | type_list << 8,object_info(arg1)
 	ret
 
 consgc:	SAVE_CALLER

@@ -22,22 +22,20 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <glob.h>
 #include <string.h>
-#ifdef WIN32
-#  include <io.h>
-#endif
-#include <dirent.h>
+#include <alloca.h>
+#include <grp.h>
+#include <pwd.h>
 
-#ifndef WIN32
-#  include <grp.h>
-#  include <pwd.h>
-#  include <glob.h>
+#ifdef GLOB_TILDE
+#define _GNU_GLOB_
 #endif
 
-#include "mudlle.h"
 #include "runtime/runtime.h"
 #include "print.h"
 #include "utils.h"
@@ -47,7 +45,7 @@
 #include "call.h"
 
 
-OPERATION(load, 0, "`s -> `b. Loads file `s. Returns true if successful",
+OPERATION(load, "s -> b. Loads file s. Returns true if successful",
 	  1, (struct string *name), 0)
 {
   char *fname;
@@ -58,22 +56,18 @@ OPERATION(load, 0, "`s -> `b. Loads file `s. Returns true if successful",
 }
 
 
-UNSAFEOP(mkdir, 0, "`s `n1 -> `n2. Make directory `s (mode `n1)",
+UNSAFEOP(mkdir, "s n1 -> n2. Make directory s (mode n1)",
 	 2, (struct string *name, value mode),
 	 OP_LEAF | OP_NOALLOC)
 {
   TYPEIS(name, type_string);
   ISINT(mode);
 
-#ifdef WIN32
-  return makeint(mkdir(name->str));
-#else
   return makeint(mkdir(name->str, intval(mode)));
-#endif
 }
 
-UNSAFEOP(directory_files, 0, "`s -> `l. List all files of directory `s"
-         " (returns false if problems)",
+UNSAFEOP(directory_files, "s -> l. List all files of directory s (returns "
+	 "false if problems)",
 	 1, (struct string *dir),
 	 OP_LEAF)
 {
@@ -102,11 +96,9 @@ UNSAFEOP(directory_files, 0, "`s -> `l. List all files of directory `s"
   return makebool(FALSE);	  
 }
 
-#ifndef WIN32
-UNSAFEOP(glob_files, 0,
-         "`s0 `s1 `n -> `l. Returns a list of all files matched by "
-	 "the glob pattern `s1, executed in directory `s0, using flags in `n "
-	 "(`GLOB_xxx). Returns FALSE on error", 
+UNSAFEOP(glob_files, "s0 s1 n -> l. Returns a list of all files matched by "
+	 "the glob pattern s1, executed in directory s0, using flags in n "
+	 "(GLOB_xxx). Returns FALSE on error", 
 	 3, (struct string *dir, struct string *pat, value n),
 	 OP_LEAF)
 {
@@ -123,35 +115,14 @@ UNSAFEOP(glob_files, 0,
   ISINT(n);
   flags = intval(n);
 
-  const int allowed_flags =
-    0
-#ifdef GLOB_TILDE
-    | GLOB_TILDE
+#ifdef _GNU_GLOB_
+  if (flags & ~(GLOB_TILDE | GLOB_BRACE | GLOB_MARK | GLOB_NOCHECK |
+		GLOB_NOESCAPE | GLOB_PERIOD | GLOB_NOMAGIC | GLOB_ONLYDIR))
+#elif defined(GLOB_NOESCAPE)
+  if (flags & ~(GLOB_MARK | GLOB_NOCHECK | GLOB_NOESCAPE))
+#else
+  if (flags & ~(GLOB_MARK | GLOB_NOCHECK))
 #endif
-#ifdef GLOB_BRACE
-    | GLOB_BRACE
-#endif
-#ifdef GLOB_MARK
-    | GLOB_MARK
-#endif
-#ifdef GLOB_NOCHECK
-    | GLOB_NOCHECK
-#endif
-#ifdef GLOB_NOESCAPE
-    | GLOB_NOESCAPE
-#endif
-#ifdef GLOB_PERIOD
-    | GLOB_PERIOD
-#endif
-#ifdef GLOB_NOMAGIC
-    | GLOB_NOMAGIC
-#endif
-#ifdef GLOB_ONLYDIR
-    | GLOB_ONLYDIR
-#endif
-    ;
-
-  if (flags & ~allowed_flags)
     runtime_error(error_bad_value);
 
   if ((orig_wd = open(".", 0)) < 0)
@@ -192,7 +163,6 @@ UNSAFEOP(glob_files, 0,
   globfree(&files);
   return l;
 }
-#endif /* ! WIN32 */
 
 static value build_file_stat(struct stat *sb)
 {
@@ -209,16 +179,14 @@ static value build_file_stat(struct stat *sb)
   info->data[FS_ATIME]   = makeint(sb->st_atime);
   info->data[FS_MTIME]   = makeint(sb->st_mtime);
   info->data[FS_CTIME]   = makeint(sb->st_ctime);
-#ifndef WIN32
   info->data[FS_BLKSIZE] = makeint(sb->st_blksize);
   info->data[FS_BLOCKS]  = makeint((int)sb->st_blocks);
-#endif
   
   return info;
 }
 
-UNSAFEOP(file_stat, 0, "`s -> `v. Returns status of file `s (returns false for "
-	 "failure). See the `FS_xxx constants and `file_lstat().",
+UNSAFEOP(file_stat, "s -> v. Returns status of file s (returns false for "
+	 "failure). See the FS_xxx constants and file_lstat().",
 	 1, (struct string *fname),
 	 OP_LEAF)
 {
@@ -231,11 +199,8 @@ UNSAFEOP(file_stat, 0, "`s -> `v. Returns status of file `s (returns false for "
     return makebool(FALSE);
 }
 
-#ifndef WIN32
-UNSAFEOP(file_lstat, 0,
-         "`s -> `v. Returns status of file `s (not following links)."
-	 " Returns FALSE for failure. See the `FS_xxx constants and"
-         " `file_stat()",
+UNSAFEOP(file_lstat, "s -> v. Returns status of file s (not following links) "
+	 ". Returns FALSE for failure. See the FS_xxx constants and file_stat()",
 	 1, (struct string *fname),
 	 OP_LEAF)
 {
@@ -248,7 +213,7 @@ UNSAFEOP(file_lstat, 0,
     return makebool(FALSE);
 }
 
-UNSAFEOP(readlink, 0, "`s1 -> `s2. Returns the contents of symlink `s, or FALSE "
+UNSAFEOP(readlink, "s1 -> s2. Returns the contents of symlink s, or FALSE "
 	 "for failure", 1, (struct string *lname), OP_LEAF)
 {
   struct stat sb;
@@ -270,10 +235,8 @@ UNSAFEOP(readlink, 0, "`s1 -> `s2. Returns the contents of symlink `s, or FALSE 
 
   return res;
 }
-#endif /* ! WIN32 */
 
-UNSAFEOP(file_regularp, "file_regular?",
-         "`s -> `b. Returns TRUE if `s is a regular file (null "
+UNSAFEOP(file_regularp, "s -> b. Returns TRUE if s is a regular file (null "
 	 "for failure)",
 	 1, (struct string *fname),
 	 OP_LEAF | OP_NOALLOC)
@@ -287,7 +250,7 @@ UNSAFEOP(file_regularp, "file_regular?",
     return NULL;
 }
 
-UNSAFEOP(remove, 0, "`s -> `b. Removes file `s, returns TRUE if success",
+UNSAFEOP(remove, "s -> b. Removes file s, returns TRUE if success",
 	  1, (struct string *fname),
 	  OP_LEAF)
 {
@@ -296,7 +259,7 @@ UNSAFEOP(remove, 0, "`s -> `b. Removes file `s, returns TRUE if success",
   return makebool(unlink(fname->str) == 0);
 }
 
-UNSAFEOP(rename, 0, "`s1 `s2 -> `n. Renames file `s1 to `s2. Returns the Unix error "
+UNSAFEOP(rename, "s1 s2 -> n. Renames file s1 to s2. Returns the Unix error "
 	 "number or 0 for success",
 	  2, (struct string *oldname, struct string *newname),
 	  OP_LEAF)
@@ -307,9 +270,8 @@ UNSAFEOP(rename, 0, "`s1 `s2 -> `n. Renames file `s1 to `s2. Returns the Unix er
   return makeint(rename(oldname->str, newname->str) ? errno : 0);
 }
 
-#ifndef WIN32
-UNSAFEOP(chown, 0, "`s1 `n0 `n1 -> `n2. Changed owner of file `s1 to uid `n0"
-	 " and gid `n1. Use -1 not to change that field."
+UNSAFEOP(chown, "s1 n0 n1 -> n2. Changed owner of file s1 to uid n0"
+	 " and gid n1. Use -1 not to change that field."
 	 " Returns errno or 0 for success.",
 	 3, (struct string *fname, value uid, value gid),
 	 OP_LEAF)
@@ -319,7 +281,7 @@ UNSAFEOP(chown, 0, "`s1 `n0 `n1 -> `n2. Changed owner of file `s1 to uid `n0"
 		 
 }
 
-UNSAFEOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
+UNSAFEOP(chmod, "s1 n0 -> n1. Changed mode of file s1 to n0. "
 	 " Returns errno or 0 for success.",
 	 2, (struct string *fname, value mode),
 	 OP_LEAF)
@@ -328,10 +290,9 @@ UNSAFEOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
   return makeint(chmod(fname->str, GETINT(mode)) ? errno : 0);
 		 
 }
-#endif /* ! WIN32 */
 
-OPERATION(strerror, 0, "`n -> `s. Returns an error string corresponding to"
-	  " errno `n, an integer with an errno if there is an error",
+OPERATION(strerror, "n -> s. Returns an error string corresponding to"
+	  " errno n, an integer with an errno if there is an error",
 	  1, (value merrno), OP_LEAF)
 {
   const char *s;
@@ -341,7 +302,7 @@ OPERATION(strerror, 0, "`n -> `s. Returns an error string corresponding to"
 
 }
 
-UNSAFEOP(file_read, 0, "`s1 -> `s2. Reads file `s1 and returns its contents (or "
+UNSAFEOP(file_read, "s1 -> s2. Reads file s1 and returns its contents (or "
 	 "the Unix errno value)",
 	  1, (struct string *name),
 	  OP_LEAF)
@@ -371,7 +332,7 @@ UNSAFEOP(file_read, 0, "`s1 -> `s2. Reads file `s1 and returns its contents (or 
   return makeint(errno);
 }
 
-UNSAFEOP(file_write, 0, "`s1 `s2 -> `n. Writes `s2 to file `s1. Creates `s1 if it "
+UNSAFEOP(file_write, "s1 s2 -> n. Writes s2 to file s1. Creates s1 if it "
 	 "doesn't exist. Returns the Unix return code (0 for success)",
 	 2, (struct string *file, struct string *data),
 	 OP_LEAF)
@@ -394,7 +355,7 @@ UNSAFEOP(file_write, 0, "`s1 `s2 -> `n. Writes `s2 to file `s1. Creates `s1 if i
   return makeint(errno);
 }
 
-UNSAFEOP(file_append, 0, "`s1 `s2 -> `n. Appends string `s2 to file `s1. Creates `s1 "
+UNSAFEOP(file_append, "s1 s2 -> n. Appends string s2 to file s1. Creates s1 "
 	 "if nonexistent. Returns the Unix error number for failure, 0 for "
 	 "success.",
 	 2, (struct string *file, struct string *val), 
@@ -409,24 +370,24 @@ UNSAFEOP(file_append, 0, "`s1 `s2 -> `n. Appends string `s2 to file `s1. Creates
   fd = open(file->str, O_WRONLY | O_CREAT | O_APPEND, 0666);
   if (fd != -1)
     {
-#ifndef WIN32
-      fchmod(fd, 0666);   /* ### What's the point of this? - finnag */
-#endif
-      int len;
-      size = string_len(val);
-      len = write(fd, val->str, size);
-      close(fd);
-      if (len == size)
-        return makeint(0);
+      if (fchmod(fd, 0666) == 0) /* ### What's the point of this? - finnag */
+	{
+	  int len;
+	  size = string_len(val);
+	  len = write(fd, val->str, size);
+	  close(fd);
+	  if (len == size)
+	    return makeint(0);
+	}
+      else
+	close(fd);
     }
   return makeint(errno);
 }
 
-#ifndef WIN32
-OPERATION(passwd_file_entries, 0,
-          " -> `l. Returns a list of [ `pw_name `pw_uid "
-	  "`pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of "
-	  "/etc/passwd. Cf. `getpwent(3)",
+OPERATION(passwd_file_entries, " -> l. Returns a list of [ pw_name pw_uid "
+	  "pw_gid pw_gecos pw_dir pw_shell ] from the contents of "
+	  "/etc/passwd. Cf. getpwent(3)",
 	 0, (void), OP_LEAF)
 {
   struct list *res = NULL;
@@ -471,10 +432,8 @@ OPERATION(passwd_file_entries, 0,
   return res;
 }
 
-OPERATION(group_file_entries, 0, 
-          " -> `l. Returns a list of [ `gr_name `gr_gid "
-	  "( `gr_mem ... ) ] from the contents of /etc/group."
-          " Cf. `getgrent(3)",
+OPERATION(group_file_entries, " -> l. Returns a list of [ gr_name gr_gid "
+	  "( gr_mem ... ) ] from the contents of /etc/group. Cf. getgrent(3)",
 	 0, (void), OP_LEAF)
 {
   struct list *res = NULL, *l = NULL;
@@ -525,25 +484,22 @@ OPERATION(group_file_entries, 0,
 
   return res;
 }
-#endif /* ! WIN32 */
 
 #define DEF(s) system_define(#s, makeint(s))
 
 void files_init(void)
 {
-  DEFINE(load);
-  DEFINE(file_read);
-  DEFINE(file_write);
-  DEFINE(file_append);
-  DEFINE(mkdir);
-  DEFINE(directory_files);
-  DEFINE(file_stat);
-
-#ifndef WIN32
-  DEFINE(readlink);
-  DEFINE(file_lstat);
-  DEFINE(passwd_file_entries);
-  DEFINE(group_file_entries);
+  DEFINE("load", load);
+  DEFINE("file_read", file_read);
+  DEFINE("file_write", file_write);
+  DEFINE("file_append", file_append);
+  DEFINE("mkdir", mkdir);
+  DEFINE("directory_files", directory_files);
+  DEFINE("file_stat", file_stat);
+  DEFINE("readlink", readlink);
+  DEFINE("file_lstat", file_lstat);
+  DEFINE("passwd_file_entries", passwd_file_entries);
+  DEFINE("group_file_entries", group_file_entries);
 
   DEF(S_IFMT);
   DEF(S_IFSOCK);
@@ -569,39 +525,25 @@ void files_init(void)
   DEF(S_IWOTH);
   DEF(S_IXOTH);
 
-  DEFINE(chown);
-  DEFINE(chmod);
+  DEFINE("file_regular?", file_regularp);
+  DEFINE("remove", remove);
+  DEFINE("rename", rename);
+  DEFINE("chown", chown);
+  DEFINE("chmod", chmod);
 
-  DEFINE(file_regularp);
-  DEFINE(remove);
-  DEFINE(rename);
+  DEFINE("strerror", strerror);
 
-  DEFINE(strerror);
-
-  DEFINE(glob_files);
-#ifdef GLOB_MARK
+  DEFINE("glob_files", glob_files);
   DEF(GLOB_MARK);
-#endif
-#ifdef GLOB_NOCHECK
   DEF(GLOB_NOCHECK);
-#endif
 #ifdef GLOB_NOESCAPE
   DEF(GLOB_NOESCAPE);
 #endif
-#ifdef GLOB_TILDE
+#ifdef _GNU_GLOB_
   DEF(GLOB_TILDE);
-#endif
-#ifdef GLOB_BRACE
   DEF(GLOB_BRACE);
-#endif
-#ifdef GLOB_PERIOD
   DEF(GLOB_PERIOD);
-#endif
-#ifdef GLOB_NOMAGIC
   DEF(GLOB_NOMAGIC);
-#endif
-#ifdef GLOB_ONLYDIR
   DEF(GLOB_ONLYDIR);
 #endif
-#endif /* ! WIN32 */
 }

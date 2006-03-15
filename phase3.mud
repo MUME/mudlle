@@ -336,8 +336,7 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	      fns);
     ];
 
-  // Placeholder for "myself" in functions
-  mc:myself = mc:var_make_constant("<myself>");
+  mc:myself = mc:var_make_constant(null); // Placeholder for "myself" in functions
 
   direct_recursion = fn (ifn)
     // Types: ifn: intermediate function

@@ -309,16 +309,15 @@ entry_types :
   library |
   module ;
 
-simple : save_lineno expression_list 
+simple : expression_list 
  { $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, 
-		 new_codeblock(parser_memory, NULL, $2, NULL, -1),
-                 $1); } ;
+		 new_codeblock(parser_memory, NULL, $1, NULL, -1)); } ;
 
-module : MODULE optional_symbol imports reads writes save_lineno code_block optional_semi
-  { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $7, $6); } ;
+module : MODULE optional_symbol imports reads writes code_block optional_semi
+  { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $6); } ;
 
-library : LIBRARY SYMBOL imports defines reads writes save_lineno code_block optional_semi
-  { $$ = new_file(parser_memory, f_library, $2, $3, $4, $5, $6, $8, $7); } ;
+library : LIBRARY SYMBOL imports defines reads writes code_block optional_semi
+  { $$ = new_file(parser_memory, f_library, $2, $3, $4, $5, $6, $7); } ;
 
 optional_symbol :
   SYMBOL |

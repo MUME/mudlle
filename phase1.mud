@@ -506,24 +506,25 @@ writes mc:this_function
   
   mc:phase1 = fn (m)
     [
-      | components, fname, top_var |
+      | components, name |
 
-      top_var = vector(mc:v_global, "top-level");
-
-      fname = m[mc:m_filename];
+      if (!(name = m[mc:m_name]))
+	name = "top-level"
+      else
+	name = "top-level of " + name;
 
       mstart(m);
       env_init();
       env_enter_function(vector(mc:c_closure, -1,
-				stype_any,      // return type
-				null,           // help
-				null,           // arguments
-				false,          // vararg?
-				null,           // value
-                                m[mc:m_body][mc:c_lineno], // lineno
-				fname,          // filename
-				null,           // argtypes
-				top_var));      // variable name
+				stype_any,
+				null,
+				null, // no arguments
+				false,
+				null,
+				-1,
+				name,
+				null,
+				false));
       components = resolve_component(m[mc:m_body]);
       env_leave_function();
       mcleanup();
@@ -531,18 +532,18 @@ writes mc:this_function
       // make a top-level function
       m[mc:m_body] = 
 	vector(mc:c_closure, -1,
-	       stype_any,                       // return type
-	       null,                            // help
-	       null,                            // arguments
-	       false,                           // vararg?
-	       components,                      // value
-	       -1,                              // lineno
-	       fname,                           // filename
-	       null,                            // argtypes
-	       top_var,                         // variable name
+	       stype_any,
+	       null,
+	       null,		// No arguments
+	       false,
+	       components,
+	       -1,
+	       name,
+	       null,
+	       false,
 	       null, null, null, null, null, null, // var lists
-	       null,                            // misc
-	       0,                               // # fnvars
-	       null);                           // # allvars
+	       null,
+	       0,
+	       null);
     ];
 ];

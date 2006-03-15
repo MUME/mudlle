@@ -27,9 +27,7 @@
 #include <unistd.h>
 #include <setjmp.h>
 #include <stddef.h>
-#ifndef WIN32
-#  include <netinet/in.h>
-#endif
+#include <netinet/in.h>
 #include "alloc.h"
 #include "utils.h"
 #include "types.h"

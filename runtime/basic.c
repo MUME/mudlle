@@ -19,11 +19,10 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <alloca.h>
 #include <ctype.h>
 #include <fcntl.h>
-#ifndef WIN32
-#  include <netinet/in.h>
-#endif
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +31,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "mudlle.h"
 #include "runtime/runtime.h"
 #include "runtime/basic.h"
 #include "interpret.h"
@@ -50,15 +48,15 @@
 #include "compile.h"
 
 
-TYPEDOP(functionp, "function?", "`x -> `b. TRUE if `x is a function", 1, (value v),
+TYPEDOP(functionp, "x -> b. TRUE if x is a function", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_closure) || TYPE(v, type_primitive) ||
 		  TYPE(v, type_secure) || TYPE(v, type_varargs));
 }
 
-TYPEDOP(may_callp, "may_call?", "`f -> `b. TRUE if the caller is allowed to call"
-	" `f without a security violation.", 1, (value f),
+TYPEDOP(may_callp, "f -> b. TRUE if the caller is allowed to call"
+	" f without a security violation.", 1, (value f),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
   callable(f, -1);
@@ -85,7 +83,7 @@ value apply_vararg(value (*prim)(), struct vector *args)
   return prim(args, vector_len(args));
 }
 
-TYPEDOP(apply, 0, "`f `v -> `x. Excutes `f with arguments `v, returns its result",
+TYPEDOP(apply, "fn v -> x. Excutes fn with arguments v, returns its result",
 	2, (value f, struct vector *args),
 	0, "fv.x")
 {
@@ -102,9 +100,9 @@ TYPEDOP(apply, 0, "`f `v -> `x. Excutes `f with arguments `v, returns its result
   return call(f, args);
 }
 
-SECTOP(ieval, 0, "`s -> `x. Excute the expression in `s and return its result."
-       " On compile error, the message is display()'ed and `error_compile"
-       " is caused.",
+SECTOP(eval, "s -> x. Excute the expression in s and return its result. "
+       "On compile error, the message is display()'ed and error_compile "
+       "is caused.",
        1, (struct string *str), 1, 0, "s.x")
 {
   block_t parser_block;
@@ -114,7 +112,7 @@ SECTOP(ieval, 0, "`s -> `x. Excute the expression in `s and return its result."
 
   TYPEIS(str, type_string);
   LOCALSTR(scopy, str);
-  read_from_string(scopy, "<eval>");
+  read_from_string(scopy);
 
   parser_block = new_block();
   if (!(f = parse(parser_block)))
@@ -129,19 +127,17 @@ SECTOP(ieval, 0, "`s -> `x. Excute the expression in `s and return its result."
   return call0(closure);
 }
 
-TYPEDOP(call_trace, 0, " -> `v. Returns current call trace", 0, (void),
+TYPEDOP(call_trace, " -> v. Returns current call trace", 0, (void),
         OP_NOESCAPE, ".v")
 {
   return get_mudlle_call_trace();
 }
 
-TYPEDOP(error, 0, "`n -> . Causes error `n", 1, (value errn),
+TYPEDOP(error, "n -> . Causes error n", 1, (value errno),
         OP_NOESCAPE | OP_LEAF | OP_NOALLOC, "n.")
 {
-  long n = GETINT(errn);
-  if (n < 0 || n >= last_runtime_error)
-    runtime_error(error_bad_value);
-  runtime_error(n);
+  ISINT(errno);
+  runtime_error((runtime_errors)intval(errno));
   NOTREACHED;
 }
 
@@ -152,9 +148,8 @@ static void docall0(void *x)
   result = call0(x);
 }
 
-TYPEDOP(catch_error, 0, "`f `b -> `x. Executes `f() and returns its result."
-        " If an error occurs, returns the error number. If `b is true, error"
-        " messages are suppressed",
+TYPEDOP(catch_error, "fn b -> x. Executes fn() and returns its result. If an error occurs,\n\
+returns the error number. If b is true, error messages are suppressed",
         2, (value f, value suppress),
         0, "fx.x")
 {
@@ -169,8 +164,7 @@ TYPEDOP(catch_error, 0, "`f `b -> `x. Executes `f() and returns its result."
   NOTREACHED;
 }
 
-TYPEDOP(handle_error, 0, "`f0 `f1 -> `x. Executes `f0(). If an error occurs,"
-        " calls `f1(`errno). Returns result of `f0() or `f1(`errno)",
+TYPEDOP(handle_error, "fn1 fn2 -> x. Executes fn1(). If an error occurs, calls fn2(errno). Returns result of fn1 or fn2",
         2, (value f, value handler),
         0, "ff.x")
 {
@@ -194,18 +188,14 @@ TYPEDOP(handle_error, 0, "`f0 `f1 -> `x. Executes `f0(). If an error occurs,"
   NOTREACHED;
 }
 
-TYPEDOP(setjmp, 0,
-        "`f -> `x. Executes `f(`buf). `buf can be used with `longjmp(). The"
-        " return value is either the result of `f(`buf), or the value `x1"
-        " passed to `longjmp(`buf, `x1)",
+TYPEDOP(setjmp, "fn -> x. Executes fn(buf). buf can be used with longjmp()",
         1, (value f), 0, "f.o")
 {
   callable(f, 1);
   return msetjmp(f);
 }
 
-TYPEDOP(longjmp, 0,
-        "`buf `x -> . Returns `x from the `setjmp() that created `buf",
+TYPEDOP(longjmp, "buf x -> . Returns x from the setjmp() that created buf",
         2, (value buf, value x), 0, "ox.")
 {
   if (!is_mjmpbuf(buf))
@@ -215,7 +205,7 @@ TYPEDOP(longjmp, 0,
   NOTREACHED;
 }
 
-UNSAFEOP(session, 0, "`f -> . Calls `f() in it's own session",
+UNSAFEOP(session, "fn -> . Calls fn() in it's own session",
 	 1, (struct closure *fn),
 	 0)
 {
@@ -232,7 +222,7 @@ UNSAFEOP(session, 0, "`f -> . Calls `f() in it's own session",
 
 static const typing tref = { "vn.x", "sn.n", "ts.x", "os.x", "ns.x", NULL };
 
-FULLOP(ref, 0, "`x1 `x2 -> `x3. Generic interface to lookup operations: `x1[`x2] -> `x3",
+FULLOP(ref, "x1 x2 -> x3. Generic interface to lookup operations: x1[x2] -> x3",
        2, (value x1, value x2),
        0, OP_LEAF | OP_NOALLOC | OP_NOESCAPE, tref, /* extern */)
 {
@@ -252,7 +242,7 @@ FULLOP(ref, 0, "`x1 `x2 -> `x3. Generic interface to lookup operations: `x1[`x2]
 
 static const typing tset = { "vnx.3", "snn.n", "tsx.3", "osx.3", "nsx.3", NULL };
 
-FULLOP(set, "set!", "`x1 `x2 `x3 -> . Generic interface to set operations: `x1[`x2] = `x3",
+FULLOP(set, "x1 x2 x3 -> . Generic interface to set operations: x1[x2] = x3",
        3, (value x1, value x2, value x3),
        0, OP_LEAF | OP_NOESCAPE, tset, /* extern */)
 {
@@ -277,7 +267,7 @@ FULLOP(set, "set!", "`x1 `x2 `x3 -> . Generic interface to set operations: `x1[`
 
 #define OBJ_MAGIC 0x871f54ab
 
-UNSAFEOP(obj_save, "save_data", "`s `x -> . Writes mudlle value `x to file `s",
+UNSAFEOP(obj_save, "s x -> . Writes mudlle value x to file s",
 	 2, (struct string *file, value x), 
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -364,7 +354,7 @@ failed:
   
 }
 
-UNSAFEOP(load_data, 0, "`s -> `x. Loads a value from a mudlle save file",
+UNSAFEOP(load_data, "s -> x. Loads a value from a mudlle save file",
 	 1, (struct string *file),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -372,7 +362,7 @@ UNSAFEOP(load_data, 0, "`s -> `x. Loads a value from a mudlle save file",
 }
 
 #ifndef GCDEBUG
-UNSAFEOP(load_data_debug, 0, "`s -> `x. Loads a value from a GCDEBUG mudlle save file",
+UNSAFEOP(load_data_debug, "s -> x. Loads a value from a GCDEBUG mudlle save file",
 	 1, (struct string *file),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -380,8 +370,8 @@ UNSAFEOP(load_data_debug, 0, "`s -> `x. Loads a value from a GCDEBUG mudlle save
 }
 #endif
 
-OPERATION(obj_sizep, "size_data", "`x -> (`n1 . `n2) Returns object's size `n1 (in bytes)"
-	  " (of which `n2 mutable bytes)",
+OPERATION(obj_sizep, "x -> (n1 . n2) Returns object's size n1 (in bytes)"
+	  " (of which n2 mutable bytes)",
 	  1, (value x),
 	  OP_LEAF | OP_NOESCAPE)
 {
@@ -391,27 +381,27 @@ OPERATION(obj_sizep, "size_data", "`x -> (`n1 . `n2) Returns object's size `n1 (
   return alloc_list(makeint(size), makeint(mutble));
 }
 
-UNSAFEOP(staticpro_data, 0, " -> `v. Returns a vector of all statically "
+UNSAFEOP(staticpro_data, " -> v. Returns a vector of all statically "
 	 "protected data", 0, (void), OP_LEAF | OP_NOESCAPE)
 {
   return get_staticpro_data();
 }
 
-TYPEDOP(immutablep, "immutable?", "`x -> `b. Returns true if `x is an immutable value",
+TYPEDOP(immutablep, "x -> b. Returns true if x is an immutable value",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(immutablep(x));
 }
 
-TYPEDOP(readonlyp, "readonly?", "`x -> `b. Returns true if `x is a read-only value",
+TYPEDOP(readonlyp, "x -> b. Returns true if x is a read-only value",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(readonlyp(x));
 }
 
-TYPEDOP(protect, 0, "`x -> `x. Makes value `x readonly",
+TYPEDOP(protect, "x -> x. Makes value x readonly",
 	1, (struct obj *x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.1")
 {
@@ -426,7 +416,7 @@ TYPEDOP(protect, 0, "`x -> `x. Makes value `x readonly",
   return x;
 }
 
-UNSAFEOP(detect_immutability, 0, " -> . Detects the immutable values",
+UNSAFEOP(detect_immutability, " -> . Detects the immutable values",
 	 0, (void),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -434,7 +424,7 @@ UNSAFEOP(detect_immutability, 0, " -> . Detects the immutable values",
   undefined();
 }
 
-TYPEDOP(check_immutable, 0, "`x -> `x. Makes `x immutable if possible without"
+TYPEDOP(check_immutable, "x -> x. Makes x immutable if possible without"
         " recursion", 1, (value x),
         OP_LEAF | OP_NOESCAPE, "x.1")
 {
@@ -443,28 +433,28 @@ TYPEDOP(check_immutable, 0, "`x -> `x. Makes `x immutable if possible without"
   return x;
 }
 
-TYPEDOP(typeof, 0, "`x -> `n. Return type of `x",
+TYPEDOP(typeof, "x -> n. Return type of x",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makeint(TYPEOF(x));
 }
 
-TYPEDOP(seclevel, 0, " -> `n. Returns security level of your caller", 0, (void),
+TYPEDOP(seclevel, " -> n. Returns security level of your caller", 0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return makeint(seclevel);
 }
 
-TYPEDOP(minlevel, 0, " -> `n. Returns the minimum security level of the"
+TYPEDOP(minlevel, " -> n. Returns the minimum security level of the"
 	" current session. Calling a function with seclevel less than"
-	" minlevel will result in a security violation error", 0, (void),
+	" minlevel will result in a security_violation error", 0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return makeint(minlevel);
 }
 
-UNSAFEOP(unlimited_execution, 0, " -> . Disables execution-time limits", 0, (void),
+UNSAFEOP(unlimited_execution, " -> . Disables execution-time limits", 0, (void),
 	 OP_NOESCAPE)
 {
   unlimited_execution();
@@ -473,21 +463,21 @@ UNSAFEOP(unlimited_execution, 0, " -> . Disables execution-time limits", 0, (voi
 
 #ifdef ALLOC_STATS
 
-UNSAFEOP(closure_alloc_stats, 0, "  -> `v", 0, (void), OP_LEAF)
+UNSAFEOP(closure_alloc_stats, "  -> v", 0, (void), OP_LEAF)
 {
   return get_closure_alloc_stats();
 }
 
 struct vector *get_pair_alloc_stats(void);
 
-UNSAFEOP(pair_alloc_stats, 0, "  -> `v", 0, (void), OP_LEAF)
+UNSAFEOP(pair_alloc_stats, "  -> v", 0, (void), OP_LEAF)
 {
   return get_pair_alloc_stats();
 }
 
 struct vector *get_variable_alloc_stats(void);
 
-UNSAFEOP(variable_alloc_stats, 0, "  -> `v", 0, (void), OP_LEAF)
+UNSAFEOP(variable_alloc_stats, "  -> v", 0, (void), OP_LEAF)
 {
   return get_variable_alloc_stats();
 }
@@ -496,51 +486,49 @@ UNSAFEOP(variable_alloc_stats, 0, "  -> `v", 0, (void), OP_LEAF)
 
 void basic_init(void)
 {
-  DEFINE(functionp);
-  DEFINE(may_callp);
+  DEFINE("function?", functionp);
+  DEFINE("may_call?", may_callp);
 
-  DEFINE(error);
-  DEFINE(catch_error);
-  DEFINE(handle_error);
+  DEFINE("error", error);
+  DEFINE("catch_error", catch_error);
+  DEFINE("handle_error", handle_error);
   define_string_vector("error_messages", mudlle_errors, last_runtime_error);
 
-  define_string_vector("type_names", mtypenames, last_synthetic_type);
+  DEFINE("setjmp", setjmp);
+  DEFINE("longjmp", longjmp);
 
-  DEFINE(setjmp);
-  DEFINE(longjmp);
+  DEFINE("session", session);
+  DEFINE("apply", apply);
+  DEFINE("ieval", eval);
 
-  DEFINE(session);
-  DEFINE(apply);
-  DEFINE(ieval);
+  DEFINE("call_trace", call_trace);
 
-  DEFINE(call_trace);
+  DEFINE("typeof", typeof);
+  DEFINE("immutable?", immutablep);
+  DEFINE("readonly?", readonlyp);
+  DEFINE("protect", protect);
+  DEFINE("detect_immutability", detect_immutability);
+  DEFINE("check_immutable", check_immutable);
 
-  DEFINE(typeof);
-  DEFINE(immutablep);
-  DEFINE(readonlyp);
-  DEFINE(protect);
-  DEFINE(detect_immutability);
-  DEFINE(check_immutable);
-
-  DEFINE(obj_sizep);
-  DEFINE(staticpro_data);
-  DEFINE(obj_save);
-  DEFINE(load_data);
+  DEFINE("size_data", obj_sizep);
+  DEFINE("staticpro_data", staticpro_data);
+  DEFINE("save_data", obj_save);
+  DEFINE("load_data", load_data);
 
 #ifndef GCDEBUG
-  DEFINE(load_data_debug);
+  DEFINE("load_data_debug", load_data_debug);
 #endif
 
-  DEFINE(ref);
-  DEFINE(set);
+  DEFINE("ref", ref);
+  DEFINE("set!", set);
 
-  DEFINE(unlimited_execution);
-  DEFINE(seclevel);
-  DEFINE(minlevel);
+  DEFINE("unlimited_execution", unlimited_execution);
+  DEFINE("seclevel", seclevel);
+  DEFINE("minlevel", minlevel);
 
 #ifdef ALLOC_STATS
-  DEFINE(closure_alloc_stats);
-  DEFINE(pair_alloc_stats);
-  DEFINE(variable_alloc_stats);
+  DEFINE("closure_alloc_stats", closure_alloc_stats);
+  DEFINE("pair_alloc_stats", pair_alloc_stats);
+  DEFINE("variable_alloc_stats", variable_alloc_stats);
 #endif
 }

@@ -684,7 +684,7 @@ value call1plus(value c, value arg, struct vector *args)
   struct obj *o = c;
   struct gcpro gcpro1, gcpro2;
   int i, nargs;
-  const struct primitive_ext *op;
+  struct primitive_ext *op;
   value result = NULL;
 
   nargs = 1 + vector_len(args);
@@ -761,7 +761,7 @@ value call(value c, struct vector *args)
   struct obj *o = c;
   struct gcpro gcpro1, gcpro2;
   int i, nargs;
-  const struct primitive_ext *op;
+  struct primitive_ext *op;
   value result = NULL;
 
   nargs = vector_len(args);

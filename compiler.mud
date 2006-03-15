@@ -38,8 +38,8 @@ defines mc:c_class, mc:c_lineno, mc:c_assign, mc:c_asymbol, mc:c_avalue,
   mc:b_bitnot, mc:b_ifelse, mc:b_if, mc:b_while, mc:b_loop, mc:b_ref, mc:b_set,
   mc:b_cons, mc:b_assign, mc:b_car, mc:b_cdr, mc:m_class, mc:m_plain,
   mc:m_module, mc:m_library, mc:m_name, mc:m_imports, mc:m_defines, mc:m_reads,
-  mc:m_writes, mc:m_body, mc:m_filename, mc:b_slength, mc:b_vlength, mc:b_iadd,
-  mc:b_typeof, mc:c_fm_globalsbase, mc:c_fm_regs_callee,
+  mc:m_writes, mc:m_body, mc:b_slength, mc:b_vlength, mc:b_iadd, mc:b_typeof,
+  mc:c_fm_globalsbase, mc:c_fm_regs_callee,
 
   mc:a_builtins, mc:a_constants, mc:a_subfns, mc:a_globals, mc:a_kglobals, 
   mc:a_primitives, mc:a_linenos, mc:a_rel_primitives,
@@ -65,8 +65,7 @@ writes mc:erred
   mc:m_reads = 4;		// read variables (list of (string . type))
   mc:m_writes = 5;		// written variables (list of (string . type))
   mc:m_body = 6;		// module body (component)
-  mc:m_filename = 7;            // module file name
-
+  
   // Component structure:
   //   It is a vector whose first element is one of mc:c_assign, c_recall, etc
   //   The remaining elements depend on the value of the first, as follows:
@@ -206,22 +205,14 @@ writes mc:erred
 
   message = fn (type, args)
     [
-      | msg, modname |
+      | msg |
 
       msg = apply(format, args);
-
-      if (!vector?(mc:this_module))
-        modname = "?"
-      else if (string?(modname = mc:this_module[m_name]))
-        null
-      else if (!vector?(mc:this_function)
-               || !string?(modname = mc:this_function[c_ffilename]))
-        modname = "?";
-      
       display(format("%s:%s %s: %s",
-                     modname,
-		     if (vector?(mc:this_function)) fname(mc:this_function)
-                     else "",
+		     if (vector?(mc:this_module) && mc:this_module[m_name])
+		       mc:this_module[m_name] else "?",
+		     if (vector?(mc:this_function) && mc:this_function[c_flineno] >= 0)
+		       fname(mc:this_function) else "",
 		     type, msg));
       newline();
     ];

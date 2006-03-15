@@ -23,13 +23,13 @@ library misc // Miscellaneous useful functions
 requires system, sequences
 defines abbrev?, assert, assert_message, assoc, assq, bcomplement,
   bcomplement!, bforeach, bitset_to_list, breduce, caaar, caadr, caar, cadar,
-  caddr, cadr, cdaar, cdadr, cdar, cddar, cdddr, cddr,
+  caddr, cadr, cdaar, cdadr, cdar, cddar, cdddr, cddr, char_white?,
   concat_words, difference, equal?, fail, fail_message, find_word?,
   intersection, last_element, last_pair, list_first_n!, list_index,
   list_to_vector, lprotect, lqsort, mappend, mapstr, member, memq, nth,
   nth_element, nth_element_cond, nth_pair, random_element, repeat, rprotect,
   set_eq?, set_in?, skip_white, sorted_table_list, sorted_table_vector,
-  string_head?, string_index, string_ljustify, string_ljustify_cut,
+  str2int, string_head?, string_index, string_ljustify, string_ljustify_cut,
   string_rindex, string_rjustify, string_rjustify_cut, string_tail, table_copy,
   union, unquote, vector_exists_index, vector_index, vector_rindex,
   vector_to_list, vequal?, vqsort!, vqsort_slice!, call_cc
@@ -37,7 +37,7 @@ defines abbrev?, assert, assert_message, assoc, assq, bcomplement,
 reads random // hack to avoid problems w/ standalone version
 [
 
-repeat = fn "`n `f -> . Execute `f() `n times" (int n, f)
+repeat = fn "n fn -> . Execute fn n times" (int n, f)
   while (--n >= 0) f();
 
 [
@@ -137,11 +137,11 @@ repeat = fn "`n `f -> . Execute `f() `n times" (int n, f)
 	  false;
       ];
 
-  equal? = fn "`x1 `x2 -> `b. Compares `x1 to `x2 for equality, recursively for container objects" (x1, x2)
+  equal? = fn "x1 x2 -> b. Compares x1 to x2 for equality, recursively for strings, vectors and lists" (x1, x2)
     recurse(x1, null, x2, null);
 ];
 
-rprotect = fn "`x -> `x. Protect `x recursively" (x)
+rprotect = fn "x -> x. Protect x and its contents (vectors, pairs) recursively" (x)
   [
     | pro, seen |
 
@@ -187,7 +187,7 @@ rprotect = fn "`x -> `x. Protect `x recursively" (x)
     x
   ];
 
-lprotect = fn "`l -> `l. Protects list `l" (l)
+lprotect = fn "l -> l. Protects list l" (l)
   [
     | t |
 
@@ -200,25 +200,25 @@ lprotect = fn "`l -> `l. Protects list `l" (l)
     t
   ];
 
-caar = fn "`x0 -> `x1. Returns car(car(`x0))" (x) car(car(x));
-cadr = fn "`x0 -> `x1. Returns car(cdr(`x0))" (x) car(cdr(x));
-cddr = fn "`x0 -> `x1. Returns cdr(cdr(`x0))" (x) cdr(cdr(x));
-cdar = fn "`x0 -> `x1. Returns cdr(car(`x0))" (x) cdr(car(x));
-caaar = fn "`x0 -> `x1. Returns car(car(car(`x0)))" (x) car(car(car(x)));
-caadr = fn "`x0 -> `x1. Returns car(car(cdr(`x0)))" (x) car(car(cdr(x)));
-cadar = fn "`x0 -> `x1. Returns car(cdr(car(`x0)))" (x) car(cdr(car(x)));
-caddr = fn "`x0 -> `x1. Returns car(cdr(cdr(`x0)))" (x) car(cdr(cdr(x)));
-cdaar = fn "`x0 -> `x1. Returns cdr(car(car(`x0)))" (x) cdr(car(car(x)));
-cdadr = fn "`x0 -> `x1. Returns cdr(car(cdr(`x0)))" (x) cdr(car(cdr(x)));
-cddar = fn "`x0 -> `x1. Returns cdr(cdr(car(`x0)))" (x) cdr(cdr(car(x)));
-cdddr = fn "`x0 -> `x1. Returns cdr(cdr(cdr(`x0)))" (x) cdr(cdr(cdr(x)));
+caar = fn (x) car(car(x));
+cadr = fn (x) car(cdr(x));
+cddr = fn (x) cdr(cdr(x));
+cdar = fn (x) cdr(car(x));
+caaar = fn (x) car(car(car(x)));
+caadr = fn (x) car(car(cdr(x)));
+cadar = fn (x) car(cdr(car(x)));
+caddr = fn (x) car(cdr(cdr(x)));
+cdaar = fn (x) cdr(car(car(x)));
+cdadr = fn (x) cdr(car(cdr(x)));
+cddar = fn (x) cdr(cdr(car(x)));
+cdddr = fn (x) cdr(cdr(cdr(x)));
 
-assert = fn "`b -> . Fail if `b is false" (b) if (!b) fail();
-assert_message = fn "`b `s -> . Fail with message `s if `b is false" (b, s) if (!b) fail_message(s);
+assert = fn "b -> . Fail if b is false" (b) if (!b) fail();
+assert_message = fn "b s-> . Fail with message s if b is false" (b, s) if (!b) fail_message(s);
 fail = fn " -> . Fail." () 1/0;
-fail_message = fn "`s -> . Fail with message `s." (s) [ display(format("%s%n", s)); 1/0 ];
+fail_message = fn "s -> . Fail with message s." (s) [ display(format("%s%n", s)); 1/0 ];
 
-union = fn "`l1 `l2 -> `l3. Set union of `l1 and `l2" (l1, l2)
+union = fn "l1 l2 -> l3. Set union of l1 and l2" (l1, l2)
   // Types: l1, l2: set
   // Returns: The set union (comparison with ==) of l1 and l2.
   [
@@ -235,7 +235,7 @@ union = fn "`l1 `l2 -> `l3. Set union of `l1 and `l2" (l1, l2)
     result
   ];
 
-intersection = fn "`l1 `l2 -> `l3. Set intersection of `l1 and `l2" (l1, l2)
+intersection = fn "l1 l2 -> l3. Set intersection of l1 and l2" (l1, l2)
   // Types: l1, l2: set
   // Returns: The set intersection (comparison with ==) of l1 and l2.
   [
@@ -250,7 +250,7 @@ intersection = fn "`l1 `l2 -> `l3. Set intersection of `l1 and `l2" (l1, l2)
     result
   ];
   
-difference = fn "`l1 `l2 -> `l3. Set difference of `l1 and `l2" (l1, l2)
+difference = fn "l1 l2 -> l3. Set difference of l1 and l2" (l1, l2)
   // Types: l1, l2: set
   // Returns: The set difference (comparison with ==) of l1 and l2.
   [
@@ -265,7 +265,7 @@ difference = fn "`l1 `l2 -> `l3. Set difference of `l1 and `l2" (l1, l2)
     result
   ];
 
-set_in? = fn "`l1 `l2 -> `b. True if `l1 is a subset of `l2" (s1, s2)
+set_in? = fn "l1 l2 -> b. True if l1 is a subset of l2" (s1, s2)
   // Types: s1, s2: set
   // Returns: TRUE if s1 is a subset of s2
   loop
@@ -273,12 +273,12 @@ set_in? = fn "`l1 `l2 -> `b. True if `l1 is a subset of `l2" (s1, s2)
     else if (!memq(car(s1), s2)) exit false
     else s1 = cdr(s1);
 
-set_eq? = fn "`l1 `l2 -> `b. True if set `l1 == set `l2" (s1, s2)
+set_eq? = fn "l1 l2 -> b. True if set l1 == set l2" (s1, s2)
   // Types: s1, s2: set
   // Returns: TRUE if s1 == s2
   set_in?(s1, s2) && set_in?(s2, s1);
 
-vector_index = fn "`x `v -> `n. Finds index of `x in `v, or -1 if none" (x, v)
+vector_index = fn "x v -> n. Finds index of x in v, or -1 if none" (x, v)
   [
     | check, max |
     check = 0;
@@ -290,7 +290,7 @@ vector_index = fn "`x `v -> `n. Finds index of `x in `v, or -1 if none" (x, v)
       else check = check + 1
   ];
 
-vector_rindex = fn "`x `v -> `n. Finds index of last `x in `v, or -1 if none" (x, v)
+vector_rindex = fn "x v -> n. Finds index of last x in v, or -1 if none" (x, v)
   [
     | check |
 
@@ -300,7 +300,7 @@ vector_rindex = fn "`x `v -> `n. Finds index of last `x in `v, or -1 if none" (x
       else if (v[check = check - 1] == x) exit check
   ];
 
-vector_exists_index = fn "`f `v -> `n. Returns the index of first element `x of `v for which `f(`x) is true, or -1 if none" (f, v)
+vector_exists_index = fn "fn v -> n. Returns the index of first element of v for which fn(x) is true, or -1 if none" (f, v)
   [
     | l, i |
 
@@ -312,7 +312,7 @@ vector_exists_index = fn "`f `v -> `n. Returns the index of first element `x of 
       else i = i + 1
   ];
 
-string_index = fn "`s `n1 -> `n2. Finds index of char `n1 in `s, or -1 if none"
+string_index = fn "s n1 -> n2. Finds index of char 'n1' in str, or -1 if none"
    (str, n) [
    |check, max|
    check = 0;
@@ -322,7 +322,7 @@ string_index = fn "`s `n1 -> `n2. Finds index of char `n1 in `s, or -1 if none"
    if (check <= max) check else -1;
 ];
 
-string_rindex = fn "`s `n1 -> `n2. Finds last index of char `n1 in `s, or -1 if none"
+string_rindex = fn "s n1 -> n2. Finds last index of char 'n1' in str, or -1 if none"
    (str, n) 
   [
     | max |
@@ -334,7 +334,7 @@ string_rindex = fn "`s `n1 -> `n2. Finds last index of char `n1 in `s, or -1 if 
   ];
 
 
-vequal? = fn "`v1 `v2 -> `b. True if the elements of `v1 are == to those of `v2" (v1, v2)
+vequal? = fn "v1 v2 -> b. True if the elements of v1 are == to those of v2" (v1, v2)
   [
     | l |
     l = vector_length(v1);
@@ -347,7 +347,7 @@ vequal? = fn "`v1 `v2 -> `b. True if the elements of `v1 are == to those of `v2"
       ]
   ];
 
-lqsort = fn "`f `l1 -> `l2. Sort `l1 according to `f. `f(`x1, `x2) should return true if `x1 goes before `x2" (f, l)
+lqsort = fn "f l1 -> l2. Sort l1 according to f. f(x1, x2) should return true if x1 goes before x2" (f, l)
   if (l == null) null
   else
     [
@@ -365,7 +365,7 @@ lqsort = fn "`f `l1 -> `l2. Sort `l1 according to `f. `f(`x1, `x2) should return
 	]
     ];
 
-vqsort_slice! = fn "`f `n0 `n1 `v0 -> `v1. Sort `v0 from index `n0, with length `n1, according to `f. `f(`x1, `x2) should return true if `x1 goes before `x2" (f, start, length, v)
+vqsort_slice! = fn "f n0 n1 v -> v1. Sort v from index n0, with length n1, according to f. f(x1, x2) should return true if x1 goes before x2" (f, start, length, v)
   [
     | subsort |
 
@@ -417,10 +417,27 @@ vqsort_slice! = fn "`f `n0 `n1 `v0 -> `v1. Sort `v0 from index `n0, with length 
     v
   ];
 
-vqsort! = fn "`f `v -> `v. Sort `v according to `f. `f(`x1, `x2) should return true if `x1 goes before `x2" (f, v)
+vqsort! = fn "f v -> v1. Sort v according to f. f(x1, x2) should return true if x1 goes before x2" (f, v)
   vqsort_slice!(f, 0, vlength(v), v);
 
-mapstr = fn "`c `s -> `l. Executes `c(`n) on every character `n in `s and makes list of results" (f, s)
+/*
+seed = 57394795;
+random = fn () [ seed = seed * 1592593789 + 11; seed ];
+
+rv = fn (n)
+  [
+    | v |
+    v = make_vector(n);
+    for (|i| i = 0; i < n; ++i) v[i] = random() / 100000;
+    v
+  ];
+
+rl = fn (n)
+   if (n <= 0) null
+  else random() / 100000 . rl(n - 1);
+*/
+
+mapstr = fn "c s -> l. Executes function to on every character in l and makes list of results" (f, s)
   [
     | len, results |
     len = string_length(s); results = null;
@@ -431,7 +448,7 @@ mapstr = fn "`c `s -> `l. Executes `c(`n) on every character `n in `s and makes 
     results
   ];
 
-mappend = fn "`f `l1 -> `l2. Like `lmap, but appends the results of `f(`x) for each element `x in `l1 together" (f, l)
+mappend = fn "fn l1 -> l2. Like lmap, but appends the results together" (f, l)
   [
     | results |
 
@@ -444,40 +461,40 @@ mappend = fn "`f `l1 -> `l2. Like `lmap, but appends the results of `f(`x) for e
     results
   ];
 
-memq = fn "`x `l1 -> `l2. Returns first sublist `l2 of `l1 which is == to `x, or FALSE if none" (x, l)
+memq = fn "x l1 -> l2. Returns first sublist l2 of l1 which is == to x, or FALSE if none" (x, l)
   loop
     if (l == null) exit false
     else if (x == car(l)) exit l
     else l = cdr(l);
 
-member = fn "`x `l1 -> `l2. Returns first sublist `l2 of `l1 which is `equal? to `x, or FALSE if none" (x, l)
+member = fn "x l1 -> l2. Returns first sublist l2 of l1 which is equal? to x, or FALSE if none" (x, l)
   loop
     if (l == null) exit false
     else if (equal?(x, car(l))) exit l
     else l = cdr(l);
 
-assq = fn "`x1 `l -> `x2. Looks for a pair in `l whose car is == to `x1. Returns that pair, false if not found" (x, l)
+assq = fn "x1 l -> x2. Looks for a pair in l whose car is == to x1. Returns that pair, false if not found" (x, l)
   loop
     if (l == null) exit false
     else if (car(car(l)) == x) exit car(l)
     else l = cdr(l);
 
 
-assoc = fn "`x1 `l -> `x2. Looks for a pair in `l whose car is `equal? to `x1. Returns that pair, false if not found" (x, l)
+assoc = fn "x1 l -> x2. Looks for a pair in l whose car is equal? to x1. Returns that pair, false if not found" (x, l)
   loop
     if (l == null) exit false
     else if (equal?(car(car(l)), x)) exit car(l)
     else l = cdr(l);
 
 
-nth = fn "`n `l -> `x. Returns `n'th element of list `l" (n, l)
+nth = fn "n l -> x. Returns n'th element of list l" (n, l)
   [
     while ((n = n - 1) > 0)
       l = cdr(l);
     car(l)
   ];
 
-list_to_vector = fn "`l -> `v. Makes a vector out of a list" 
+list_to_vector = fn "l -> v. Makes a vector out of a list" 
    (lst) [
    |vec, i|
    vec = make_vector (llength (lst));
@@ -490,7 +507,7 @@ list_to_vector = fn "`l -> `v. Makes a vector out of a list"
    vec;
 ];
 
-vector_to_list = fn "`v -> `l. Makes a vector into a list" (v)
+vector_to_list = fn "v -> l. Makes a vector into a list" (v)
   [
     | len, l |
 
@@ -499,14 +516,14 @@ vector_to_list = fn "`v -> `l. Makes a vector into a list" (v)
     l
   ];
 
-sorted_table_vector = fn "`table -> `v. Returns a vector of the elements of `table, sorted by name" (table)
+sorted_table_vector = fn "table -> v. Returns the elements of a table, sorted by name" (table)
   vqsort!(fn (s1, s2) string_icmp(symbol_name(s1), symbol_name(s2)) < 0,
 	  table_vector(table));
 
-sorted_table_list = fn "`table -> `l. Returns a list of the elements of `table, sorted by name" (table)
+sorted_table_list = fn "table -> l. Returns the elements of a table, sorted by name" (table)
   vector_to_list(sorted_table_vector(table));
 
-table_copy = fn "`table1 -> `table2. Makes a copy of `table1" (table)
+table_copy = fn "table1 -> table2. Makes a copy of table1" (table)
   [
     | new |
 
@@ -520,7 +537,7 @@ table_copy = fn "`table1 -> `table2. Makes a copy of `table1" (table)
 
 /// LIST FUNCTIONS
 
-nth_pair = fn "`n `l -> `x. Returns nth pair of `l" (n, lst) [
+nth_pair = fn "n l -> x. Returns nth pair of l" (n, lst) [
    while (pair? (lst) && (n > 1)) [
       lst = cdr (lst);
       n = n - 1;
@@ -528,36 +545,37 @@ nth_pair = fn "`n `l -> `x. Returns nth pair of `l" (n, lst) [
    if (n == 1) lst else null;
 ];
 
-nth_element = fn "`n `l -> `x. Returns element `n of a list or null" (n, lst) [
+nth_element = fn 
+   "n l -> x. Returns element n of a list or null" (n, lst) [
    |nth|
    nth = nth_pair (n, lst);
    if (pair? (nth)) car (nth) else null;
 ];
 
 random_element = fn 
-   "`l -> `x. Returns a random element in list `l or null" (lst) [
+   "l -> x. Returns a random element of list or null" (lst) [
    |items|
    items = llength (lst);
    if (items >= 1) nth_element (random (1, items), lst)
    else null;
 ];
 
-last_pair = fn "`l0 -> `l1. Returns the last pair of list `l0" (lst) [
-   |tail|
+last_pair = fn "l -> l. Returns the last pair" (lst) [
+   |trail|
    while (pair? (lst)) [
-      tail = lst;
+      trail = lst;
       lst = cdr (lst);
    ];
-   tail;
+   trail;
 ];
 
-last_element = fn "`l -> `x. Returns the last element of list `l or null" (lst) [
+last_element = fn "l -> x. Returns the last element" (lst) [
    |res|
    res = last_pair (lst);
    if (pair? (res)) car (res) else null;
 ];
 
-list_first_n! = fn "`n `l -> `l. Returns first `n elements of `l" 
+list_first_n! = fn "n l -> l. Returns first n elements of l" 
    (n, lst) [
    |nth|
    nth = nth_pair (n, lst);
@@ -565,7 +583,8 @@ list_first_n! = fn "`n `l -> `l. Returns first `n elements of `l"
    lst;
 ];
 
-nth_element_cond = fn "`n `l `f -> `x|`b. Returns `n'th `x in `l for which `f(`x) true, or false"
+nth_element_cond = fn
+   "n l f -> x or b. Returns nth x of l with f(x) true or 0"
    (n, lst, fkn) [
    while (pair? (lst) && (n > 1)) [
       if (fkn (car (lst))) n = n - 1;
@@ -575,7 +594,7 @@ nth_element_cond = fn "`n `l `f -> `x|`b. Returns `n'th `x in `l for which `f(`x
    if (pair? (lst) && (n == 1)) car (lst) else FALSE;
 ];
 
-list_index = fn "`x `l -> `n. Returns the index of `x or false" 
+list_index = fn "x l -> n. Returns the index of x or 0" 
    (x, lst) [
    |count|
    count = 1;
@@ -589,30 +608,38 @@ list_index = fn "`x `l -> `n. Returns the index of `x or false"
 
 /// STRING FUNCTIONS
 
-string_tail = fn "`s `n -> `s. Returns the tail of `s starting from position `n" (str, from)
+string_tail = fn "s n -> s. Returns the last letters from pos n" (str, from)
   if (from < 0)
     substring(str, from, -from)
   else
     substring (str, from, string_length (str) - from);
 
-string_head? = fn "`s1 `s2 `n -> `b. True if `s1 = first of `s2, min `n characters" 
+string_head? = fn 
+   "s1 s2 n -> b. True if s1 = first of s2, min n characters" 
    (str, word, n) [
    |len|
-
    len = string_length (str);
-
-   (len >= n
-    && len <= string_length (word)
-    && string_icmp (str, substring (word, 0, len)) == 0)
+   if ((len >= n) and (len <= string_length (word)))
+      (string_icmp (str, substring (word, 0, len)) == 0)
+   else FALSE;
 ];
 
-abbrev? = fn "`s1 `s2 -> `b. Returns true if `s1 is an abbreviation of `s2" (a, b) 
+abbrev? = fn "s1 s2 -> b. Returns true if s1 is an abbreviation of s2" (a, b) 
   string_head?(a, b, 1);
 
-find_word? = fn "`s1 `s2 -> `b. True if `s1 is a word in the `s2 sentence" (word, sent)
+find_word? = fn "s1 s2 -> b. True if s1 is a word in the s2 sentence" (word, sent)
   lexists?(fn (x) !string_icmp(word, x), split_words(sent)) != false;
 
-unquote = fn "`s1 -> `s2. Returns `s1 without any surrounding single or double quotes" (s)
+str2int = fn "s -> n. Returns some value of s for int2word" 
+   (str) [
+   |result|
+   result = 0;
+   for (|i| i = 0; i < string_length (str); ++i)
+      result = result + str[i] * (i + 1);
+   result;
+];
+
+unquote = fn "s1 -> s2. Returns s1 w/o any surrounding single or double quotes" (s)
   [
     | c, l |
     if ((l = string_length(s)) <= 1 || ((c = s[0]) != ?' && c != ?\") ||
@@ -620,17 +647,19 @@ unquote = fn "`s1 -> `s2. Returns `s1 without any surrounding single or double q
     else substring(s, 1, l - 2)
   ];
 
-skip_white = fn "`s1 -> `s2. Returns `s1 without any leading white space" (s)
+char_white? = fn "n -> b. TRUE if n is a white space character" (c)
+  c == ?  || c == ?\n || c == 12 || c == ?\t || c == ?\r;
+
+skip_white = fn "s1 -> s2. Returns s1 w/o any leading white space" (s)
   [
     | n, l |
     n = 0;
     l = string_length(s);
-    while (n < l && cspace?(s[n]))
-      ++n;
+    while (n < l && char_white?(s[n])) n = n + 1;
     substring(s, n, l - n)
   ];
 
-string_ljustify = fn "`s1 `n -> `s2. Left justifies `s1 in a field `n characters wide"
+string_ljustify = fn "s1 n -> s2. Left justifies s1 in a field n characters wide"
   (s, n)
   [
     | l |
@@ -640,7 +669,7 @@ string_ljustify = fn "`s1 `n -> `s2. Left justifies `s1 in a field `n characters
     else string_ljustify_cut(s, n)
   ];
 
-string_ljustify_cut = fn "`s1 `n -> `s2. Left justifies `s1 in a field `n characters wide. Truncates `s if necessary"
+string_ljustify_cut = fn "s1 n -> s2. Left justifies s1 in a field n characters wide. Truncates s if necessary"
   (s, n)
   [
     | l, blanks |
@@ -654,7 +683,7 @@ string_ljustify_cut = fn "`s1 `n -> `s2. Left justifies `s1 in a field `n charac
       ]
   ];
 
-string_rjustify = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n characters wide"
+string_rjustify = fn "s1 n -> s2. Right justifies s1 in a field n characters wide"
   (s, n)
   [
     | l |
@@ -664,7 +693,7 @@ string_rjustify = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n character
     else string_rjustify_cut(s, n)
   ];
 
-string_rjustify_cut = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n characters wide. Truncates `s if necessary"
+string_rjustify_cut = fn "s1 n -> s2. Right justifies s1 in a field n characters wide. Truncates s if necessary"
   (s, n)
   [
     | l, blanks |
@@ -678,35 +707,24 @@ string_rjustify_cut = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n chara
       ]
   ];
 
-[
-  | op |
-  op = make_string_oport();
-
-  concat_words = fn "`l `s1 -> `s2. Assembles a list of a string into a single string with `s1 as separator" (l, sep)
-    if (l == null)
-      ""
-    else if (cdr(l) == null)
-      car(l)
+concat_words = fn "l s1 -> s2. Assembles a list of a string into a single string with s1 as separator" (l, sep)
+  [
+    | s |
+    if (l == null) ""
     else
       [
-        port_empty!(op);
-        loop
-          [
-            pprint(op, car(l));
-            l = cdr(l);
-            if (l == null)
-              exit port_string(op);
-            pprint(op, sep)
-          ]
-      ];
-];
+	s = car(l);
+	lforeach(fn (word) s = s + sep + word, cdr(l));
+	s
+      ]
+  ];
 
 // Bitsets (basic operations are in C)
 
-bitset_to_list = fn "`bitset -> `l. Makes a bitset into a list from a map of bit meanings" (set, map)
+bitset_to_list = fn "bitset -> l. Makes a bitset into a list from a map of bit meanings" (set, map)
   breduce(fn (i, l) map[i] . l, null, set);
 
-breduce = fn "`f `x1 `bitset -> `x2. Does `x = `f(`i, `x) for each bit set in `bitset" (f, x, b)
+breduce = fn "fn x1 bitset -> x2. Does x = fn(i, x) for each bit set in bitset" (f, x, b)
   [
     | l, i, n, bi |
 
@@ -729,7 +747,7 @@ breduce = fn "`f `x1 `bitset -> `x2. Does `x = `f(`i, `x) for each bit set in `b
     x
   ];
 
-bcomplement! = fn "`bitset1 -> `bitset1. `bitset1 = ~`bitset1 (beware extra bits)" (b1)
+bcomplement! = fn "bitset1 -> bitset1. bitset1 = ~bitset1 (beware extra bits)" (b1)
   [
     | l |
 
@@ -738,7 +756,7 @@ bcomplement! = fn "`bitset1 -> `bitset1. `bitset1 = ~`bitset1 (beware extra bits
     b1
   ];
 
-bcomplement = fn "`bitset1 -> `bitset2. `bitset2 = ~`bitset1 (beware extra bits)" (b1)
+bcomplement = fn "bitset1 -> bitset2. bitset2 = ~bitset1 (beware extra bits)" (b1)
   [
     | b2 |
 
@@ -746,7 +764,7 @@ bcomplement = fn "`bitset1 -> `bitset2. `bitset2 = ~`bitset1 (beware extra bits)
     bdifference!(b2, b1)
   ];
 
-bforeach = fn "`f `bitset -> . Does `f(`i) for each bit set in `bitset" (f, b)
+bforeach = fn "fn bitset -> . Does fn(i) for each bit set in bitset" (f, b)
   [
     | l, i, n, bi |
 
@@ -768,16 +786,14 @@ bforeach = fn "`f `bitset -> . Does `f(`i) for each bit set in `bitset" (f, b)
       ];
   ];
 
-call_cc = fn "`f0 -> `x0. Call `f0(`f1), where `f1(`x1) can be used to return `x1 from the call to `call_cc." (f)
+call_cc = fn "fn0 -> x0. Call fn0(fn1), where fn1(x1) can be used to return x1 from the call to call_cc." (f)
 [
   | call_cc2, continuation |
 
   call_cc2 = fn (buf)
     f([
         | continuation |
-        // "useless" variable to name the function
-        continuation = fn "`x -> . Continuation function from `call_cc()" (x)
-          longjmp(buf, x)
+        continuation = fn(x) longjmp(buf, x)
     ]);
 
   setjmp(call_cc2)

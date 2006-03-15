@@ -37,12 +37,9 @@
 #define YY_USE_PROTOS
 
 #undef YY_INPUT
-#define YY_INPUT(buf, result, max_size) do {            \
-  if (!line_read)                                       \
-    (result) = fread((buf), 1, (max_size), yyin);       \
-  else                                                  \
-    (result) = string_read((buf), (max_size));          \
-} while (0)
+#define YY_INPUT(buf, result, max_size) \
+  { if (!line_read) (result) = read(fileno(yyin), (buf), (max_size)); \
+  else (result) = string_read((buf), (max_size)); }
 
 static int string_read(char *buf, int max_size);
 
@@ -297,17 +294,14 @@ void read_from_file(FILE *f, const char *name)
       yy_switch_to_buffer(mbuf);
     }
   else
-    {
-      yyrestart(f);
-      
-    }
+    yyrestart(f);
 
   line_read = FALSE;
   lineno = 1;
   filename = name;
 }
 
-void read_from_string(const char *str, const char *name)
+void read_from_string(const char *str)
 {
   if (!mbuf)
     {
@@ -322,7 +316,7 @@ void read_from_string(const char *str, const char *name)
   line = str;
   length = strlen(line);
   lineno = 0;
-  filename = name ? name : "<string>";
+  filename = "<string>";
 }
 
 void dummy_function_lexer_l(void)

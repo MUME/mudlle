@@ -178,12 +178,11 @@ typedef struct {
   vlist reads;
   vlist writes;
   block body;
-  int lineno;
 } *mfile;
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
-	       block body, int lineno);
+	       block body);
 function new_function(block_t heap, mtype type, str_and_len_t help,
                       vlist args, component val, int lineno,
                       const char *filename);

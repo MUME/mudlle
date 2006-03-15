@@ -109,16 +109,13 @@ void port_append(struct oport *p1, struct oport *p2);
 
 void pputs(const char *s, struct oport *p);
 void pprintf(struct oport *p, const char *fmt, ...);
-
 void vpprintf(struct oport *p, const char *fmt, va_list args);
 
 struct string *msprintf(const char *s, ...);
 
-size_t string_port_length(struct oport *oport);
 int is_string_port(struct oport *oport);
 
-/* integers are 31 bits long, in base 2 this makes 31 characters +
-   sign + null byte + 1 for luck */
+/* integers are 31 bits long, in base 2 this makes 31 characters + sign + null byte + 1 for luck */
 #define INTSTRLEN 34
 
 char *int2str(char *str, int base, ulong n, int is_signed);

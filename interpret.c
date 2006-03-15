@@ -19,6 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <alloca.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -105,7 +106,7 @@ void do_interpret(struct closure *fn, int nargs)
   value arg1, arg2, result;
   struct obj *called;
   struct primitive *pop;
-  const struct primitive_ext *op;
+  struct primitive_ext *op;
   
 
 #ifdef i386

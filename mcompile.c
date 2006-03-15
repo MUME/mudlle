@@ -330,29 +330,27 @@ void massign(ulong n, const char *name, fncode fn)
     log_error("write of global %s", name);
 }
 
-void mwarn_module(const char *name)
+void mwarn_module(void)
 {
   glist gl;
+  mlist ml;
 
-  for (mlist ml = imported_modules; ml; ml = ml->next)
+  for (ml = imported_modules; ml; ml = ml->next)
     if (!ml->used)
-      warning_line(name, 0, "symbols from required module %s were never used",
-                   ml->name);
+      warning("symbols from required module %s were never used",
+	      ml->name);
 
   for (gl = readable; gl; gl = gl->next)
     if (!gl->used)
-      warning_line(name, 0, "readable variable %s was never read",
-                   GNAME(gl->n)->str);
+      warning("readable variable %s was never read", GNAME(gl->n)->str);
 
   for (gl = writable; gl; gl = gl->next)
     if (!gl->used)
-      warning_line(name, 0, "writable variable %s was never written",
-                   GNAME(gl->n)->str);
+      warning("writable variable %s was never written", GNAME(gl->n)->str);
 
   for (gl = definable; gl; gl = gl->next)
     if (!gl->used)
-      warning_line(name, 0, "definable variable %s was never defined",
-                   GNAME(gl->n)->str);
+      warning("definable variable %s was never defined", GNAME(gl->n)->str);
 }
 
 void mcompile_init(void)

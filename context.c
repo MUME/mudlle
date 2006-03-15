@@ -249,18 +249,34 @@ void add_call_trace(value v, int unhandled_only)
 
 void remove_call_trace(value v)
 {
-  for (struct list **this = &mudcalltrace;
-       *this;
-       this = (struct list **)&(*this)->cdr)
+  struct list *prev, *this;
+  struct gcpro gcpro1, gcpro2, gcpro3;
+
+  prev = NULL;
+  this = mudcalltrace;
+
+  GCPRO2(prev, this);
+  GCPRO(gcpro3, v);
+
+  while (this)
     {
-      struct list *elem = (*this)->car;
+      struct list *elem = this->car;
       assert(TYPE(elem, type_pair));
+
       if (elem->car == v)
-        {
-          *this = (*this)->cdr;
-          break;
-        }
+	{
+	  if (prev == NULL)
+	    mudcalltrace = this->cdr;
+	  else
+	    prev->cdr = this->cdr;
+	  break;
+	}
+
+      prev = this;
+      this = this->cdr;
     }
+
+  UNGCPRO();
 }
 
 void context_init(void)

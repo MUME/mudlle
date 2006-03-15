@@ -21,7 +21,7 @@
 
 library phase2 // Phase 2: 3-address (not really) generation
 requires system, sequences, misc, compiler, vars, ins3
-defines mc:phase2, mc:inline_builtin_call
+defines mc:phase2
 reads mc:this_module
 writes mc:this_function, mc:lineno
 // See ins3.mud for details on these instructions
@@ -79,6 +79,7 @@ writes mc:this_function, mc:lineno
       mc:ins_branch(fcode, mc:branch_ge, plab,
                     list(result, mc:var_make_constant(0)));
       mc:ins_compute(fcode, mc:b_negate, result, list(result));
+      mc:ins_branch(fcode, mc:branch_always, plab, null);
       mc:ins_label(fcode, plab);
       result
     ];
@@ -172,22 +173,6 @@ writes mc:this_function, mc:lineno
 
   mc:phase2 = fn (mod)
     mod[mc:m_body] = phase2(mod[mc:m_body]);
-
-  mc:inline_builtin_call = fn (il)
-    [
-      | ins, args, result, function, bf |
-
-      ins = il[mc:il_ins];
-      assert(ins[mc:i_class] == mc:i_call);
-      args = ins[mc:i_cargs];
-      result = ins[mc:i_cdest];
-      function = car(args);
-
-      if ((bf = builtin_call?(function, args, builtin_functions)) &&
-          !function?(bf[2]))
-        il[mc:il_ins] = vector(mc:i_compute, bf[2], result, cdr(args),
-                               false);
-    ];
 
   phase2 = fn (top)
     // Returns: intermediate rep of function top

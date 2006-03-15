@@ -29,7 +29,7 @@
 #include "alloc.h"
 #include "ports.h"
 #include "utils.h"
-#include "charset.h"
+#include "utils.charset.h"
 
 
 /* The various types of input & output ports */
@@ -67,12 +67,6 @@ static struct string_oport_block *free_blocks;
 /* Creation & code for the various types of ports */
 /* ---------------------------------------------- */
 
-static struct string_oport *get_string_port(struct oport *p)
-{
-  assert(is_string_port(p));
-  return (struct string_oport *)p;
-}
-
 static struct string_oport_block *new_string_block(void)
 {
   struct string_oport_block *newp;
@@ -103,32 +97,35 @@ static struct string_oport_block *new_string_block(void)
 
 void empty_string_oport(struct oport *_p)
 {
-  struct string_oport *p = get_string_port(_p);
+  struct string_oport *p = (struct string_oport *)_p;
 
   assert(is_string_port(_p));
 
   assert(p->first);
   assert(p->current);
 
-  if (p->first != p->current)
-    {
-      p->current->next = free_blocks;
-      free_blocks = p->first->next;
-      p->first->next = NULL;
-      p->current = p->first;
-    }
+  if (p->first != p->current) {
+    p->current->next = free_blocks;
+    free_blocks = p->first->next;
+    p->first->next = NULL;
+    p->current = p->first;
+  }
 
   p->pos = makeint(0);
 }
 
 static void output_string_close(struct oport *_p)
 {
-  struct string_oport *p = get_string_port(_p);
+  struct string_oport *p = (struct string_oport *)_p;
   
   p->p.methods = NULL;
 
-  for (struct string_oport_block *b = p->first; b; b = b->next)
-    GCCHECK(b);
+  {
+    struct string_oport_block *b;
+
+    for (b = p->first; b; b = b->next)
+      GCCHECK(b);
+  }
 
   /* Free data (add blocks to free block list) */
   p->current->next = free_blocks;
@@ -140,7 +137,7 @@ static void output_string_close(struct oport *_p)
       p->first = (void *)string_oport_cache;
       string_oport_cache = p;
       ++string_oport_cache_used;
-    }
+  }
 }
 
 static void string_flush(struct oport *_p)
@@ -228,7 +225,7 @@ static const struct oport_methods string_port_methods = {
   string_flush
 };
 
-static struct string_oport *new_string_port(void)
+static struct string_oport *get_string_oport(void)
 {
   if (string_oport_cache)
     {
@@ -245,7 +242,7 @@ static struct gtemp *mfile_port_methods;
 
 value make_string_outputport(void)
 {
-  struct string_oport *p = new_string_port();
+  struct string_oport *p = get_string_oport();
   struct gcpro gcpro1;
   struct string_oport_block *blk;
 
@@ -311,7 +308,7 @@ static const struct oport_methods string_7bit_port_methods = {
 
 value make_string_7bit_outputport(void)
 {
-  struct string_oport *p = new_string_port();
+  struct string_oport *p = get_string_oport();
   struct gcpro gcpro1;
   struct string_oport_block *blk;
 
@@ -376,8 +373,7 @@ static const struct oport_methods file_port_methods = {
 
 value make_file_outputport(FILE *f)
 {
-  struct file_oport *p = (struct file_oport *)allocate_record(type_outputport,
-                                                              2);
+  struct file_oport *p = (struct file_oport *) allocate_record(type_outputport, 2);
   struct gcpro gcpro1;
   struct gtemp *mf;
 
@@ -395,8 +391,13 @@ int port_empty(struct oport *_p)
    Requires: p be a string-type output port
 */
 {
-  struct string_oport *p = get_string_port(_p);;
-  struct string_oport_block *current = p->first;
+  struct string_oport *p;
+  struct string_oport_block *current;
+
+  assert(is_string_port(_p));
+
+  p = (struct string_oport *)_p;
+  current = p->first;
 
   return !current->next && intval(p->pos) == 0;
 }
@@ -430,14 +431,9 @@ static void port_copy(char *s, struct string_oport *p)
   s[pos] = '\0';
 }
 
-size_t string_port_length(struct oport *p)
-{
-  return port_length(get_string_port(p));
-}
-
 struct string *port_string(struct oport *_p)
 {
-  struct string_oport *p = get_string_port(_p);
+  struct string_oport *p = (struct string_oport *)_p;
   struct gcpro gcpro1;
   struct string *result;
 
@@ -452,7 +448,7 @@ struct string *port_string(struct oport *_p)
 
 char *port_cstring(struct oport *_p)
 {
-  struct string_oport *p = get_string_port(_p);
+  struct string_oport *p = (struct string_oport *)_p;
   char *s, *s2;
   size_t size = port_length(p);
 
@@ -472,7 +468,7 @@ void port_append(struct oport *p1, struct oport *_p2)
    Requires: p2 be a string-type output port
 */
 {
-  struct string_oport *p2 = get_string_port(_p2);
+  struct string_oport *p2 = (struct string_oport *)_p2;
   struct string_oport_block *current = p2->first;
   long pos = intval(p2->pos);
   struct gcpro gcpro1, gcpro2;
@@ -585,25 +581,21 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 {
   const char *percent, *add = NULL;
   char buf[INTSTRLEN], padchar;
+  int longfmt, padright, fsize, fprec, addlen, cap, widefmt;
   struct gcpro gcpro1;
 
   if (!p || !p->methods) return;
   GCPRO1(p);
   while ((percent = strchr(fmt, '%')))
     {
-      int is_signed = TRUE;
-      int longfmt = FALSE;
-      int fsize = 0;
-      int fprec = -1;
-      int padright = FALSE;
-      int cap = FALSE;
-      int widefmt = FALSE;
-      int base = 10;
-      int addlen;
-      ulong ul;
-
       opwrite(p, fmt, percent - fmt);
       fmt = percent + 1;
+      longfmt = FALSE;
+      fsize = 0;
+      fprec = -1;
+      padright = FALSE;
+      cap = FALSE;
+      widefmt = FALSE;
       if (*fmt == '-')
 	{
 	  padright = TRUE;
@@ -645,40 +637,50 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 
       if (*fmt == 'l')
 	{
-          longfmt = TRUE;
-          ++fmt;
+	  longfmt = TRUE;
+	  fmt++;
 	}
 
-      switch (*fmt++)
+      switch (*fmt)
 	{
 	case '%':
 	  add = "%";
-          addlen = 1;
-          goto have_addlen;
-	case 'o':
-          base = 8;
-          goto process_unsigned;
-	case 'x':
-          base = 16;
-	case 'u':
-        process_unsigned:
-          is_signed = FALSE;
-          widefmt = FALSE;
+	  break;
 	case 'd': case 'i':
-          if (longfmt)
-            if (is_signed)
-              ul = va_arg(args, long);
-            else
-              ul = va_arg(args, unsigned long);
-          else if (is_signed)
-            ul = va_arg(args, int);
-          else
-            ul = va_arg(args, unsigned);
-
-          if (widefmt)
-            add = int2str_wide(buf, ul, is_signed);
-          else
-            add = int2str(buf, base, ul, is_signed);
+	  if (longfmt)
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, long), TRUE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, long), TRUE);
+	  else
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, int), TRUE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, int), TRUE);
+	  break;
+	case 'u':
+	  if (longfmt)
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, long), FALSE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, long), FALSE);
+	  else
+	    if (widefmt)
+	      add = int2str_wide(buf, va_arg(args, int), FALSE);
+	    else
+	      add = int2str(buf, 10, va_arg(args, int), FALSE);
+	  break;
+	case 'x':
+	  if (longfmt)
+	    add = int2str(buf, 16, va_arg(args, unsigned long), FALSE);
+	  else
+	    add = int2str(buf, 16, va_arg(args, unsigned int), FALSE);
+	  break;
+	case 'o':
+	  if (longfmt)
+	    add = int2str(buf, 8, va_arg(args, unsigned long), FALSE);
+	  else
+	    add = int2str(buf, 8, va_arg(args, unsigned int), FALSE);
 	  break;
 	case 'S':
 	  cap = TRUE;
@@ -693,10 +695,8 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	  break;
 	case 'c':
 	  add = buf;
-	  buf[0] = va_arg(args, int);
-          buf[1] = '\0';
-          addlen = 1;
-          goto have_addlen;
+	  buf[0] = va_arg(args, int); buf[1] = '\0';
+	  break;
 	case 'f':
 	  if (fprec >= 0)
 	    {
@@ -715,6 +715,8 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
       addlen = strlen(add);
     have_addlen:
 
+      fmt++;
+
       if (fsize > 0 && !padright)
 	{
 	  int i = fsize - addlen;
@@ -723,14 +725,11 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	}
       if (cap && addlen > 0)
 	{
-	    {
-	      pputc(toupper(add[0]), p);
-	      opwrite(p, add + 1, addlen - 1);
-	    }
+	  pputc(toupper(add[0]), p);
+	  opwrite(p, add + 1, addlen - 1);
 	}
       else
 	opwrite(p, add, addlen);
-
       if (fsize > 0 && padright)
 	{
 	  int i = fsize - addlen;
@@ -738,8 +737,7 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	  while (--i >= 0) pputc(' ', p);
 	}
     }
-    pputs(fmt, p);
-
+  pputs(fmt, p);
   UNGCPRO();
 }
 

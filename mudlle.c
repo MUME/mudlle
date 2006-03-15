@@ -91,7 +91,7 @@ static void execute(char *line)
 {
   value result;
 
-  read_from_string(line, NULL);
+  read_from_string(line);
   if (interpret(&result, 1, TRUE))
     {
       printf("Result: ");
@@ -157,7 +157,6 @@ int main(int argc, char **argv)
       char line[512];
 
       fputs("mudlle> ", stdout);
-      fflush(stdout);
       if (!fgets(line, sizeof line, stdin))
 	break;
       if (*line)

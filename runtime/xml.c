@@ -116,8 +116,8 @@ static struct vector *reverse_siblings(struct vector *node)
   return prev;
 }
 
-SECOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
-      " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
+SECOP(xml_read_file, "s n t -> x. Reads an XML document from file s,"
+      " using XML_PARSE_xxx flags in n. Returns an XML tree, or"
       " an error string.",
       3, (struct string *mfilename, value mflags,
           struct table *name_table), LVL_IMPLEMENTOR, 0)
@@ -281,7 +281,7 @@ void xml_init(void)
   xml_utf16_encoder = xmlFindCharEncodingHandler("UTF-16LE");
   assert(xml_utf16_encoder != NULL);
 
-  DEFINE(xml_read_file);
+  DEFINE("xml_read_file", xml_read_file);
   
   DEFINE_INT(XML_PARSE_RECOVER);
   DEFINE_INT(XML_PARSE_NOENT);

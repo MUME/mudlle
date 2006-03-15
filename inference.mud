@@ -351,7 +351,8 @@
 */
 
 library inference // type inference
-requires graph, dlist, compiler, vars, flow, optimise, ins3
+requires system, misc, sequences, graph, dlist,
+  compiler, vars, flow, optimise, ins3
 defines mc:infer_types, mc:show_type_info, mc:constant?
 reads mc:verbose
 writes tnargs, tncstargs, tnfull, tnpartial

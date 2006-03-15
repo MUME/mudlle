@@ -241,7 +241,6 @@ assert(vlength(mc:itypemap) == last_synthetic_type);
   mc:new_fncode = fn "component -> fncode. Returns a structure to use for\n\
 generating instructions for function component" (top)
     [
-      // ilpos, nextlabel, top, blockstack
       vector(null, false, top, null)
     ];
 

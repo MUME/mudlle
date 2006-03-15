@@ -99,8 +99,7 @@ static int recurse(value pat, value val)
   NOTREACHED;
 }
 
-TYPEDOP(pattern_match, "=>",
-        "`x `y -> `b. Returns TRUE if `x is equal to `y as the "
+TYPEDOP(pattern_match, "x y -> b. Returns TRUE if x is equal to y as the "
         "pattern matcher sees it", 2, (value pat, value val),
         OP_LEAF | OP_NOESCAPE, "xx.n")
 {
@@ -109,5 +108,5 @@ TYPEDOP(pattern_match, "=>",
 
 void pattern_init(void)
 {
-  DEFINE(pattern_match);
+  DEFINE("=>", pattern_match);
 }

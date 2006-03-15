@@ -20,7 +20,7 @@
  */
 
 library link // A linker.
-requires compiler, vars, system, sequences
+requires compiler, misc, vars, system, sequences
 defines mc:prelink
 writes mc:this_module, mc:erred, mc:linkrun
 [
@@ -33,7 +33,7 @@ writes mc:this_module, mc:erred, mc:linkrun
     pfn_return_type, pfn_linenos, check_presence, check_dependencies,
     dependencies, depend_immutable, depend_none, depend_primitive, depend_type,
     depend_closure, depend_integer, depend_signature, dependency,
-    check_dependency, check_present, map, foreach, pmodule_protect |
+    check_dependency, typenames, check_present, map, foreach, pmodule_protect |
 
   // Linker:
 
@@ -382,6 +382,13 @@ writes mc:this_module, mc:erred, mc:linkrun
 	       type)
     ];
 
+  typenames = 
+    '["code"   "closure" "variable" "internal"  "primitive" "varargs"
+      "secure" "integer" "string"   "vector"    "list"      "symbol" 
+      "table"  "private" "object"   "character" "gone"      "output-port"
+      "mcode"  "float"   "bigint"   "null" ];
+  assert(vlength(typenames) == last_type);
+
   check_dependency = fn (d, n)
     // Types: d: dependency, n: int (index of d[0])
     // Effects: checks that dependency d is still valid
@@ -429,7 +436,7 @@ writes mc:this_module, mc:erred, mc:linkrun
 	[
 	  if (typeof(val) != d[2])
 	    error("the type of %s has changed (was %s, now %s)",
-		  name, type_names[d[2]], type_names[typeof(val)]);
+		  name, typenames[d[2]], typenames[typeof(val)]);
 	];
       // add other dtypes here...
     ];

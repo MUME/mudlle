@@ -22,13 +22,13 @@
 #include "runtime/runtime.h"
 #include "vector.h"
 
-TYPEDOP(vectorp, "vector?", "`x -> `b. TRUE if `x is a vector", 1, (value v),
+TYPEDOP(vectorp, "x -> b. TRUE if x is a vector", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_vector));
 }
 
-TYPEDOP(make_vector, 0, "`n -> `v. Create an empty vector of length `n",
+TYPEDOP(make_vector, "n -> v. Create an empty vector of length n",
 	1, (value size),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
@@ -41,14 +41,14 @@ TYPEDOP(make_vector, 0, "`n -> `v. Create an empty vector of length `n",
   return (newp);
 }
 
-TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector", 1, (struct vector *vec),
+TYPEDOP(vector_length, "v -> n. Return length of vector", 1, (struct vector *vec),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "v.n")
 {
   TYPEIS(vec, type_vector);
   return (makeint(vector_len(vec)));
 }
 
-TYPEDOP(sequence_copy, 0, "`v -> `v. Returns a readonly copy of vector `v",
+TYPEDOP(sequence_copy, "v -> v. Returns a readonly copy of vector v",
         1, (struct vector *vec),
 	OP_LEAF | OP_NOESCAPE, "v.v")
 {
@@ -69,7 +69,7 @@ TYPEDOP(sequence_copy, 0, "`v -> `v. Returns a readonly copy of vector `v",
   return result;
 }
 
-TYPEDOP(vector_fill, "vector_fill!", "`v `x -> `v. Set all elements of `v to `x",
+TYPEDOP(vector_fill, "v x -> v. Set all elements of v to x",
 	2, (struct vector *vec, value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vx.1")
 {
@@ -87,8 +87,8 @@ TYPEDOP(vector_fill, "vector_fill!", "`v `x -> `v. Set all elements of `v to `x"
   return vec;
 }
 
-TYPEDOP(vector_shift, "vector_shift!", "`v `n0 `n1 `n2 -> `v. Moves `n1 elements starting at"
-	" index `n0 `n2 slots",
+TYPEDOP(vector_shift, "v n0 n1 n2 -> v. Moves n1 elements starting at"
+	" index n0 n2 slots",
 	4, (struct vector *vec, value mstart, value msize, value mdist),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnnn.1")
 {
@@ -123,7 +123,7 @@ TYPEDOP(vector_shift, "vector_shift!", "`v `n0 `n1 `n2 -> `v. Moves `n1 elements
   return vec;
 }
 
-EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v",
+EXT_TYPEDOP(vector_ref, "v n -> x. Return the n'th element of v",
 	    2, (struct vector *vec, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
 {
@@ -139,8 +139,7 @@ EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v",
   return vec->data[idx];
 }
 
-EXT_TYPEDOP(vector_set, "vector_set!",
-            "`v `n `x -> `x. Set the `n'th element of `v to `x",
+EXT_TYPEDOP(vector_set, "v n x -> x. Set the n'th element of v to x",
 	    3, (struct vector *vec, value i, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.3")
 {
@@ -160,15 +159,14 @@ EXT_TYPEDOP(vector_set, "vector_set!",
 
 static const typing vector_tset = { "x*.v", NULL };
 
-FULLOP(vector, 0, "`x0 `x1 ... -> `v. Returns a vector of the arguments",
+FULLOP(vector, "x1 ... -> v. Returns a vector of the arguments",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
        vector_tset, /* extern */)
 {
   return args;
 }
 
-FULLOP(sequence, 0,
-       "`x0 `x1 ... -> `v. Returns a read-only vector of the arguments",
+FULLOP(sequence, "x1 ... -> v. Returns a read-only vector of the arguments",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
        vector_tset, /* extern */)
 {
@@ -180,14 +178,14 @@ FULLOP(sequence, 0,
 
 void vector_init(void)
 {
-  DEFINE(vectorp);
-  DEFINE(make_vector);
-  DEFINE(vector_length);
-  DEFINE(vector_fill);
-  DEFINE(vector_ref);
-  DEFINE(vector_set);
-  DEFINE(vector);
-  DEFINE(sequence);
-  DEFINE(sequence_copy);
-  DEFINE(vector_shift);
+  DEFINE("vector?", vectorp);
+  DEFINE("make_vector", make_vector);
+  DEFINE("vector_length", vector_length);
+  DEFINE("vector_fill!", vector_fill);
+  DEFINE("vector_ref", vector_ref);
+  DEFINE("vector_set!", vector_set);
+  DEFINE("vector", vector);
+  DEFINE("sequence", sequence);
+  DEFINE("sequence_copy", sequence_copy);
+  DEFINE("vector_shift!", vector_shift);
 }

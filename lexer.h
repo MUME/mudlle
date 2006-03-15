@@ -29,7 +29,7 @@ extern const char *filename;
 
 int yylex(void);
 
-void read_from_string(const char *str, const char *name);
+void read_from_string(const char *str);
 void read_from_file(FILE *f, const char *name);
 size_t convert_escape_char(const char *text, char *result);
 

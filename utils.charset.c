@@ -23,7 +23,7 @@
  * Support routines for different charsets
  */
 
-#include "charset.h"
+#include "utils.charset.h"
 
 /*
  * conversion table for latin1 to 7-bit ascii (for output)

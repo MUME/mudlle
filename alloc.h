@@ -44,33 +44,28 @@ extern ulong gcblocksize;
 extern ulong majorgen, minorgen;
 extern ubyte *endgen1;
 #ifdef GCDEBUG_CHECK
-#define GCCHECK(x)                                                      \
-  do                                                                    \
-    if (pointerp(x) &&                                                  \
-        ((struct obj *)(x))->generation !=                              \
-        (((struct obj *)(x))->generation & 1 ? minorgen : majorgen))    \
-     assert(0);                                                         \
-   while (0)
-#else  /* ! GCDEBUG_CHECK */
-#define GCCHECK(x) ((void)0)
-#endif /* ! GCDEBUG_CHECK */
+#define GCCHECK(x) \
+  if (pointerp(x) && \
+      ((struct obj *)(x))->generation != \
+      (((struct obj *)(x))->generation & 1 ? minorgen : majorgen)) assert(0); else
+#else
+#define GCCHECK(x) ;
+#endif
 #elif defined(GCQDEBUG)
 extern ulong maxobjsize;
-#define GCCHECK(x)                                                      \
-  do                                                                    \
-    if (pointerp(x) &&                                                  \
-        (((long)(x) & 2) ||                                             \
-         (((struct obj *)(x))->size > maxobjsize &&                     \
-          ((struct obj *)(x))->garbage_type != garbage_forwarded) ||    \
-         ((struct obj *)(x))->size < 8 ||                               \
-         ((struct obj *)(x))->garbage_type > garbage_mcode ||           \
-         ((struct obj *)(x))->type >= last_type ||                      \
-         ((struct obj *)(x))->flags & ~3))                              \
-    assert(0);                                                          \
-  while (0)
-#else  /* ! GCDEBUG && ! GCQDEBUG */
-#define GCCHECK(x) ((void)0)
-#endif /* ! GCDEBUG && ! GCQDEBUG */
+#define GCCHECK(x)							\
+  do if (pointerp(x) &&							\
+	 (((long)(x) & 2) ||						\
+	  (((struct obj *)(x))->size > maxobjsize && 			\
+	   ((struct obj *)(x))->garbage_type != garbage_forwarded) ||	\
+	  ((struct obj *)(x))->size < 8 ||				\
+	  ((struct obj *)(x))->garbage_type > garbage_mcode ||		\
+	  ((struct obj *)(x))->type >= last_type ||			\
+	  ((struct obj *)(x))->flags & ~3))				\
+     assert(0); while (0)
+#else
+#define GCCHECK(x) ;
+#endif
 
 /* Provide temporary protection for some values */
 extern struct gcpro *gcpro;	/* Local (C) variables which need protection */
