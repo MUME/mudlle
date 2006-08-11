@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -28,14 +28,20 @@ defines
   mc:i_top, mc:i_tdest, mc:i_targs, mc:i_ttypes, mc:i_memory, mc:i_mop,
   mc:i_marray, mc:i_mindex, mc:i_mscalar, mc:i_closure, mc:i_fdest,
   mc:i_ffunction, mc:i_call, mc:i_cdest, mc:i_cargs, mc:i_return, mc:i_rvalue,
-  mc:branch_never, mc:branch_always, mc:branch_true, mc:branch_false,
-  mc:branch_or, mc:branch_nor, mc:branch_and, mc:branch_nand, mc:branch_eq,
-  mc:branch_ne, mc:branch_lt, mc:branch_ge, mc:branch_le, mc:branch_gt,
-  mc:branch_type?, mc:branch_ntype?, mc:trap_never, mc:trap_always,
-  mc:trap_argcheck, mc:trap_loop, mc:trap_type, mc:memory_read, mc:memory_write,
-  mc:il_label, mc:il_ins, mc:il_node, mc:il_number, mc:il_defined_var,
-  mc:il_arguments, mc:il_live_in, mc:il_live_out, mc:l_ins, mc:l_alias,
-  mc:l_number, mc:l_mclabel,
+  mc:i_rtype, mc:branch_never, mc:branch_always, mc:branch_true,
+  mc:branch_false, mc:branch_or, mc:branch_nor, mc:branch_and, mc:branch_nand,
+  mc:branch_eq, mc:branch_ne, mc:branch_lt, mc:branch_ge, mc:branch_le,
+  mc:branch_gt, mc:branch_immutable, mc:branch_mutable, mc:branch_readonly,
+  mc:branch_writable, mc:branch_type?, mc:branch_ntype?, mc:trap_never,
+  mc:trap_always, mc:trap_argcheck, mc:trap_loop, mc:trap_type,
+  mc:trap_global_write, mc:memory_read, mc:memory_write, mc:memory_write_safe,
+  mc:il_label, mc:il_ins, mc:il_node, mc:il_number, mc:il_lineno,
+  mc:il_defined_var, mc:il_arguments, mc:il_live_in, mc:il_live_out, mc:l_ins,
+  mc:l_alias, mc:l_number, mc:l_mclabel,
+
+  mc:itypemap, mc:itypemap_inverse,
+  itype_none, itype_function, itype_integer, itype_string, itype_vector,
+  itype_null, itype_symbol, itype_table, itype_pair, itype_other, itype_any,
 
   mc:new_fncode, mc:set_instruction, mc:get_instructions, mc:remove_branches,
   mc:remove_aliases, mc:remove_labels, mc:remove_var_aliases, mc:new_local,
@@ -44,8 +50,9 @@ defines
   mc:set_label, mc:start_block, mc:end_block, mc:exit_block, mc:defined_var,
   mc:closure_vars, mc:arguments, mc:set_closure_vars!, mc:barguments,
   mc:replace_dest, mc:replace_args, mc:ins_list, mc:ins_list1, mc:print_ins,
-  mc:slabel, mc:trap_global_write, mc:fncode_fn, mc:new_varset, mc:set_vars!,
-  mc:call_escapes?
+  mc:slabel, mc:fncode_fn, mc:new_varset, mc:set_vars!, mc:call_escapes?
+
+reads mc:lineno
 
 [
 //  x := y op z, x := op y, x := y
@@ -98,6 +105,7 @@ mc:i_call = 4;
 
 mc:i_return = 6;
  mc:i_rvalue = 1;
+ mc:i_rtype = 2;
 
 // branch ops
 mc:branch_never = 0; // simplifies constant folding
@@ -114,7 +122,11 @@ mc:branch_lt = 10;
 mc:branch_ge = 11;
 mc:branch_le = 12;
 mc:branch_gt = 13;
-mc:branch_type? = 14;
+mc:branch_immutable = 14;
+mc:branch_mutable = 15;
+mc:branch_readonly = 16;
+mc:branch_writable = 17;
+mc:branch_type? = 18;
 mc:branch_ntype? = mc:branch_type? + last_synthetic_type;
 
 // traps
@@ -128,6 +140,7 @@ mc:trap_global_write = 5; // check that arg1 is not readonly (arg1 is global)
 // memory ops
 mc:memory_read = 1;
 mc:memory_write = 2;
+mc:memory_write_safe = 3; // write with check for read-only
 
 // An instruction list is a list of the following vectors:
 
@@ -135,11 +148,13 @@ mc:il_label = 0; // label of this instruction, or false
 mc:il_ins = 1; // the actual instruction
 mc:il_node = 2; // the basic block to which this instruction belongs
 mc:il_number = 3; // a unique number (for display)
-mc:il_defined_var = 4; // number of variable defined here (or false)
-mc:il_arguments = 5; // varset of arguments used
+mc:il_lineno = 4; // line number of this instruction
+mc:il_defined_var = 5; // number of variable defined here (or false)
+mc:il_arguments = 6; // varset of arguments used
 
-mc:il_live_in = 4; // data-flow information
-mc:il_live_out = 5;
+mc:il_live_in = 5; // data-flow information
+mc:il_live_out = 6;
+
 
 // labels:
 
@@ -148,12 +163,85 @@ mc:l_alias = 1; // we are an alias to this label
 mc:l_number = 2; // unique number (for display)
 mc:l_mclabel = 3; // corresponding machine code label
 
+itype_none = 0;		// no type
+
+itype_function = 1;
+itype_integer = 2;
+itype_string = 4;
+itype_vector = 8;
+itype_null = 16;
+itype_symbol = 32;
+itype_table = 64;
+itype_pair = 128;
+itype_other = 256;
+
+itype_any = 511;		// "any" type
+
+mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
+  (itype_other,	// type_code
+   itype_function,	// type_closure
+   itype_other,	// type_variable
+   itype_other,	// type_internal
+   itype_function,	// type_primitive
+   itype_function,	// type_varargs
+   itype_function,	// type_secure
+   itype_integer,	// type_integer
+   itype_string,	// type_string
+   itype_vector,	// type_vector
+   itype_pair,	// type_pair
+   itype_symbol,	// type_symbol
+   itype_table,	// type_table
+   itype_other,	// type_private
+   itype_other,	// type_object
+   itype_other,	// type_character
+   itype_other,	// type_gone
+   itype_other,	// type_outputport
+   itype_other,	// type_mcode
+   itype_other,	// type_float
+   itype_other,	// type_bigint
+   itype_null,	// type_null
+   itype_none,	// stype_none
+   itype_any,		// stype_any
+   itype_function,	// stype_function
+   itype_pair | itype_null);	// stype_list
+assert(vlength(mc:itypemap) == last_synthetic_type);
+
+mc:itypemap_inverse = sequence // map from type_xxx/stype_xxx -> itype typesets
+  (itype_any,		                      // type_code
+   itype_any,		                      // type_closure
+   itype_any,		                      // type_variable
+   itype_any,		                      // type_internal
+   itype_any,		                      // type_primitive
+   itype_any,		                      // type_varargs
+   itype_any,		                      // type_secure
+   itype_any & ~itype_integer,	      // type_integer
+   itype_any & ~itype_string,	              // type_string
+   itype_any & ~itype_vector,	              // type_vector
+   itype_any & ~itype_pair,	              // type_pair
+   itype_any & ~itype_symbol,	              // type_symbol
+   itype_any & ~itype_table,	              // type_table
+   itype_any,	                              // type_private
+   itype_any,	                              // type_object
+   itype_any,	                              // type_character
+   itype_any,	                              // type_gone
+   itype_any,	                              // type_outputport
+   itype_any,	                              // type_mcode
+   itype_any,	                              // type_float
+   itype_any,	                              // type_bigint
+   itype_any & ~itype_null,	              // type_null
+   itype_any,	                              // stype_none
+   itype_none,		              // stype_any
+   itype_any & ~itype_function,	      // stype_function
+   itype_any & ~(itype_pair | itype_null)); // stype_list
+assert(vlength(mc:itypemap) == last_synthetic_type);
+
 [
   | label_index, ins_index, add_ins, print_if, print_op, is_temp? |
 
   mc:new_fncode = fn "component -> fncode. Returns a structure to use for\n\
 generating instructions for function component" (top)
     [
+      // ilpos, nextlabel, top, blockstack
       vector(null, false, top, null)
     ];
 
@@ -329,7 +417,8 @@ generating instructions for function component" (top)
       | newins |
       
       // Add instruction
-      newins = vector(fcode[1], ins, null, ins_index = ins_index + 1, false, false);
+      newins = vector(fcode[1], ins, null, ins_index = ins_index + 1,
+		      mc:lineno + 0, false, false);
 
       // This is a strange hack:
       //   When code is initially generated, fcode[0] starts at null,
@@ -349,7 +438,7 @@ generating instructions for function component" (top)
   
   mc:ins_return = fn "fncode var -> . Adds 'return var' to fncode" (fcode, v)
     [
-      add_ins(fcode, vector(mc:i_return, v));
+      add_ins(fcode, vector(mc:i_return, v, null));
     ];
   
   mc:ins_trap = fn "fncode op n l -> . Adds 'if op(l) trap n' to fncode"
@@ -486,7 +575,8 @@ be generated in fncode" (fcode, label)
       else if (class == mc:i_branch) ins[mc:i_bargs]
       else if (class == mc:i_trap) ins[mc:i_targs]
       else if (class == mc:i_memory)
-	if (ins[mc:i_mop] == mc:memory_write)
+	if (ins[mc:i_mop] == mc:memory_write ||
+            ins[mc:i_mop] == mc:memory_write_safe)
 	  list(ins[mc:i_marray],
 	       ins[mc:i_mscalar])
 	else
@@ -586,7 +676,8 @@ be generated in fncode" (fcode, label)
       else if (class == mc:i_memory)
 	[
 	  ins[mc:i_marray] = rep(ins[mc:i_marray]);
-	  if (ins[mc:i_mop] == mc:memory_write)
+	  if (ins[mc:i_mop] == mc:memory_write ||
+              ins[mc:i_mop] == mc:memory_write_safe)
 	    ins[mc:i_mscalar] = rep(ins[mc:i_mscalar])
 	]
       else if (class == mc:i_call)
@@ -627,7 +718,7 @@ be generated in fncode" (fcode, label)
 	  il = dget(scan);
 	  if (il[mc:il_label])
 	    display(format("%s:", mc:slabel(il[mc:il_label])));
-	  display(format("\t(%s) ", il[mc:il_number]));
+	  display(format("\t%s\t(%s) ", il[mc:il_lineno], il[mc:il_number]));
 	  closures = mc:print_ins(il[mc:il_ins], closures);
 	  newline();
 	  scan = dnext(scan);
@@ -645,7 +736,8 @@ be generated in fncode" (fcode, label)
 	  print_op('["or" "and" 0 0 "==" "!=" "<" "<=" ">" ">="
 		     "|" "^" "&" "<<" ">>" "+" "-" "*" "/" "%"
 		     "-" "not" "~" 0 0 0 0 "ref" "set" "." ""
-		     "car" "cdr" "slength" "vlength" "i+"][ins[mc:i_aop]],
+		     "car" "cdr" "slength" "vlength" "i+"
+                     "typeof"][ins[mc:i_aop]],
 		   ins[mc:i_aargs]);
 	]
       else if (class == mc:i_branch)
@@ -656,7 +748,8 @@ be generated in fncode" (fcode, label)
 	  opname = 
 	    if (op < mc:branch_type?)
 	      '["never" 0 "true" "false" "or" "nor" "and" "nand"
-		  "==" "!=" "<" ">=" "<=" ">"][ins[mc:i_bop]]
+                "==" "!=" "<" ">=" "<=" ">" "immutable?"
+                "!immutable?" "readonly?" "!readonly?"][ins[mc:i_bop]]
 	    else if (op < mc:branch_ntype?)
 	      format("type[%s]", op - mc:branch_type?)
 	    else
@@ -712,7 +805,10 @@ be generated in fncode" (fcode, label)
       if (nargs == 0)
 	display(op)
       else if (nargs == 1)
-	display(format("%s %s", op, mc:svar(car(args))))
+        if (op)
+          display(format("%s %s", op, mc:svar(car(args))))
+        else
+          display(mc:svar(car(args)))
       else if (nargs == 2)
 	display(format("%s %s %s", mc:svar(car(args)), op, mc:svar(cadr(args))))
       else fail();

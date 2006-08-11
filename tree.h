@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -31,6 +31,11 @@ typedef struct _component *component;
 typedef struct _constant *constant;
 typedef struct _pattern *pattern;
 
+typedef struct {
+  size_t len;
+  char *str;
+} str_and_len_t;
+
 typedef struct _vlist {
   struct _vlist *next;
   const char *var;
@@ -54,7 +59,7 @@ typedef struct _cstpair {
 
 typedef struct {
   mtype type;			/* Return type */
-  const char *help;
+  str_and_len_t help;
   vlist args;			/* Stored in reverse order! */
   int varargs;			/* TRUE if accepts arg vector (==> length(vargs)=1) */
   component value;
@@ -79,7 +84,7 @@ struct _constant {
   enum constant_class vclass;
   union {
     int integer;
-    const char *string;
+    str_and_len_t string;
     double mudlle_float;
     const char *bigint_str;
     cstlist constants;	/* Stored in reverse order ... */
@@ -173,14 +178,16 @@ typedef struct {
   vlist reads;
   vlist writes;
   block body;
+  int lineno;
 } *mfile;
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
-	       block body);
-function new_function(block_t heap, mtype type, const char *help, vlist args,
-		      component val, int lineno, const char *filename);
-function new_vfunction(block_t heap, mtype type, const char *help,
+	       block body, int lineno);
+function new_function(block_t heap, mtype type, str_and_len_t help,
+                      vlist args, component val, int lineno,
+                      const char *filename);
+function new_vfunction(block_t heap, mtype type, str_and_len_t help,
 		       const char *arg, component val,
 		       int lineno, const char *filename);
 block new_codeblock(block_t heap, vlist locals, clist sequence, 
@@ -188,7 +195,7 @@ block new_codeblock(block_t heap, vlist locals, clist sequence,
 clist new_clist(block_t heap, component c, clist next);
 cstpair new_cstpair(block_t heap, constant cst1, constant cst2);
 cstlist new_cstlist(block_t heap, constant cst, cstlist next);
-const char *cstlist_has_symbol(cstlist list, const char *needle);
+str_and_len_t *cstlist_has_symbol(cstlist list, str_and_len_t needle);
 vlist new_vlist(block_t heap, const char *var, mtype type, vlist next);
 constant new_constant(block_t heap, enum constant_class vclass, ...);
 component new_component(block_t heap, enum component_class vclass, ...);
@@ -204,6 +211,11 @@ patternlist new_pattern_list(block_t heap, pattern pat, patternlist tail);
 
 component new_match_component(block_t heap, component e, 
 			      matchnodelist matches);
+component new_for_component(block_t heap, vlist vars,
+                            component einit,
+                            component eexit,
+                            component eloop,
+                            component e);
 matchnodelist new_match_list(block_t heap, matchnode node, matchnodelist tail);
 matchnode new_match_node(block_t heap, pattern pat, component cond, 
 			 component e);

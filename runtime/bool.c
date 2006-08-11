@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,32 +22,33 @@
 #include <string.h>
 #include "runtime/runtime.h"
 
-OPERATION(not, "b1 -> b2. b2 = not b1", 1, (value v),
+OPERATION(not, 0, "`b1 -> `b2. `b2 = not `b1", 1, (value v),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   return makebool(!istrue(v));
 }
 
-OPERATION(or, "b1 b2 -> b. b = b1 or b2", 2, (value v1, value v2),
+OPERATION(or, 0, "`b1 `b2 -> `b3. Returns `b1 or `b2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   return (makebool(istrue(v1) || istrue(v2)));
 }
 
-OPERATION(and, "b1 b2 -> b. b = b1 and b2", 2, (value v1, value v2),
+OPERATION(and, 0, "`b1 `b2 -> `b3. Returns `b1 and `b2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   return (makebool(istrue(v1) && istrue(v2)));
 }
 
-OPERATION(equal, "x1 x2 -> b. TRUE if x1 and x2 are the same object",
+OPERATION(equal, "==", "`x1 `x2 -> `b. TRUE if `x1 and x2 `are the same object",
 	  2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   return (makebool(v1 == v2));
 }
 
-OPERATION(not_equal, "x1 x2 -> b. TRUE if n1 != n2", 2, (value v1, value v2),
+OPERATION(not_equal, "!=", "`x1 `x2 -> `b. TRUE if `x1 and `x2 are different objects",
+          2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   return (makebool(v1 != v2));
@@ -55,11 +56,11 @@ OPERATION(not_equal, "x1 x2 -> b. TRUE if n1 != n2", 2, (value v1, value v2),
 
 void bool_init(void)
 {
-  DEFINE("not", not);
-  DEFINE("or", or);
-  DEFINE("and", and);
-  DEFINE("==", equal);
-  DEFINE("!=", not_equal);
+  DEFINE(not);
+  DEFINE(or);
+  DEFINE(and);
+  DEFINE(equal);
+  DEFINE(not_equal);
   system_define("true", makebool(TRUE));
   system_define("false", makebool(FALSE));
 }

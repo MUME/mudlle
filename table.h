@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -30,6 +30,8 @@ struct table *alloc_table(ulong size);
 */
 
 int table_lookup(struct table *table, const char *name, struct symbol **sym);
+int table_lookup_len(struct table *table, const char *name, size_t nlength,
+                     struct symbol **sym);
 /* Effects: Looks for name in the symbol table table (case insensitive).
    Returns: TRUE if name is found. *pos is set to name's data.
      Otherwise, returns FALSE. table_add_fast can be called immediately
@@ -38,12 +40,15 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym);
 */
 
 int table_remove(struct table *table, const char *name);
+int table_remove_len(struct table *table, const char *name, size_t nlength);
 /* Effects: Removes table[name] from data. Rehashes nescessary values.
    Modifies: table
    Returns: FALSE if the entry wasn't found
 */
 
 int table_set(struct table *table, const char *name, value data);
+int table_set_len(struct table *table, const char *name, size_t nlength,
+                  value data);
 /* Effects: Sets table[name] to data, adds it if not already present
    Modifies: table
    Returns: FALSE if entry name was readonly

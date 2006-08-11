@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -33,7 +33,8 @@ static int check_table(struct symbol *sym)
 {
   struct symbol *symval;
 
-  return !(table_lookup(recurse_table_val, sym->name->str, &symval) &&
+  return !(table_lookup_len(recurse_table_val, sym->name->str,
+                            string_len(sym->name), &symval) &&
 	   recurse(sym->data, symval->data));
 }
 
@@ -98,14 +99,15 @@ static int recurse(value pat, value val)
   NOTREACHED;
 }
 
-OPERATION(pattern_match, "x y -> b. Returns TRUE if x is equal to y as the "
-	  "pattern matcher sees it", 2, (value pat, value val),
-	  OP_LEAF | OP_NOESCAPE)
+TYPEDOP(pattern_match, "=>",
+        "`x `y -> `b. Returns TRUE if `x is equal to `y as the "
+        "pattern matcher sees it", 2, (value pat, value val),
+        OP_LEAF | OP_NOESCAPE, "xx.n")
 {
   return makebool(recurse(pat, val));
 }
 
 void pattern_init(void)
 {
-  DEFINE("=>", pattern_match);
+  DEFINE(pattern_match);
 }

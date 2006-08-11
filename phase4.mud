@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -24,6 +24,7 @@ requires system, sequences, misc, graph, compiler, vars, ins3, mp,
   flow, phase3, optimise
 defines mc:phase4
 reads mc:verbose
+writes mc:lineno
 [
   | clear_igraph, make_igraph, allocate_registers, live_copy_block,
     live_copy, cgen_function, cgen_code |
@@ -519,6 +520,7 @@ reads mc:verbose
 	  newline();
 	];
 
+      mc:lineno = ifn[mc:c_flineno];
       ifn[mc:c_fvalue] = mp:assemble(code);
     ];
 

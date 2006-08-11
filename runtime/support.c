@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,7 +19,6 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <alloca.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,8 +39,9 @@
 static int cc_length = 0;	/* statistics */
 #endif
 
-OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
-	  "parse tree", 1, (struct string *code), OP_LEAF | OP_NOESCAPE)
+OPERATION(mudlle_parse, 0, "`s -> `v. Parses mudlle expression `s and"
+          " returns a parse tree",
+          1, (struct string *code), OP_LEAF | OP_NOESCAPE)
 {
   mfile f;
   value parsed;
@@ -49,7 +49,7 @@ OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
 
   TYPEIS(code, type_string);
 
-  read_from_string(code->str);
+  read_from_string(code->str, NULL);
   memory = new_block();
   if ((f = parse(memory)))
     parsed = mudlle_parse(memory, f);
@@ -61,7 +61,8 @@ OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
   return parsed;
 }
 
-UNSAFEOP(mudlle_parse_file, "s1 s2 -> v. Parses a file s (nice name s2) and returns its parse tree",
+UNSAFEOP(mudlle_parse_file, 0, "`s1 `s2 -> `v. Parses a file s (nice name `s2)"
+         " and returns its parse tree",
 	 2, (struct string *name, struct string *nicename),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -70,17 +71,31 @@ UNSAFEOP(mudlle_parse_file, "s1 s2 -> v. Parses a file s (nice name s2) and retu
   char *fname;
   block_t memory;
   mfile mf;
+  int c;
 
   TYPEIS(name, type_string);
   TYPEIS(nicename, type_string);
   if (!(f = fopen(name->str, "r"))) return makebool(FALSE);
+
+  c = fgetc(f);
+  if (c == '*' || c == EOF) {
+    /* empty or commented-out file */
+    fclose(f);
+    return makebool(FALSE);
+  }
+  
+  rewind(f);
 
   LOCALSTR(fname, nicename);
   read_from_file(f, fname);
 
   memory = new_block();
   if ((mf = parse(memory)))
-    parsed = mudlle_parse(memory, mf);
+    {
+      if (mf->name == NULL)
+        mf->name = fname;
+      parsed = mudlle_parse(memory, mf);
+    }
   else
     parsed = makebool(FALSE);
 
@@ -93,7 +108,7 @@ UNSAFEOP(mudlle_parse_file, "s1 s2 -> v. Parses a file s (nice name s2) and retu
 /* The machine language builtin ops */
 
 #ifndef NOCOMPILER
-static struct builtin_table {
+static const struct builtin_table {
   const char *name;
   void (*address)(void);
 } builtins[] = {
@@ -131,7 +146,7 @@ static struct builtin_table {
   {"bcons", bcons},
   {"berror", berror},
   {"bvarargs", bvarargs},
-#endif
+#endif /* AMIGA */
 #ifdef sparc
   {"bsubtract", bsubtract},
   {"bor", bor},
@@ -170,7 +185,7 @@ static struct builtin_table {
   {"bcall_primitive_leaf_noalloc", bcall_primitive_leaf_noalloc},
   {"bcall_secure", bcall_secure},
   {"bcall_varargs", bcall_varargs}
-#endif
+#endif /* sparc */
 #ifdef i386
   {"xcount", (void (*)())&xcount},
   {"seclevel", (void (*)())&seclevel},
@@ -187,6 +202,7 @@ static struct builtin_table {
   {"bremainder", bremainder},
   {"bref", bref},
   {"bset", bset},
+  {"btypeof", btypeof},
 
   {"bwglobal", bwglobal},
 
@@ -199,6 +215,7 @@ static struct builtin_table {
   {"bcall", bcall},
   {"bcall_secure", bcall_secure},
   {"bcall_varargs", bcall_varargs},
+  {"bapply_varargs", bapply_varargs},
 
   {"balloc_variable", balloc_variable},
   {"balloc_cons", balloc_cons},
@@ -216,10 +233,12 @@ static struct builtin_table {
   {"berror_wrong_parameters", berror_wrong_parameters},
   {"berror_security_violation", berror_security_violation},
   {"berror_value_read_only", berror_value_read_only},
-  {"berror_user_interrupt", berror_user_interrupt}
-#endif
+  {"berror_user_interrupt", berror_user_interrupt},
+  {"berror_no_match", berror_no_match},
+  {"berror_compile", berror_compile}
+#endif /* i386 */
   };
-#endif /* NOCOMPILER */
+#endif /* ! NOCOMPILER */
 
 #ifndef NOCOMPILER
 static ulong builtin_find(struct string *name, int *k)
@@ -236,7 +255,7 @@ static ulong builtin_find(struct string *name, int *k)
 
   return 0;
 }
-#endif
+#endif /* ! NOCOMPILER */
 
 #ifndef NOCOMPILER
 static ulong primitive_find(struct string *name)
@@ -244,10 +263,13 @@ static ulong primitive_find(struct string *name)
   ulong n = mglobal_lookup(name);
   struct primitive *p = GVAR(n);
 
-  if (!TYPE(p, type_primitive)) return 0;
+  if (!(TYPE(p, type_primitive)
+        || TYPE(p, type_varargs)))
+    return 0;
+
   return (ulong)p->op->op;
 }
-#endif
+#endif /* ! NOCOMPILER */
 
 #ifdef sparc
 static void set_cst(ulong *sethi, ulong val)
@@ -272,13 +294,43 @@ static void set_cst(ulong *sethi, ulong val)
 #define set_cst(x, n) (*(ulong *)(x) = (n))
 #endif
 
-VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 -> code. Builds a code object from:\n\
-its machine code s1,\n\
-security level n1, help string s2, varname s3, filename s4, lineno n2\n\
-constants l1=list of constant/offset pairs\n\
-builtins l2=list of name/offset pairs\n\
-globals l3=list of name/offset pairs\n\
-primitives l4=list of name/offset pairs",
+#ifndef NOCOMPILER
+static int check_primitives(struct list *scan)
+{
+  int count = 0;
+
+  while (scan != NULL)
+    {
+      struct list *primitive;
+
+      ++count;
+
+      TYPEIS(scan, type_pair);
+      primitive = scan->car;
+      TYPEIS(primitive, type_pair);
+      TYPEIS(primitive->car, type_string);
+      ISINT(primitive->cdr);
+      /* while primitive_find() can allocate, that will always trigger
+         an error */
+      if (!primitive_find(primitive->car))
+        runtime_error(error_bad_value);
+      scan = scan->cdr;
+    }
+
+  return count;
+}
+#endif /* ! NOCOMPILER */
+
+VAROP(link, 0, "`s1 `n1 `s2 `s3 `s4 `n2 `l1 `l2 `l3 `l4 `l5 `n3 `s5 -> `code."
+      " Builds a code object from:" EOL
+      "its machine code `s1," EOL
+      "security level `n1, help string `s2, varname `s3, filename `s4,"
+      " lineno `n2, returntype `n3, line number info `s5" EOL
+      "constants `l1=list of constant/offset pairs" EOL
+      "builtins `l2=list of name/offset pairs" EOL
+      "globals `l3=list of name/offset pairs" EOL
+      "absolute primitives `l4=list of name/offset pairs" EOL
+      "relative primitives `l5=list of name/offset pairs",
       0)
 {
 #ifdef NOCOMPILER
@@ -287,33 +339,34 @@ primitives l4=list of name/offset pairs",
   ulong clen, ncsts = 0, size = 0;
 #if defined(i386) && !defined(NOCOMPILER)
   ulong nrel = 0;
+  struct string *linenos;
 #endif
   struct mcode *newp = NULL;
   uword *cst_offsets;
   struct list *scan_csts, *scan_builtins, *scan_globals, *scan_primitives;
   struct gcpro gcpro1, gcpro2;
   struct string *mcode;
-  value seclev, alineno;
+  int seclev, alineno;
+  mtype return_type;
   struct string *help, *varname, *afilename;
-  struct list *csts, *abuiltins, *globals, *primitives;
+  struct list *csts, *abuiltins, *globals, *primitives, *rel_primitives;
 
 
-  if (nargs != 10) runtime_error(error_wrong_parameters);
+  if (nargs != 13) runtime_error(error_wrong_parameters);
 
   GCPRO1(args);
 
   mcode = args->data[0];
   TYPEIS(mcode, type_string);
-  seclev = args->data[1];
-  ISINT(seclev);
+  seclev = GETINT(args->data[1]);
   help = args->data[2];
   if (help) TYPEIS(help, type_string);
   varname = args->data[3];
   if (varname) TYPEIS(varname, type_string);
   afilename = args->data[4];
   if (afilename) TYPEIS(afilename, type_string);
-  alineno = args->data[5];
-  ISINT(alineno);
+  alineno = GETINT(args->data[5]);
+  return_type = GETINT(args->data[11]);
 
   csts = args->data[6];
   scan_csts = csts;
@@ -362,21 +415,10 @@ primitives l4=list of name/offset pairs",
   UNGCPRO1(gcpro2);
 
   primitives = args->data[9];
-  scan_primitives = primitives;
-  GCPRO(gcpro2, scan_primitives);
-  while (scan_primitives != NULL)
-    {
-      struct list *primitive;
+  check_primitives(primitives);
 
-      TYPEIS(scan_primitives, type_pair);
-      primitive = scan_primitives->car;
-      TYPEIS(primitive, type_pair);
-      TYPEIS(primitive->car, type_string);
-      ISINT(primitive->cdr);
-      if (!primitive_find(primitive->car)) runtime_error(error_bad_value);
-      scan_primitives = scan_primitives->cdr;
-    }
-  UNGCPRO1(gcpro2);
+  rel_primitives = args->data[10];
+  nrel += check_primitives(rel_primitives);
 
   mcode = args->data[0];
   clen = string_len(mcode);
@@ -398,11 +440,11 @@ primitives l4=list of name/offset pairs",
   newp->o.type = type_mcode;
   newp->o.flags = 0;
   newp->nb_constants = ncsts;
-  newp->seclevel = intval(seclev);
+  newp->seclevel = seclev;
   newp->help = help;
   newp->varname = varname;
   newp->filename = afilename;
-  newp->lineno = intval(alineno);
+  newp->lineno = alineno;
   newp->code_length = clen;
   memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
 
@@ -486,11 +528,11 @@ primitives l4=list of name/offset pairs",
   newp->o.type = type_mcode;
   newp->o.flags = 0;
   newp->nb_constants = ncsts;
-  newp->seclevel = intval(seclev);
+  newp->seclevel = seclev;
   newp->help = help;
   newp->varname = varname;
   newp->filename = afilename;
-  newp->lineno = intval(alineno);
+  newp->lineno = alineno;
   newp->code_length = clen;
   newp->myself = (ubyte *)newp;
   memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
@@ -571,7 +613,6 @@ primitives l4=list of name/offset pairs",
   /* Count relocatable builtins */
   abuiltins = args->data[7];
   scan_builtins = abuiltins;
-  nrel = 0;
   while (scan_builtins != NULL)
     {
       struct list *builtin;
@@ -588,8 +629,11 @@ primitives l4=list of name/offset pairs",
     }
 
   size = ALIGN(clen, sizeof(uword)) + (ncsts + nrel) * sizeof(uword);
-  /* The next line gave a net slowdown, at least on the compiler */
-  /*size = ALIGN(size, 32);*/ /* Avoid sharing cache lines with other objects */
+
+  /* The following gave a net slowdown, at least on the compiler */
+  /* Avoid sharing cache lines with other objects */
+  /*  size = ALIGN(size, 32);*/
+
   size += offsetof(struct mcode, mcode);
   cc_length += size;
   /* allocate extra space to ensure that gen1 will have space for this object
@@ -606,6 +650,9 @@ primitives l4=list of name/offset pairs",
   abuiltins = args->data[7];
   globals = args->data[8];
   primitives = args->data[9];
+  rel_primitives = args->data[10];
+  linenos = args->data[12];
+  TYPEIS(linenos, type_string);
 
   newp->o.size = size;
   newp->o.garbage_type = garbage_mcode;
@@ -613,13 +660,15 @@ primitives l4=list of name/offset pairs",
   newp->o.flags = 0;
   newp->nb_constants = ncsts;
   newp->nb_rel = nrel;
-  newp->seclevel = intval(seclev);
-  newp->help = help;
-  newp->varname = varname;
-  newp->filename = afilename;
-  newp->lineno = intval(alineno);
+  newp->seclevel = seclev;
+  newp->help = help; assert(immutablep(help));
+  newp->varname = varname; assert(immutablep(varname));
+  newp->linenos = linenos; assert(immutablep(linenos));
+  newp->filename = afilename; assert(immutablep(afilename));
+  newp->lineno = alineno;
   newp->code_length = clen;
   newp->myself = (ubyte *)newp;
+  newp->return_type = return_type;
   memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
 
   memcpy(newp->mcode, mcode->str, clen);
@@ -632,7 +681,10 @@ primitives l4=list of name/offset pairs",
       struct list *cst;
       uword offset;
 
+      assert(TYPE(scan_csts, type_pair));
       cst = scan_csts->car;
+      assert(TYPE(cst, type_pair));
+      assert(immutablep(cst->car));
       offset = intval(cst->cdr);
       set_cst(newp->mcode + offset, (ulong)cst->car);
       *cst_offsets++ = offset;
@@ -649,6 +701,7 @@ primitives l4=list of name/offset pairs",
       int k;
       uword offset;
 
+      assert(TYPE(scan_builtins, type_pair));
       builtin = scan_builtins->car;
       baddress = builtin_find(builtin->car, &k);
       offset = intval(builtin->cdr);
@@ -673,6 +726,7 @@ primitives l4=list of name/offset pairs",
       struct list *primitive;
       ulong paddress, offset;
 
+      assert(TYPE(scan_primitives, type_pair));
       primitive = scan_primitives->car;
       offset = intval(primitive->cdr);
       paddress = primitive_find(primitive->car);
@@ -680,6 +734,30 @@ primitives l4=list of name/offset pairs",
 
       scan_primitives = scan_primitives->cdr;
     }
+
+  /* Set primitive addresses */
+  scan_primitives = rel_primitives;
+  while (scan_primitives != NULL)
+    {
+      struct list *primitive;
+      ulong paddress, offset;
+
+      assert(TYPE(scan_primitives, type_pair));
+      primitive = scan_primitives->car;
+      offset = intval(primitive->cdr);
+      paddress = primitive_find(primitive->car);
+      set_cst(newp->mcode + offset,
+              paddress - (ulong)(newp->mcode + offset + 4));
+      /* need to remember offset (for relocation) */
+      *cst_offsets++ = offset;
+
+      scan_primitives = scan_primitives->cdr;
+    }
+
+  assert(cst_offsets
+         - (uword *)((ubyte *)newp->mcode
+                     + ALIGN(clen, sizeof(uword)))
+         == nrel + ncsts);
 
   /* Set global offsets */
   scan_globals = globals;
@@ -689,6 +767,7 @@ primitives l4=list of name/offset pairs",
       ulong goffset, offset;
       struct vector *genv;
 
+      assert(TYPE(scan_globals, type_pair));
       lglobal = scan_globals->car;
       offset = intval(lglobal->cdr);
       goffset = mglobal_lookup(lglobal->car);
@@ -714,7 +793,8 @@ primitives l4=list of name/offset pairs",
 #endif /* !NOCOMPILER */
 }
 
-UNSAFEOP(make_closure, "mcode -> fn. Makes a function with no closure vars from given mcode object",
+UNSAFEOP(make_closure, 0, "`mcode -> `f. Makes a function with no closure"
+         " vars from given `mcode object",
 	  1, (struct mcode *mcode),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -723,47 +803,73 @@ UNSAFEOP(make_closure, "mcode -> fn. Makes a function with no closure vars from 
   return alloc_closure0((struct code *)mcode);
 }
 
-TYPEDOP(closurep, "x -> b. True if x is a closure",
+TYPEDOP(closurep, "closure?", "`x -> `b. True if `x is a closure",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_closure));
 }
 
-TYPEDOP(primitivep, "x -> b. True if x is a primitive",
+TYPEDOP(securep, "secure?", "`x -> `b. True if `x is a secure primitive",
+	1, (value x),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
+{
+  return makebool(TYPE(x, type_secure));
+}
+
+TYPEDOP(primitivep, "primitive?", "`x -> `b. True if `x is a primitive",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_primitive));
 }
 
-TYPEDOP(primitive_nargs, "primitive -> b. Returns # of arguments of primitive",
+TYPEDOP(varargsp, "varargs?",
+        "`x -> `b. True if `x is a variable argument primitive",
+	1, (value x),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
+{
+  return makebool(TYPE(x, type_varargs));
+}
+
+TYPEDOP(primitive_nargs, 0,
+        "`primitive -> `b. Returns # of arguments of primitive"
+        " or secop; -1 for varargs",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
-  TYPEIS(p, type_primitive);
+  if (!TYPE(p, type_primitive) &&
+      !TYPE(p, type_secure) &&
+      !TYPE(p, type_varargs))
+    runtime_error(error_bad_value);
 
   return makeint(p->op->nargs);
 }
 
-TYPEDOP(primitive_flags, "primitive -> n. Returns flags of primitive",
+TYPEDOP(primitive_flags, 0, "`primitive -> `n. Returns flags of primitive",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
-  TYPEIS(p, type_primitive);
+  if (!TYPE(p, type_primitive) &&
+      !TYPE(p, type_secure) &&
+      !TYPE(p, type_varargs))
+    runtime_error(error_bad_value);
 
   return makeint(p->op->flags);
 }
 
-TYPEDOP(primitive_type, "primitive -> l. Returns type of primitive",
+TYPEDOP(primitive_type, 0, "`primitive -> `l. Returns type of primitive",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOESCAPE, "f.l")
 {
   struct list *l = NULL;
-  const char **atyping;
+  const char *const *atyping;
   struct gcpro gcpro1;
 
-  TYPEIS(p, type_primitive);
+  if (!TYPE(p, type_primitive) &&
+      !TYPE(p, type_secure) &&
+      !TYPE(p, type_varargs))
+    runtime_error(error_bad_type);
 
   atyping = p->op->type;
   if (atyping)
@@ -780,14 +886,36 @@ TYPEDOP(primitive_type, "primitive -> l. Returns type of primitive",
   return l;	
 }
 
-UNSAFEOP(global_table, " -> table. Returns global symbol table",
+TYPEDOP(closure_return_type, 0, "`c -> `n. Returns return type of closure `c",
+        1, (struct closure *c), OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "f.n")
+{
+  TYPEIS(c, type_closure);
+
+  if (TYPE(c->code, type_code))
+    return makeint(c->code->return_type);
+
+  assert(TYPE(c->code, type_mcode));
+  return makeint(((struct mcode *)c->code)->return_type);
+}
+
+UNSAFEOP(global_table, 0, " -> `t. Returns global symbol table",
 	 0, (void),
 	 OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   return global;
 }
 
-TYPEDOP(global_lookup, "s -> n. Returns index of global variable s",
+TYPEDOP(global_name, 0, "`n -> `s. Returns the name of global `n",
+        1, (value midx),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.s")
+{
+  long idx = GETINT(midx);
+  if (idx < 0 || idx >= vector_len(global_names))
+    runtime_error(error_bad_value);
+  return GNAME(idx);
+}
+
+TYPEDOP(global_lookup, 0, "`s -> `n. Returns index of global variable `s",
 	1, (struct string *name),
 	OP_LEAF | OP_NOESCAPE, "s.n")
 {
@@ -796,33 +924,32 @@ TYPEDOP(global_lookup, "s -> n. Returns index of global variable s",
   return makeint(mglobal_lookup(name));
 }
 
-TYPEDOP(global_value, "n -> x. Returns value of global variable n",
-	1, (value goffset),
+TYPEDOP(global_value, 0, "`n -> `x. Returns value of global variable `n",
+	1, (value midx),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.x")
 {
-  long n;
-
-  ISINT(goffset); n = intval(goffset);
-  if (n < 0 || n >= intval(environment->used)) runtime_error(error_bad_value);
-
-  return GVAR(n);
-}
-
-UNSAFEOP(global_set, "n x -> . Sets global variable n to x. Fails if n is readonly",
-	 2, (value goffset, value x),
-	 OP_LEAF | OP_NOALLOC)
-{
-  long n;
-
-  ISINT(goffset); n = intval(goffset);
-  if (n < 0 || n >= intval(environment->used) || GCONSTANT(n))
+  long idx = GETINT(midx);
+  if (idx < 0 || idx >= intval(environment->used))
     runtime_error(error_bad_value);
 
-  GVAR(n) = x;
-  undefined();
+  return GVAR(idx);
 }
 
-TYPEDOP(module_status, "s -> n. Returns status of module s",
+UNSAFEOP(global_set, "global_set!",
+         "`n `x -> `x. Sets global variable `n to `x."
+         " Fails if `n is readonly",
+	 2, (value midx, value x),
+	 OP_LEAF | OP_NOALLOC)
+{
+  long idx = GETINT(midx);
+  if (idx < 0 || idx >= intval(environment->used) || GCONSTANT(idx))
+    runtime_error(error_bad_value);
+
+  GVAR(idx) = x;
+  return x;
+}
+
+TYPEDOP(module_status, 0, "`s -> `n. Returns status of module `s",
 	1, (struct string *name),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
@@ -831,7 +958,7 @@ TYPEDOP(module_status, "s -> n. Returns status of module s",
   return makeint(module_status(name->str));
 }
 
-TYPEDOP(module_seclevel, "s -> n. Returns seclevel of module s",
+TYPEDOP(module_seclevel, 0, "`s -> `n. Returns seclevel of module `s",
 	1, (struct string *name),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
@@ -840,7 +967,8 @@ TYPEDOP(module_seclevel, "s -> n. Returns seclevel of module s",
   return makeint(module_seclevel(name->str));
 }
 
-UNSAFEOP(module_set, "s n1 n2 -> . Sets status of module s to n1, seclevel n2",
+UNSAFEOP(module_set, "module_set!",
+         "`s `n1 `n2 -> . Sets status of module `s to `n1, seclevel `n2",
 	 3, (struct string *name, value status, value seclev),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -856,7 +984,7 @@ UNSAFEOP(module_set, "s n1 n2 -> . Sets status of module s to n1, seclevel n2",
   undefined();
 }
 
-UNSAFEOP(module_unload, "s -> b. Unload module s, false if protected",
+UNSAFEOP(module_unload, 0, "`s -> `b. Unload module `s, false if protected",
 	 1, (struct string *name),
 	 OP_LEAF | OP_NOALLOC)
 {
@@ -865,7 +993,8 @@ UNSAFEOP(module_unload, "s -> b. Unload module s, false if protected",
   return makebool(module_unload(name->str));
 }
 
-TYPEDOP(module_require, "s -> n. Load module s if needed, return its new status",
+TYPEDOP(module_require, 0,
+        "`s -> `n. Load module s if needed, return its new status",
 	1, (struct string *name),
 	0, "s.n")
 {
@@ -877,7 +1006,9 @@ TYPEDOP(module_require, "s -> n. Load module s if needed, return its new status"
   return makeint(module_require(tname));
 }
 
-TYPEDOP(module_vstatus, "n -> s/n. Return status of global variable n",
+TYPEDOP(module_vstatus, 0,
+        "`n0 -> `s/`n. Return status of global variable `n0; either the"
+        " name of the defining library, or one of the `var_xxx constants",
 	1, (value goffset),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.S")
 {
@@ -893,7 +1024,9 @@ TYPEDOP(module_vstatus, "n -> s/n. Return status of global variable n",
   else return makeint(status);
 }
 
-UNSAFEOP(module_vset, "n s/n -> . Sets status of global variable n",
+UNSAFEOP(module_vset, "module_vset!",
+         "`n0 `s/`n1 -> . Sets status of global variable `n0 to either the"
+         " name `s of the owning module, `var_normal, or `var_write",
 	 2, (value goffset, value status),
 	 OP_LEAF | OP_NOALLOC)
 {
@@ -919,7 +1052,7 @@ UNSAFEOP(module_vset, "n s/n -> . Sets status of global variable n",
   return makebool(module_vset(n, intval(status), mod));
 }
 
-UNSAFEOP(module_table, " -> table. Returns module status table",
+UNSAFEOP(module_table, 0, " -> `t. Returns the module status table",
 	 0, (void),
 	 OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
@@ -928,105 +1061,104 @@ UNSAFEOP(module_table, " -> table. Returns module status table",
 
 void support_init(void)
 {
-  DEFINE("mudlle_parse", mudlle_parse);
-  DEFINE("mudlle_parse_file", mudlle_parse_file);
-  DEFINE("link", link);
-  DEFINE("make_closure", make_closure);
-  DEFINE("closure?", closurep);
-  DEFINE("primitive?", primitivep);
-  DEFINE("primitive_nargs", primitive_nargs);
-  DEFINE("primitive_flags", primitive_flags);
-  DEFINE("primitive_type", primitive_type);
-  DEFINE("global_table", global_table);
-  DEFINE("global_lookup", global_lookup);
-  DEFINE("global_value", global_value);
-  DEFINE("global_set!", global_set);
+  DEFINE(mudlle_parse);
+  DEFINE(mudlle_parse_file);
+  DEFINE(link);
+  DEFINE(make_closure);
+  DEFINE(closurep);
+  DEFINE(securep);
+  DEFINE(varargsp);
+  DEFINE(primitivep);
+  DEFINE(primitive_nargs);
+  DEFINE(primitive_flags);
+  DEFINE(primitive_type);
+  DEFINE(closure_return_type);
+  DEFINE(global_table);
+  DEFINE(global_name);
+  DEFINE(global_lookup);
+  DEFINE(global_value);
+  DEFINE(global_set);
 
   /* The mudlle types */
-  system_define("type_code", makeint(type_code));
-  system_define("type_closure", makeint(type_closure));
-  system_define("type_variable", makeint(type_variable));
-  system_define("type_internal", makeint(type_internal));
-  system_define("type_primitive", makeint(type_primitive));
-  system_define("type_varargs", makeint(type_varargs));
-  system_define("type_secure", makeint(type_secure));
-  system_define("type_integer", makeint(type_integer));
-  system_define("type_string", makeint(type_string));
-  system_define("type_vector", makeint(type_vector));
-  system_define("type_pair", makeint(type_pair));
-  system_define("type_symbol", makeint(type_symbol));
-  system_define("type_table", makeint(type_table));
-  system_define("type_private", makeint(type_private));
-  system_define("type_object", makeint(type_object));
-  system_define("type_character", makeint(type_character));
-  system_define("type_gone", makeint(type_gone));
-  system_define("type_outputport", makeint(type_outputport));
-  system_define("type_mcode", makeint(type_mcode));
-  system_define("type_float", makeint(type_float));
-  system_define("type_bigint", makeint(type_bigint));
-  system_define("type_null", makeint(type_null));
-  system_define("last_type", makeint(last_type));
+  system_define("type_code",                makeint(type_code));
+  system_define("type_closure",             makeint(type_closure));
+  system_define("type_variable",            makeint(type_variable));
+  system_define("type_internal",            makeint(type_internal));
+  system_define("type_primitive",           makeint(type_primitive));
+  system_define("type_varargs",             makeint(type_varargs));
+  system_define("type_secure",              makeint(type_secure));
+  system_define("type_integer",             makeint(type_integer));
+  system_define("type_string",              makeint(type_string));
+  system_define("type_vector",              makeint(type_vector));
+  system_define("type_pair",                makeint(type_pair));
+  system_define("type_symbol",              makeint(type_symbol));
+  system_define("type_table",               makeint(type_table));
+  system_define("type_private",             makeint(type_private));
+  system_define("type_object",              makeint(type_object));
+  system_define("type_character",           makeint(type_character));
+  system_define("type_gone",                makeint(type_gone));
+  system_define("type_outputport",          makeint(type_outputport));
+  system_define("type_mcode",               makeint(type_mcode));
+  system_define("type_float",               makeint(type_float));
+  system_define("type_bigint",              makeint(type_bigint));
+  system_define("type_null",                makeint(type_null));
+  system_define("last_type",                makeint(last_type));
+  CASSERT_STMT(last_type == 22);
 
   /* Synthetic types */
-  system_define("stype_none", makeint(stype_none));
-  system_define("stype_any", makeint(stype_any));
-  system_define("stype_function", makeint(stype_function));
-  system_define("stype_list", makeint(stype_list));
-  system_define("last_synthetic_type", makeint(last_synthetic_type));
+  system_define("stype_none",               makeint(stype_none));
+  system_define("stype_any",                makeint(stype_any));
+  system_define("stype_function",           makeint(stype_function));
+  system_define("stype_list",               makeint(stype_list));
+  system_define("last_synthetic_type",      makeint(last_synthetic_type));
 
   /* Primitive flags */
-  system_define("OP_LEAF", makeint(OP_LEAF));
-  system_define("OP_NOALLOC", makeint(OP_NOALLOC));
-  system_define("OP_CLEAN", makeint(OP_CLEAN));
-  system_define("OP_NOESCAPE", makeint(OP_NOESCAPE));
+  system_define("OP_LEAF",                  makeint(OP_LEAF));
+  system_define("OP_NOALLOC",               makeint(OP_NOALLOC));
+  system_define("OP_CLEAN",                 makeint(OP_CLEAN));
+  system_define("OP_NOESCAPE",              makeint(OP_NOESCAPE));
 
   /* Mudlle object flags */
-  system_define("MUDLLE_READONLY", makeint(OBJ_READONLY));
-  system_define("MUDLLE_IMMUTABLE", makeint(OBJ_IMMUTABLE));
+  system_define("MUDLLE_READONLY",          makeint(OBJ_READONLY));
+  system_define("MUDLLE_IMMUTABLE",         makeint(OBJ_IMMUTABLE));
 
   /* Garbage types */
-  system_define("garbage_string", makeint(garbage_string));
-  system_define("garbage_record", makeint(garbage_record));
-  system_define("garbage_code", makeint(garbage_code));
-  system_define("garbage_forwarded", makeint(garbage_forwarded));
-  system_define("garbage_permanent", makeint(garbage_permanent));
-  system_define("garbage_temp", makeint(garbage_temp));
-  system_define("garbage_mcode", makeint(garbage_mcode));
+  system_define("garbage_string",           makeint(garbage_string));
+  system_define("garbage_record",           makeint(garbage_record));
+  system_define("garbage_code",             makeint(garbage_code));
+  system_define("garbage_forwarded",        makeint(garbage_forwarded));
+  system_define("garbage_permanent",        makeint(garbage_permanent));
+  system_define("garbage_temp",             makeint(garbage_temp));
+  system_define("garbage_mcode",            makeint(garbage_mcode));
 
   /* Errors */
-  system_define("error_bad_function", makeint(error_bad_function));
-  system_define("error_stack_underflow", makeint(error_stack_underflow));
-  system_define("error_bad_type", makeint(error_bad_type));
-  system_define("error_divide_by_zero", makeint(error_divide_by_zero));
-  system_define("error_bad_index", makeint(error_bad_index));
-  system_define("error_bad_value", makeint(error_bad_value));
+  system_define("error_bad_function",       makeint(error_bad_function));
+  system_define("error_stack_underflow",    makeint(error_stack_underflow));
+  system_define("error_bad_type",           makeint(error_bad_type));
+  system_define("error_divide_by_zero",     makeint(error_divide_by_zero));
+  system_define("error_bad_index",          makeint(error_bad_index));
+  system_define("error_bad_value",          makeint(error_bad_value));
   system_define("error_variable_read_only", makeint(error_variable_read_only));
-  system_define("error_loop", makeint(error_loop));
-  system_define("error_recurse", makeint(error_recurse));
-  system_define("error_wrong_parameters", makeint(error_wrong_parameters));
+  system_define("error_loop",               makeint(error_loop));
+  system_define("error_recurse",            makeint(error_recurse));
+  system_define("error_wrong_parameters",   makeint(error_wrong_parameters));
   system_define("error_security_violation", makeint(error_security_violation));
-  system_define("error_value_read_only", makeint(error_value_read_only));
-  system_define("error_user_interrupt", makeint(error_user_interrupt));
-  system_define("error_no_match", makeint(error_no_match));
-  system_define("last_runtime_error", makeint(last_runtime_error));
+  system_define("error_value_read_only",    makeint(error_value_read_only));
+  system_define("error_user_interrupt",     makeint(error_user_interrupt));
+  system_define("error_no_match",           makeint(error_no_match));
+  system_define("error_compile",            makeint(error_compile));
+  system_define("last_runtime_error",       makeint(last_runtime_error));
+  CASSERT_STMT(last_runtime_error == 15);
 
   /* Module support */
-  DEFINE("module_status", module_status);
-  DEFINE("module_seclevel", module_seclevel);
-  DEFINE("module_set!", module_set);
-  DEFINE("module_table", module_table);
-  system_define("module_unloaded", makeint(module_unloaded));
-  system_define("module_error", makeint(module_error));
-  system_define("module_loading", makeint(module_loading));
-  system_define("module_loaded", makeint(module_loaded));
-  system_define("module_protected", makeint(module_protected));
-  DEFINE("module_unload", module_unload);
-  DEFINE("module_require", module_require);
-  DEFINE("module_vstatus", module_vstatus);
-  DEFINE("module_vset!", module_vset);
-  system_define("var_normal", makeint(var_normal));
-  system_define("var_module", makeint(var_module));
-  system_define("var_write", makeint(var_write));
+  DEFINE(module_status);
+  DEFINE(module_seclevel);
+  DEFINE(module_set);
+  DEFINE(module_table);
+  DEFINE(module_unload);
+  DEFINE(module_require);
+  DEFINE(module_vstatus);
+  DEFINE(module_vset);
 
   /* C options information */
 #ifdef GCDEBUG
@@ -1034,4 +1166,27 @@ void support_init(void)
 #else
   system_define("OPTION_GCDEBUG", makebool(FALSE));
 #endif
+  
+#ifdef i386
+  system_define("x86:function_offset",
+                makeint(offsetinobj(struct mcode, mcode)));
+  system_define("x86:mcode_seclevel",
+                makeint(offsetinobj(struct mcode, seclevel)));
+
+  system_define("x86:object_offset", makeint(sizeof (struct obj)));
+  system_define("x86:object_size",   makeint(offsetof(struct obj, size)));
+  system_define("x86:object_info",   makeint(offsetof(struct obj, size)
+                                             + sizeoffield(struct obj, size)));
+  system_define("x86:object_type",   makeint(offsetof(struct obj, flags) - 1));
+  system_define("x86:object_flags",  makeint(offsetof(struct obj, flags)));
+
+#ifndef NOCOMPILER
+  system_define("x86:cc_frame_end_sp",
+                makeint(offsetof(struct ccontext, frame_end_sp)));
+  system_define("x86:cc_frame_end_bp",
+                makeint(offsetof(struct ccontext, frame_end_bp)));
+  system_define("x86:cc_callee",
+                makeint(offsetof(struct ccontext, callee)));
+#endif /* ! NOCOMPILER */
+#endif /* i386 */
 }

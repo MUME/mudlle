@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -145,5 +145,8 @@ value invoke(struct closure *c, struct vector *args);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
+
+value msetjmp(value f);
+void mlongjmp(value buf, value x);
 
 #endif

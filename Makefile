@@ -1,6 +1,6 @@
 #                                                              -*- makefile -*-
 
-# Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+# Copyright (c) 1993-2006 David Gay and Gustav Hållberg
 # All rights reserved.
 # 
 # Permission to use, copy, modify, and distribute this software for any
@@ -19,6 +19,16 @@
 # "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
 # PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
+USE_XML       := yes
+USE_GMP       := yes
+USE_READLINE  := yes
+# USE_PCRE    	:= yes
+# PCRE_HEADER 	:= PCRE_H	# for <pcre.h>
+# PCRE_HEADER 	:= PCRE_PCRE_H	# for <pcre/pcre.h>
+# USE_MINGW     := yes
+
+export USE_XML USE_GMP USE_READLINE USE_PCRE USE_MINGW
+
 ifeq ($(shell uname -m),sun4u)
 BUILTINS=builtins.o
 else
@@ -29,19 +39,46 @@ OBJS= compile.o env.o interpret.o objenv.o print.o table.o	\
 	tree.o types.o stack.o utils.o valuelist.o parser.o	\
 	lexer.o alloc.o global.o calloc.o mudlle.o ports.o	\
 	ins.o error.o mcompile.o module.o call.o context.o	\
-	$(BUILTINS) utils.charset.o
+	$(BUILTINS) charset.o
 
 SRC = $(filter-out x86builtins.c, $(OBJS:%.o=%.c))
 
 CC=gcc 
-CFLAGS= -g -O0 -Wall -Wshadow -Wwrite-strings -Wnested-externs	\
-	-Wunused -I. -DUSE_READLINE -DUSE_GMP
+CFLAGS := -g -std=gnu99 -O0 -Wall -Wshadow -Wwrite-strings	\
+	-Wnested-externs -Wunused
 export CC
 export CFLAGS
+LDFLAGS := -lm
 MAKEDEPEND=gcc -MM
 
-mudlle: lexer.c tokens.h $(OBJS) runlib
-	$(CC) -g -Wall -o mudlle $(OBJS) runtime/librun.a -lgmp -lpcre -lm -lreadline -lcurses
+ifneq ($(USE_XML),)
+CFLAGS  += -DUSE_XML
+LDFLAGS += -lxml2
+endif
+
+ifneq ($(USE_GMP),)
+CFLAGS += -DUSE_GMP
+LDFLAGS += -lgmp
+endif
+
+ifneq ($(USE_READLINE),)
+CFLAGS += -DUSE_READLINE
+LDFLAGS += -lreadline -lcurses
+endif
+
+ifneq ($(USE_PCRE),)
+CFLAGS += -DUSE_PCRE -DHAVE_$(PCRE_HEADER)
+LDFLAGS += -lpcre
+endif
+
+ifneq ($(USE_MINGW),)
+LDFLAGS += -lwsock32
+endif
+
+all: mudlle
+
+mudlle: $(OBJS) runlib
+	$(CC) -g -Wall -o mudlle $(OBJS) runtime/librun.a $(LDFLAGS)
 
 puremud: $(OBJS) runlib
 	purify -cache-dir=/tmp $(CC) -o puremud $(OBJS) runtime/librun.a -lm
@@ -83,15 +120,28 @@ parser.c: parser.y
 builtins.o: builtins.S
 	$(CC) -o builtins.o -c builtins.S
 
-x86builtins.o: x86builtins.S
-	$(CC) -c x86builtins.S -o x86builtins.o
+x86builtins.o: x86builtins.S x86consts.h
+	$(CC) -g -c x86builtins.S -o x86builtins.o
+
+x86consts.h: genconst
+	./genconst > $@
+
+genconst: genconst.o Makefile
+	$(CC) -g -Wall -o $@ $<
+
+genconst.o: genconstdefs.h
+
+CONSTH := types.h mvalues.h context.h error.h
+
+genconstdefs.h: $(CONSTH) runtime/consts.pl Makefile
+	perl runtime/consts.pl $(CONSTH) | grep '^ *\(/\*\|DEF\)' | sed 's/,$$/;/g' > $@
 
 .PHONY: dep depend
 dep depend: .depend
 	$(MAKE) -C runtime -f Makefile depend
 
-.depend: $(SRC)
-	$(MAKEDEPEND) $(CFLAGS) $(SRC) > .depend
+.depend: $(SRC) genconst.c genconstdefs.h
+	$(MAKEDEPEND) $(CFLAGS) $(SRC) genconst.c > .depend
 
 compiler:
 	/bin/sh install-compiler

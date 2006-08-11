@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,7 +25,9 @@
 
 #include "options.h"
 
-.section	.rodata
+#  include "x86consts.h"
+
+.section	.text
 
 #ifndef NOCOMPILER
 	
@@ -39,103 +41,21 @@
 
 /* Register assignments */
 #define arg0 %eax
+#define arg0b %al
 #define arg1 %ecx
+#define arg1b %cl
 #define globals %esi
 #define argcount %eax
 #define argcountw %ax
 #define closure %ebx
 #define closure_in %edx
-
-/* Runtime errors */
-#define error_bad_function 0
-#define error_stack_underflow 1
-#define error_bad_type 2
-#define error_divide_by_zero 3
-#define error_bad_index 4
-#define error_bad_value 5
-#define error_variable_read_only 6
-#define error_loop 7
-#define error_recurse 8
-#define error_wrong_parameters 9
-#define error_security_violation 10
-#define error_value_read_only 11
-#define error_user_interrupt 12
-
-/* Types */
-#define type_code 0
-#define type_closure 1
-#define type_variable 2
-#define type_internal 3
-#define type_primitive 4
-#define type_varargs 5
-#define type_secure 6
-#define type_integer 7
-#define type_string 8
-#define type_vector 9
-#define type_list 10
-#define type_symbol 11
-#define type_table 12
-#define type_private 13
-#define type_object 14
-#define type_character 15
-#define type_gone 16
-#define type_outputport 17
-#define type_mcode 18
-#define last_type 19
-
-/* Garbage types */
-#define garbage_string 0
-#define garbage_record 1
-#define garbage_code 2
-#define garbage_forwarded 3
-#define garbage_permanent 4
-#define garbage_temp 5
-#define garbage_mcode 6
-
-/* Flags */
-#define flag_readonly 1
-#define flag_immutable 2
-
-/* Basic object structure */
-#ifdef GCDEBUG
-#define object_offset 12	/* Size of object header */
-#define object_gen 8		/* Object generation */
-#else
-#define object_offset 8		/* Size of object header */
-#endif
-#define object_type 5		/* Type of object */
-#define object_size 0		/* Size of object */
-#define object_info 4		/* Object information (type, flags, etc) */
-#define object_flags 6		/* Flags of object */
-
-/* Offsets of fields in various types */
-#define pair_size (object_offset+8)
-#define env_ovalues 8		/* values field in environment */
-#define mcode_seclevel 0	/* seclevel in mcode */
-#define function_offset 36	/* start of code in mcode object */
-#define primitive_op 4		/* primitive_ext in primitive */
-#define primop_op 8		/* C function in primitive_ext */
-#define primop_nargs 12		/* nargs in primitive_ext */
-#define primop_seclevel 20	/* seclevel in primitive_ext */
+#define closure_inb %dl
 
 /* Stack frame information */
 #define argstart 8
 
-/* ccontext structure def */
-#define cc_frame_start 0
-#define cc_frame_end_sp 4
-#define cc_frame_end_bp 8
-#define cc_callee 12
-#define cc_caller 20
-#define cc_retadr 28
-#define cc_SIZE 32
-
 /* call_stack structure def */
-#define cs_next 0
-#define cs_type 4
 #define cs_compiled_SIZE 8 /* size for call_compiled */
-
-#define call_compiled 2
 
 /* External symbols used */
 	.globl	N(ccontext)
@@ -156,9 +76,9 @@
 #ifdef GCSTATS
 	.global N(gcstats)
 
-#define GCSTAT_ADD(type, size)					\
-	incl	N(gcstats) + 4 * (5 + 22 * 6 + type);		\
-	add	size,N(gcstats) + 4 * (5 + 22 * 7 + type)
+#define GCSTAT_ADD(type, size)						\
+	incl	N(gcstats) + 4 * (5 + last_type * 6 + type);		\
+	add	size,N(gcstats) + 4 * (5 + last_type * 7 + type)
 
 #else  /* !GCSTATS */
 #define GCSTAT_ADD(type, size)
@@ -234,29 +154,31 @@
 			
 /* Simple integer manipulation macros */
 #define SETINT(x) \
-	bts	$0,x		/* set integer type bit */
+	or	$1,x		/* set integer type bit */
 
 #define CLEARINT(x) \
-	btr	$0,x		/* clear integer type bit */
+	and	$~1,x		/* clear integer type bit */
 
 #define INTVAL(x) \
 	sar	$1,x		/* Make into normal integer */
 
 #define MAKEINT(x) \
-	add	x,x; \
-	SETINT(x)
+        lea     1(x,x),x
 
 #define ISINT(x) \
-	testl	$1,x		/* Is x an integer ? */
+	test	$1,x		/* Is x an integer ? */
+
+#define ISINTB(x) \
+	testb	$1,x		/* Is x an integer ? */
 
 #define ISNULL(x) \
 	test	x,x		/* Is x NULL (registers only) */
 
 #define ISUNALIGNED(x) \
-	testl	$3,x
+	test	$3,x
 
 #define ARG0_IS_READ_WRITE				\
-	testl	$flag_readonly,object_flags(arg0);	\
+	testb	$OBJ_READONLY,object_flags(arg0);	\
 	jne	E(error_value_read_only)
 
 #ifdef GCDEBUG_CHECK
@@ -301,13 +223,13 @@
 /* Simple integer operations: +, /, % */
 
 #define INT1ARG \
-	ISINT(arg0); \
+	ISINT(arg0b); \
 	je	E(error_bad_type)
 
 #define INT2ARGS \
-	ISINT(arg0); \
+	ISINT(arg0b); \
 	je	E(error_bad_type)
-	ISINT(arg1); \
+	ISINT(arg1b); \
 	je	E(error_bad_type)
 
 	.globl	N(bmultiply)
@@ -326,15 +248,15 @@ N(bmultiply):
 	.globl	N(bdivide)
 
 N(bdivide):
+	sar	$1,arg0
+	jnc	E(error_bad_type)
 	sar	$1,arg1
 	jnc	E(error_bad_type)
 	jz	E(error_divide_by_zero)
-	btr	$0,arg0
-	jnc	E(error_bad_type)
 	push	%edx
 	cdq
 	idiv	arg1
-	SETINT(arg0)
+	MAKEINT(arg0)
 	pop	%edx
 	ret
 
@@ -382,9 +304,9 @@ N(bshift_right):
 	.globl	N(badd)
 
 N(badd):	
-	ISINT(arg0)
+	ISINT(arg0b)
 	je	cadd
-	ISINT(arg1)
+	ISINT(arg1b)
 	je	cadd
 
 	/* Integer addition */
@@ -402,10 +324,27 @@ cadd:	/* Call string_append */
 	RESTORE_CALLER
 	ret
 
+	.globl	N(btypeof)
+	
+N(btypeof):
+        ISNULL(arg0)
+        mov	$(2 * type_null) + 1,arg1
+        je	0f
+
+        ISINT(arg0b)
+        mov	$(2 * type_integer) + 1,arg1
+        jne	0f
+
+        movzbl	object_type(arg0),arg1
+        MAKEINT(arg1)
+
+0:	mov	arg1,arg0
+        ret
+
 	.globl	N(bref)
 	
 N(bref):	
-	ISINT(arg0)
+	ISINT(arg0b)
 	jne	cref
 
 	cmpb	$type_vector,object_type(arg0)
@@ -424,7 +363,7 @@ cref:	/* Call ref - only need to save %edx (ref doesn't alloc) */
 	ret
 
 vectorref:
-	ISINT(arg1)
+	ISINT(arg1b)
 	je	E(error_bad_type)
 	add	arg1,arg1
 	jo	E(error_bad_index)
@@ -442,7 +381,7 @@ vecnosign:
 	ret
 
 stringref:
-	ISINT(arg1)
+	ISINT(arg1b)
 	je	E(error_bad_type)
 	INTVAL(arg1)
 	jns	strnosign
@@ -463,7 +402,7 @@ strnosign:
 	
 N(bset):	
 	mov	4(%esp),%edx
-	ISINT(arg0)
+	ISINT(arg0b)
 	jne	cset
 
 	cmpb	$type_vector,object_type(arg0)
@@ -483,7 +422,7 @@ cset:	/* Call set! */
 	ret
 
 vectorset:
-	ISINT(arg1)
+	ISINT(arg1b)
 	je	E(error_bad_type)
 	ARG0_IS_READ_WRITE
 	add	arg1,arg1
@@ -531,7 +470,7 @@ strsetnosign:
 N(bwglobal):
 	sub	globals,arg0
 	mov	N(mvars),arg1
-	ISINT((arg1,arg0))
+	ISINTB((arg1,arg0))
 	je	E(error_variable_read_only)
 	ret
 
@@ -717,7 +656,7 @@ N(balloc_closure):
 	mov	N(minorgen),arg1
 	mov	arg1,object_gen(arg0)
 #endif
-	movl	$garbage_record | type_closure << 8 | flag_readonly << 16,object_info(arg0)
+	movl	$garbage_record | type_closure << 8 | OBJ_READONLY << 16,object_info(arg0)
 	mov	arg0,arg1
 	ret
 
@@ -742,12 +681,12 @@ N(balloc_cons):
 	/* success */
 	mov	arg1,N(posgen0)
 	movl	$pair_size,object_size(arg1)
-	GCSTAT_ADD(type_list, $pair_size)
+	GCSTAT_ADD(type_pair, $pair_size)
 #ifdef GCDEBUG
 	mov	N(minorgen),arg0
 	mov	arg0,object_gen(arg1)
 #endif
-	movl	$garbage_record | type_list << 8,object_info(arg1)
+	movl	$garbage_record | type_pair << 8,object_info(arg1)
 	ret
 
 consgc:	SAVE_CALLER
@@ -770,7 +709,7 @@ consgc:	SAVE_CALLER
    closure_in contains called fn
 */
 N(bcall):
-	ISUNALIGNED(closure_in)
+	ISUNALIGNED(closure_inb)
 	jne	E(error_bad_function)
 
 	cmpb	$type_closure,object_type(closure_in)
@@ -890,8 +829,6 @@ N(bcall_secure):
 
 N(bcall_varargs):
 	SAVE_CALLEE
-	mov	object_offset+primitive_op(closure_in),closure_in
-	mov	primop_op(closure_in),closure_in /* Fetch actual C function */
 	END_FRAME_PC_ecx(0)
 	push	argcount
 	call	makevarargs
@@ -902,6 +839,22 @@ N(bcall_varargs):
 	add	$8,%esp
 	ret
 
+	.globl	N(bapply_varargs)
+
+N(bapply_varargs):
+        /* call varargs primitive in arg1 (%ecx) with arguments in
+	   vector arg0 (%eax) */
+        push    arg0
+        push	arg1
+
+        END_FRAME_PC(2)
+        SAVE_CALLEE
+        CCALL_SECURE(apply_vararg)
+        RESTORE_CALLEE
+        add     $8,%esp
+
+        ret
+                        
 	.globl	N(interpreter_invoke)
 
 N(interpreter_invoke):
@@ -969,8 +922,7 @@ N(interpreter_invoke):
 	mov	object_size(%esi),%eax; \
 	sub	$object_offset,%eax; \
 	sub	%eax,%esp; \
-	sar	$1,%eax; \
-	sar	$1,%eax; \
+	sar	$2,%eax; \
 	mov	%eax,%ecx; \
 	add	$object_offset,%esi; \
 	mov	%esp,%edi; \
@@ -1075,5 +1027,7 @@ ERRORSTUB(error_wrong_parameters)
 ERRORSTUB(error_security_violation)
 ERRORSTUB(error_value_read_only)
 ERRORSTUB(error_user_interrupt)
+ERRORSTUB(error_no_match)
+ERRORSTUB(error_compile)
 
 #endif

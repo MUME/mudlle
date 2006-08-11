@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -65,12 +65,16 @@ static void vwarning(const char *fname, int line, const char *msg, va_list args)
 {
   char err[4096];
 
-  vsprintf(err, msg, args);
+  vsnprintf(err, sizeof err, msg, args);
   if (mudout) mflush(mudout);
-  if (fname && line >= 0)
+
+  if (fname == NULL)
+    mprintf(muderr, "warning: %s" EOL, err);
+  else if (line > 0)
     mprintf(muderr, "%s:%d: warning: %s" EOL, fname, line, err);
   else
-    mprintf(muderr, "warning: %s" EOL, err);
+    mprintf(muderr, "%s: warning: %s" EOL, fname, err);
+
   if (muderr) mflush(muderr);
 }
 

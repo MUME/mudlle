@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -34,7 +34,7 @@
 %}
 
 %union {
-  char *string;
+  str_and_len_t string;
   char *symbol;
   int integer;
   struct {
@@ -65,7 +65,7 @@
   int lineno;
 }
 
-%token FUNCTION IF ELSE WHILE ASSIGN QUOTE MEXIT LOOP
+%token FUNCTION IF ELSE WHILE ASSIGN QUOTE MEXIT LOOP FOR
 %token INTEGER STRING SYMBOL GLOBAL_SYMBOL FLOAT BIGINT SINK MATCH PATTERN_MATCH 
 %token ELLIPSIS INCREMENTER
 %token MODULE LIBRARY IMPORTS DEFINES READS WRITES OP_ASSIGN
@@ -85,15 +85,15 @@
 %left NOT '~' UMINUS
 
 %type <tclist> expression_list expression_list1 call_list call_list1
-%type <tcomponent> expression e0 e1 e2 loop exit match
+%type <tcomponent> expression e0 e1 e2 loop exit match for
 %type <tcomponent> labeled_expression function_call array_ref 
-%type <tcomponent> control_expression opt_match_condition
+%type <tcomponent> control_expression opt_match_condition optional_expression
 %type <tcomponent> if while optional_else
 %type <tvlist> variable_list plist plist1 optional_variable_list
 %type <tvlist> imports defines reads writes
 %type <tparameters> parameters
 %type <tmtype> type optional_type
-%type <string> optional_help STRING
+%type <string> optional_help help STRING
 %type <symbol> variable SYMBOL label optional_label optional_symbol GLOBAL_SYMBOL
 %type <symbol> variable_name
 %type <integer> INTEGER
@@ -144,60 +144,60 @@ static component make_ref_set_increment(component exp0, component exp1,
 {
     /* prefix:
      *  [
-     *    | ~exp, ~ref |
-     *    ~exp = <exp0>; ~ref = <exp1>;
-     *    ~exp[~ref] = ~exp[~ref] <op> <exp2>;
+     *    | $exp, $ref |
+     *    $exp = <exp0>; $ref = <exp1>;
+     *    $exp[$ref] = $exp[$ref] <op> <exp2>;
      *  ]
      *
      * postfix:
      *  [
-     *    | ~exp, ~ref, ~val |
-     *    ~exp = <exp0>; ~ref = <exp1>;
-     *    ~val = ~exp[~ref];
-     *    ~exp[~ref] = ~val <op> <exp2>;
-     *    ~val;
+     *    | $exp, $ref, $val |
+     *    $exp = <exp0>; $ref = <exp1>;
+     *    $val = $exp[$ref];
+     *    $exp[$ref] = $val <op> <exp2>;
+     *    $val;
      *  ]
      */
-    vlist vl = new_vlist(parser_memory, "~exp", stype_any,
-			 new_vlist(parser_memory, "~ref", stype_any,
+    vlist vl = new_vlist(parser_memory, "$exp", stype_any,
+			 new_vlist(parser_memory, "$ref", stype_any,
 				   NULL));
     component val;
     clist cl;
 
     if (is_postfix)
-      vl = new_vlist(parser_memory, "~val", stype_any,
+      vl = new_vlist(parser_memory, "$val", stype_any,
 		     vl);
 
     cl = new_clist(parser_memory,
-		   new_component(parser_memory, c_assign, "~exp", exp0),
+		   new_component(parser_memory, c_assign, "$exp", exp0),
 		   NULL);
     cl = new_clist(parser_memory,
-		   new_component(parser_memory, c_assign, "~ref", exp1),
+		   new_component(parser_memory, c_assign, "$ref", exp1),
 		   cl);
 
     val = new_component(parser_memory, c_builtin, b_ref, 2,
-			new_component(parser_memory, c_recall, "~exp"),
-			new_component(parser_memory, c_recall, "~ref"));
+			new_component(parser_memory, c_recall, "$exp"),
+			new_component(parser_memory, c_recall, "$ref"));
 
     if (is_postfix)
       {
 	cl = new_clist(parser_memory, 
-		       new_component(parser_memory, c_assign, "~val", val),
+		       new_component(parser_memory, c_assign, "$val", val),
 		       cl);
-	val = new_component(parser_memory, c_recall, "~val");
+	val = new_component(parser_memory, c_recall, "$val");
       }
 
     cl = new_clist(parser_memory,
 		   new_component(parser_memory, c_builtin, b_set, 3, 
-				 new_component(parser_memory, c_recall, "~exp"),
-				 new_component(parser_memory, c_recall, "~ref"),
+				 new_component(parser_memory, c_recall, "$exp"),
+				 new_component(parser_memory, c_recall, "$ref"),
 				 make_binary(op, val, exp2)),
 		   cl);
     cl->c->lineno = line;
 
     if (is_postfix)
       cl = new_clist(parser_memory,
-		     new_component(parser_memory, c_recall, "~val"),
+		     new_component(parser_memory, c_recall, "$val"),
 		     cl);
 
     val = new_component(parser_memory, c_block,
@@ -261,7 +261,7 @@ struct mkeyword {
   mtype value;
 };
 
-static struct mkeyword types[] = {
+static const struct mkeyword types[] = {
   { "int",       type_integer },
   { "string",    type_string },
   { "vector",    type_vector },
@@ -309,15 +309,16 @@ entry_types :
   library |
   module ;
 
-simple : expression_list 
+simple : save_lineno expression_list 
  { $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, 
-		 new_codeblock(parser_memory, NULL, $1, NULL, -1)); } ;
+		 new_codeblock(parser_memory, NULL, $2, NULL, -1),
+                 $1); } ;
 
-module : MODULE optional_symbol imports reads writes code_block optional_semi
-  { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $6); } ;
+module : MODULE optional_symbol imports reads writes save_lineno code_block optional_semi
+  { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $7, $6); } ;
 
-library : LIBRARY SYMBOL imports defines reads writes code_block optional_semi
-  { $$ = new_file(parser_memory, f_library, $2, $3, $4, $5, $6, $7); } ;
+library : LIBRARY SYMBOL imports defines reads writes save_lineno code_block optional_semi
+  { $$ = new_file(parser_memory, f_library, $2, $3, $4, $5, $6, $8, $7); } ;
 
 optional_symbol :
   SYMBOL |
@@ -357,6 +358,10 @@ expression_list1 :
 
 optional_semi : /* empty */ | ';' ;
 
+optional_expression :
+  expression |
+  /* empty */ { $$ = NULL; } ;
+
 expression : labeled_expression | save_lineno e0 { $$ = $2; $$->lineno = $1; };
 
 labeled_expression : label save_lineno expression 
@@ -393,7 +398,7 @@ e0 :
   } |
   e1 ;
 
-control_expression : if | while | loop | exit | match ;
+control_expression : if | while | loop | exit | match | for ;
 
 if : 
   IF '(' expression ')' expression optional_else 
@@ -418,6 +423,12 @@ loop :
   LOOP expression
     {
       $$ = new_component(parser_memory, c_builtin, b_loop, 1, $2);
+    } ;
+
+for :
+  FOR '(' optional_variable_list optional_expression ';' optional_expression ';' optional_expression ')' expression
+    {
+      $$ = new_for_component(parser_memory, $3, $4, $6, $8, $10);
     } ;
 
 match :
@@ -461,8 +472,16 @@ function_expression :
   ;
 
 optional_help :
-  /* empty */ { $$ = NULL; } |
-  STRING ;
+  /* empty */ { $$.str = NULL; $$.len = 0; } |
+  help ;
+
+help :
+  help '+' STRING { 
+  $$.len = $1.len + $3.len;
+    $$.str = allocate(parser_memory, $$.len + 1);
+    memcpy($$.str, $1.str, $1.len);
+    memcpy($$.str + $1.len, $3.str, $3.len + 1);
+  } | STRING ;
 
 parameters : 
   '(' plist ')' { $$.varargs = FALSE; $$.args = $2; } |
@@ -603,12 +622,12 @@ constant_list :
 table_entry_list :
   table_entry { $$ = new_cstlist(parser_memory, $1, NULL); } |
   table_entry_list table_entry { 
-    const char *sym = $2->u.constpair->cst1->u.string;
-    const char *conflict;
-    if ((conflict = cstlist_has_symbol($1, sym)))
+    str_and_len_t *sym = &$2->u.constpair->cst1->u.string;
+    str_and_len_t *conflict;
+    if ((conflict = cstlist_has_symbol($1, *sym)))
       {
 	compile_error("table entry '%s' conflicts with entry '%s'",
-		      sym, conflict);
+		      sym->str, conflict->str);
 	YYABORT;
       }
     $$ = new_cstlist(parser_memory, $2, $1);

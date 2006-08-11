@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -24,7 +24,9 @@
 
 #include <setjmp.h>
 
-#define SIGNAL_ERROR 1
+#define SIGNAL_ERROR   1
+#define SIGNAL_LONGJMP 2
+#define SIGNAL_RETURN  3
 
 typedef enum { 
   error_bad_function,
@@ -45,7 +47,8 @@ typedef enum {
   last_runtime_error
 } runtime_errors;
 
-extern const char *mudlle_errors[last_runtime_error];
+extern const char *const mudlle_errors[last_runtime_error];
+extern int suppress_extra_calltrace;
 
 void error_init(void);
 

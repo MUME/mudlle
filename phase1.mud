@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -67,7 +67,7 @@ writes mc:this_function
     all_writable, readable, writable, definable, imported_modules, import,
     env_toplevel?, import_protected, env_global_prefix |
 
-  comp_null = list(vector(mc:c_recall, mc:var_make_constant(null)));
+  comp_null = list(vector(mc:c_recall, -1, mc:var_make_constant(null)));
     
   // environment handling
 
@@ -130,7 +130,7 @@ writes mc:this_function
       | vlocals |
       vlocals = lmap(fn (v) mc:var_make_local(car(v)), locals);
       env_add_block(locals, vlocals);
-      lmap(fn (vl) vector(mc:c_assign, vl, comp_null), vlocals)
+      lmap(fn (vl) vector(mc:c_assign, -1, vl, comp_null), vlocals)
     ];
 
   env_leave_block = fn ()
@@ -440,7 +440,7 @@ writes mc:this_function
 	  list(c)
 	]
       else if (class == mc:c_constant)
-	list(vector(mc:c_recall,
+	list(vector(mc:c_recall, -1,
 		    mc:var_make_constant(c[mc:c_cvalue])))
       else if (class == mc:c_closure)
 	[
@@ -451,11 +451,11 @@ writes mc:this_function
 	  args = env_leave_function();
 	  
 	  // add a "function" label
-	  components = list(vector(mc:c_labeled,
+	  components = list(vector(mc:c_labeled, -1,
 				   "function",
 				   components));
 	  
-	  list(vector(mc:c_closure,
+	  list(vector(mc:c_closure, c[mc:c_flineno],
 		      c[mc:c_freturn_type],
 		      c[mc:c_fhelp],
 		      args,	// parameters
@@ -506,44 +506,43 @@ writes mc:this_function
   
   mc:phase1 = fn (m)
     [
-      | components, name |
+      | components, fname, top_var |
 
-      if (!(name = m[mc:m_name]))
-	name = "top-level"
-      else
-	name = "top-level of " + name;
+      top_var = vector(mc:v_global, "top-level");
+
+      fname = m[mc:m_filename];
 
       mstart(m);
       env_init();
-      env_enter_function(vector(mc:c_closure,
-				stype_any,
-				null,
-				null, // no arguments
-				false,
-				null,
-				-1,
-				name,
-				null,
-				false));
+      env_enter_function(vector(mc:c_closure, -1,
+				stype_any,      // return type
+				null,           // help
+				null,           // arguments
+				false,          // vararg?
+				null,           // value
+                                m[mc:m_body][mc:c_lineno], // lineno
+				fname,          // filename
+				null,           // argtypes
+				top_var));      // variable name
       components = resolve_component(m[mc:m_body]);
       env_leave_function();
       mcleanup();
       
       // make a top-level function
       m[mc:m_body] = 
-	vector(mc:c_closure,
-	       stype_any,
-	       null,
-	       null,		// No arguments
-	       false,
-	       components,
-	       -1,
-	       name,
-	       null,
-	       false,
+	vector(mc:c_closure, -1,
+	       stype_any,                       // return type
+	       null,                            // help
+	       null,                            // arguments
+	       false,                           // vararg?
+	       components,                      // value
+	       -1,                              // lineno
+	       fname,                           // filename
+	       null,                            // argtypes
+	       top_var,                         // variable name
 	       null, null, null, null, null, null, // var lists
-	       null,
-	       0,
-	       null);
+	       null,                            // misc
+	       0,                               // # fnvars
+	       null);                           // # allvars
     ];
 ];

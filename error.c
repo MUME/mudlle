@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -33,7 +33,7 @@
 #include "error.h"
 #include "ins.h"
 
-const char *mudlle_errors[last_runtime_error] = {
+const char *const mudlle_errors[] = {
   "bad function",
   "stack underflow",
   "bad type",
@@ -50,6 +50,9 @@ const char *mudlle_errors[last_runtime_error] = {
   "pattern not matched",
   "compilation error"
 };
+CASSERT_VLEN(mudlle_errors, last_runtime_error);
+
+int suppress_extra_calltrace;
 
 static void print_error(int error)
 {
@@ -157,9 +160,60 @@ static void print_c_frame_stack(struct call_stack *frame)
 }
 
 #ifndef NOCOMPILER
-static void print_mcode(struct mcode *base)
+/*
+ * Looks up (return) address ofs in mcode and returns which line
+ * number it comes from.
+ *
+ * The line number data is stored in offset/linenumber pairs, where
+ * by default, only a delta is stored, one byte for each value:
+ *
+ *   <delta offset> <delta line>
+ *
+ * Which means that <delta offset> bytes of code exist on the current
+ * source line, and that the next line has line number <current line>
+ * + <delta line>.
+ *
+ * If <delta offset> doesn't fit in an unsigned byte (except 255), or
+ * if <delta line> doesn't fit in a signed byte, a byte of 255 is
+ * stored, followed by two 32-bit ints for <new offset> and <new line>.
+ *
+ * See ins_lineno() in ax86.mud for the generation of this data.
+ */
+static long find_line(struct mcode *mcode, ulong ofs)
+{
+  char *data = mcode->linenos->str;
+  char *enddata = data + string_len(mcode->linenos);
+  long offset = 0;
+  long line = 0;
+
+  for (;;)
+    {
+      long prevline = line;
+      char b = *data++;
+
+      if ((unsigned char)b == 255)
+        {
+          offset = *(unsigned int *)data;
+          data += 4;
+          line = *(unsigned int *)data;
+          data += 4;
+        }
+      else
+        {
+          offset += (unsigned char)b;
+          line += (signed char)*data++;
+        }
+      if (offset >= ofs)
+        return prevline;
+      if (data == enddata)
+        return line;
+    }
+}
+
+static void print_mcode(struct mcode *base, ulong ofs)
 {
   struct gcpro gcpro1;
+  long line = find_line(base, ofs);
 
   GCPRO1(base);
   if (base->varname)
@@ -169,7 +223,7 @@ static void print_mcode(struct mcode *base)
 
   mputs("(<compiled>) at ", muderr);
   mprint(muderr, prt_display, base->filename);
-  mprintf(muderr, ":%d" EOL, base->lineno);
+  mprintf(muderr, ":%ld" EOL, line);
   UNGCPRO();
 }
 #endif /* !NOCOMPILER */
@@ -225,7 +279,7 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 #endif /* sparc */
 
 #if defined(i386) && !defined(NOCOMPILER)
-static int find_mcode(ulong _pc, void (*func)(struct mcode *))
+static int find_mcode(ulong _pc, void (*func)(struct mcode *, ulong ofs))
 {
   ulong *pc = (ulong *)ALIGN(_pc, 4);
 
@@ -239,15 +293,17 @@ static int find_mcode(ulong _pc, void (*func)(struct mcode *))
   while (pc[0] != 0xffffffff ||
 	 pc[-1] != 0xffffffff) pc--;
 
+  ++pc;
   /* Print it */
-  func((struct mcode *)((char *)pc - 4 -
-			offsetof(struct mcode, magic)));
+  func((struct mcode *)((char *)pc - offsetof(struct mcode, mcode)),
+       _pc - (ulong)pc);
 
   return TRUE;
 }
 
 static struct ccontext *iterate_cc_frame(struct ccontext *cc,
-					 void (*func)(struct mcode *))
+					 void (*func)(struct mcode *,
+                                                      ulong))
 {
   ulong *sp, *bp;
   int count = 0;
@@ -378,12 +434,12 @@ static long stack_depth_count;
 static struct vector *stack_trace_res;
 
 #ifndef NOCOMPILER
-static void count_stack_depth(struct mcode *mcode)
+static void count_stack_depth(struct mcode *mcode, ulong ofs)
 {
   ++stack_depth_count;
 }
 
-static void get_cc_stack_trace(struct mcode *mcode)
+static void get_cc_stack_trace(struct mcode *mcode, ulong ofs)
 {
   stack_trace_res->data[stack_depth_count++] = mcode;
 }
@@ -449,7 +505,7 @@ static void basic_error(runtime_errors error, int onstack)
       print_call_trace(error, onstack);
     }
 
-  if (mudcalltrace)
+  if (mudcalltrace && !suppress_extra_calltrace)
     {
       struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
       struct list *l = mudcalltrace;
@@ -507,6 +563,9 @@ void runtime_error(runtime_errors error)
    Note: Never returns
 */
 {
+#ifdef MUDLLE_INTERRUPT
+  check_interrupt();
+#endif
   basic_error(error, FALSE);
 }
 

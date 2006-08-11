@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -152,12 +152,15 @@ struct catch_context
   int old_registers_valid;
 #endif
   struct ccontext occontext;	/* Old code context */
+
+  struct mjmpbuf *_mjmpbuf;
 };
 
 extern struct catch_context *catch_context;
 
 extern long exception_signal;	/* Last exception that occured, 0 for none */
 extern value exception_value;
+extern struct catch_context *exception_context;
 
 int mcatch(void (*fn)(void *x), void *x, int display_error);
 /* Effects: Executes fn(x) with error protection in place.
@@ -229,5 +232,8 @@ extern struct list *mudcalltrace;
 
 void remove_call_trace(value v);
 void add_call_trace(value v, int unhandled_only);
+
+value mjmpbuf(void);
+int is_mjmpbuf(value buf);
 
 #endif

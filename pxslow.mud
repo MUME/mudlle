@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,7 +23,7 @@
 mc:verbose = 0;
 x86:reset_counters();
 start = ctime();
-pcompile("compiler/ihash.mud");
+pcompile("compiler/dihash.mud");
 pcompile("compiler/compiler.mud");
 pcompile("compiler/link.mud");
 pcompile("compiler/misc.mud");
@@ -46,5 +46,5 @@ pcompile("compiler/compile.mud");
 pcompile("compiler/noinf.mud");
 pcompile("compiler/inference.mud");
 display(format("cpu time: %s ms", ctime() - start)); newline();
-display(format("nins: %s", nins)); newline();
-
+display(format("nins:   %s", nins)); newline();
+display(format("nbytes: %s", nbytes)); newline();

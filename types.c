@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,6 +27,15 @@
 #include "mudlle.h"
 #include "types.h"
 #include "alloc.h"
+
+const char *const mtypenames[] = {
+  "code",   "closure", "variable", "internal",  "primitive", "varargs",     
+  "secure", "integer", "string",   "vector",    "list",      "symbol",      
+  "table",  "private", "object",   "character", "gone",      "output-port", 
+  "mcode",  "float",   "bigint",   "null",      
+  "none",   "any",     "function", "list"
+};
+CASSERT_VLEN(mtypenames, last_synthetic_type);
 
 #ifdef ALLOC_STATS
 
@@ -270,6 +279,24 @@ struct string *alloc_string(const char *s)
   return newp;
 }
 
+struct string *alloc_string_length(const char *str, size_t len)
+{
+  struct string *newp;
+
+  if (!str)
+    {
+      str = "(null)";
+      len = 6;
+    }
+
+  newp = (struct string *)allocate_string(type_string, len + 1);
+
+  memcpy(newp->str, str, len);
+  newp->str[len] = 0;
+
+  return newp;
+}
+
 struct string *safe_alloc_string(const char *s)
 {
   return alloc_string(s ? s : "");
@@ -386,14 +413,14 @@ struct object *alloc_object(struct obj_data *obj)
   return (struct object *)allocate_temp(type_object, obj);
 }
 
-struct primitive *alloc_primitive(ulong nb, struct primitive_ext *op)
+struct primitive *alloc_primitive(ulong nb, const struct primitive_ext *op)
 {
-  return (struct primitive *)allocate_permanent(type_primitive, nb, op);
+  return (struct primitive *)allocate_permanent(type_primitive, nb, (void *)op);
 }
 
-struct primitive *alloc_secure(ulong nb, struct primitive_ext *op)
+struct primitive *alloc_secure(ulong nb, const struct primitive_ext *op)
 {
-  return (struct primitive *)allocate_permanent(type_secure, nb, op);
+  return (struct primitive *)allocate_permanent(type_secure, nb, (void *)op);
 }
 
 struct grecord *alloc_private(int id, ulong size)

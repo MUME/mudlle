@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -60,6 +60,8 @@ static ulong global_add(struct string *name, value val)
 
   GCCHECK(val);
 
+  assert(name->o.flags & OBJ_READONLY);
+
   GCPRO2(name, old_values);
   old_size = intval(environment->size);
   aindex = env_add_entry(environment, val);
@@ -99,10 +101,13 @@ ulong global_lookup(const char *name)
 */
 {
   struct symbol *pos;
+  struct string *mname;
 
   if (table_lookup(global, name, &pos)) return (ulong)intval(pos->data);
 
-  return global_add(alloc_string(name), NULL);
+  mname = alloc_string(name);
+  mname->o.flags |= OBJ_READONLY;
+  return global_add(mname, NULL);
 }
 
 ulong mglobal_lookup(struct string *name)
@@ -114,14 +119,22 @@ ulong mglobal_lookup(struct string *name)
 {
   struct symbol *pos;
   struct string *tname;
-  struct gcpro gcpro1;
 
-  if (table_lookup(global, name->str, &pos)) return (ulong)intval(pos->data);
+  if (table_lookup(global, name->str, &pos))
+    return intval(pos->data);
 
-  GCPRO1(name);
-  tname = (struct string *)allocate_string(type_string, string_len(name) + 1);
-  strcpy(tname->str, name->str);
-  UNGCPRO();
+  if (name->o.flags & OBJ_READONLY)
+    tname = name;
+  else
+    {
+      /* create read-only copy */
+      struct gcpro gcpro1;
+      GCPRO1(name);
+      tname = (struct string *)allocate_string(type_string, string_len(name) + 1);
+      strcpy(tname->str, name->str);
+      tname->o.flags |= OBJ_READONLY;
+      UNGCPRO();
+    }
 
   return global_add(tname, NULL);
 }

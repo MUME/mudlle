@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,14 +23,15 @@ library ax86 // The x86 assembler
 requires mx86, dlist, sequences, misc, compiler
 defines x86:assemble, x86:reset_counters
 reads mc:verbose, x86:reg_globals
-writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
+writes nins, nbytes, jccjmp_count, labeled_jmp
 [
   | remove_aliases, setword, resize_branches, set_offsets, increase_branches,
     assemble, ins_size, igen, generic2, generic2byte, generic2math,
     generic2mathbyte, generic1, genericbit, genericshift, ins_gen, setea1,
-    setimm, byte?, /*immediate8?, */immval8, immediate?, register?, regval,
-    easize, isize, gsize2, gsize2b, gsize2byte, gsize1, gsize1b, gsizebit,
-    gsizeshift, peephole |
+    setimm, byte?, immediate8?, immval8, immediate?, register?, regval, easize,
+    isize, gsize2, gsize2u, gsize2b, gsize2byte, gsize1, gsize1b, gsizebit,
+    gsizeshift, peephole, ubyte?, uimmval8, uimmediate8?, byte_reg?, eax?,
+    imm_zero? |
 
   jccjmp_count = labeled_jmp = 0;
 
@@ -203,20 +204,60 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
 	       ], ilist);
       change
     ];
-		       
+
+
   assemble = fn (ilist)
     [
-      | size, last, code, info |
+      | size, last, code, info, linenos, ins_lineno, last_line, last_offset |
 
+      // see error.c for documentation on the data format
+      ins_lineno = fn (line, offset)
+        [
+          | dl, do, add_int |
+          
+          add_int = fn (p, i)
+            for (|j|j = 0; j < 4; ++j)
+              [
+                pputc(p, i & 255);
+                i >>= 8;
+              ];
+
+          dl = line - last_line;
+          do = offset - last_offset;
+
+          if (dl)
+            [
+              if (dl < -128 || dl > 127 || do > 254)
+                [
+                  pputc(linenos, 255);
+                  add_int(linenos, offset);
+                  add_int(linenos, line);
+                ]
+              else
+                [
+                  pputc(linenos, do);
+                  pputc(linenos, dl);
+                ];
+              last_line = line;
+              last_offset = offset;
+            ];
+        ];
+		       
       last = dget(dprev(ilist));
       size = last[x86:il_offset] + ins_size(last[x86:il_ins]);
       nbytes = nbytes + size;
       code = make_string(size);
+      
+      linenos = make_string_oport();
+      last_line = last_offset = 0;
 
-      info = vector(null, null, null, null, null, null);
-      dforeach(fn (il) ins_gen(code, il[x86:il_ins], il[x86:il_offset], info),
-	       ilist);
-
+      info = vector(null, null, null, null, null, null, null, null);
+      dforeach(fn (il) [
+        ins_lineno(il[x86:il_lineno], il[x86:il_offset]);
+        ins_gen(code, il[x86:il_ins], il[x86:il_offset], info);
+      ], ilist);
+      info[mc:a_linenos] = port_string(linenos);
+      
       code . info
     ];
 
@@ -232,6 +273,18 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
       else
         0xbad; // something that is false for byte? !
     ];
+  ubyte? = fn (x) !(x & ~0xff);
+  uimmval8 = fn (arg)
+    [
+      | i |
+
+      i = cdr(arg);
+      if (integer?(i)) i
+      else if (byte?(car(i))) // arithmetic fails on large numbers
+	2 * car(i) + cdr(i)
+      else
+        0xbad; // something that is false for ubyte? !
+    ];
   immediate? = fn (arg)
     [
       | m |
@@ -242,8 +295,14 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
     ];
   immediate8? = fn (arg) car(arg) == x86:limm && byte?(immval8(arg));
 
+  uimmediate8? = fn (arg) car(arg) == x86:limm && ubyte?(uimmval8(arg));
+
+  imm_zero? = fn (arg) car(arg) == x86:limm && immval8(arg) == 0;
+
   register? = fn (arg) car(arg) == x86:lreg;
   regval = cdr;
+
+  byte_reg? = fn (arg) !register?(arg) || regval(arg) <= x86:reg_ebx;
 
   easize = fn (arg)
     // Returns: The size of the encoding of effective address 'arg'
@@ -283,7 +342,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
       else fail();
     ];
 
-  isize = make_vector(37);
+  isize = make_vector(38);
 
   isize[x86:op_push] = fn (a1, a2)
     if (immediate8?(a1)) 2
@@ -294,7 +353,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
   isize[x86:op_leave] = fn (a1, a2) 1;
 
   isize[x86:op_call] = fn (a1, a2) 1 + easize(a1);
-  isize[x86:op_callrel] = fn (a1, a2) 5;
+  isize[x86:op_callrel_prim] = isize[x86:op_callrel] = fn (a1, a2) 5;
   isize[x86:op_ret] = fn (a1, a2) 1;
   isize[x86:op_jmp] = fn (a1, a2) 2;
   isize[x86:op_jmp32] = fn (a1, a2) 5;
@@ -303,7 +362,9 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
   isize[x86:op_lea] = fn (a1, a2) 1 + easize(a1);
 
   isize[x86:op_mov] = fn (a1, a2)
-    if (immediate?(a1))
+    if (imm_zero?(a1) && register?(a2))
+      isize[x86:op_xor](a2, a2)
+    else if (immediate?(a1))
       if (register?(a2)) 5
       else 5 + easize(a2)
     else if (register?(a1)) 1 + easize(a2)
@@ -311,7 +372,11 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
     else [ display(format("%s %s\n", a1, a2)); fail(); ];
 
   gsize2b = fn (a1, a2)
-    if (immediate?(a1)) 5 + easize(a2)
+    if (immediate?(a1))
+      if (eax?(a2))
+        5
+      else
+        5 + easize(a2)
     else if (register?(a1)) 1 + easize(a2)
     else if (register?(a2)) 1 + easize(a1)
     else fail();
@@ -320,22 +385,31 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
     if (immediate8?(a1)) 2 + easize(a2)
     else gsize2b(a1, a2);
 
+  gsize2u = fn (a1, a2)
+    if (uimmediate8?(a1) && byte_reg?(a2))
+      if (eax?(a2))
+        2
+      else
+        2 + easize(a2)
+    else gsize2b(a1, a2);
+
   gsize2byte = fn (a1, a2)
     if (immediate8?(a1)) 2 + easize(a2)
     else if (register?(a1)) 1 + easize(a2)
     else if (register?(a2)) 1 + easize(a1)
     else fail();
 
-  isize[x86:op_add] = gsize2;
-  isize[x86:op_adc] = gsize2;
-  isize[x86:op_sub] = gsize2;
-  isize[x86:op_cmp] = gsize2;
-  isize[x86:op_or]  = gsize2;
-  isize[x86:op_xor] = gsize2;
-  isize[x86:op_and] = gsize2;
+  isize[x86:op_add]     = gsize2;
+  isize[x86:op_adc]     = gsize2;
+  isize[x86:op_sub]     = gsize2;
+  isize[x86:op_cmp]     = gsize2;
+  isize[x86:op_or]      = gsize2;
+  isize[x86:op_xor]     = gsize2;
+  isize[x86:op_and]     = gsize2;
   isize[x86:op_cmpbyte] = gsize2byte;
   isize[x86:op_andbyte] = gsize2byte;
-  isize[x86:op_test]= gsize2b;
+
+  isize[x86:op_test]    = gsize2u;
 
   gsize1b = fn (a1, a2) 1 + easize(a1);
   gsize1 = fn (a1, a2) 
@@ -374,7 +448,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
   ins_size = fn (ins)
     isize[ins[x86:i_op]](ins[x86:i_arg1], ins[x86:i_arg2]);
 
-  igen = make_vector(37);
+  igen = make_vector(38);
 
   igen[x86:op_push] = fn (code, a1, a2, o, info)
     if (immediate8?(a1)) 
@@ -423,6 +497,12 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
       info[mc:a_builtins] = (a1 . o + 1) . info[mc:a_builtins];
     ];
 
+  igen[x86:op_callrel_prim] = fn (code, a1, a2, o, info)
+    [
+      code[o] = 0xe8;
+      info[mc:a_rel_primitives] = (a1 . o + 1) . info[mc:a_rel_primitives];
+    ];
+
   igen[x86:op_ret] = fn (code, a1, a2, o, info)
     code[o] = 0xc3;
 
@@ -458,7 +538,9 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
     ];
 
   igen[x86:op_mov] = fn (code, a1, a2, o, info)
-    if (immediate?(a1))
+    if (imm_zero?(a1) && register?(a2))
+      igen[x86:op_xor](code, a2, a2, o, info)
+    else if (immediate?(a1))
       if (register?(a2))
 	[
 	  code[o] = 0xb8 | regval(a2);
@@ -484,9 +566,26 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
       ]
     else fail();
 
-  generic2 = fn (imm8op, imm32op, immextraop, regmemop, memregop)
+  eax? = fn (arg) register?(arg) && regval(arg) == x86:reg_eax;
+
+  generic2 = fn (uimm8op, imm8op, imm32op, immextraop, 
+                 imm32eaxop, regmemop, memregop)
     fn (code, a1, a2, o, info)
-      if (imm8op != null && immediate8?(a1))
+      if (uimm8op != null && uimmediate8?(a1) && byte_reg?(a2))
+        [
+          if (eax?(a2))
+            [
+              code[o] = car(uimm8op);
+              ++o;
+            ]
+          else
+            [
+              code[o] = cdr(uimm8op);
+              o = setea1(code, o + 1, immextraop, a2, info);
+            ];
+          code[o] = uimmval8(a1);
+        ]
+      else if (imm8op != null && immediate8?(a1))
 	[
 	  code[o] = imm8op;
 	  o = setea1(code, o + 1, immextraop, a2, info);
@@ -494,9 +593,16 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
 	]
       else if (immediate?(a1))
 	[
-	  // missing eax op imm case
-	  code[o] = imm32op;
-	  o = setea1(code, o + 1, immextraop, a2, info);
+          if (eax?(a2))
+            [
+              code[o] = imm32eaxop;
+              ++o
+            ]
+          else
+            [
+              code[o] = imm32op;
+              o = setea1(code, o + 1, immextraop, a2, info);
+            ];
 	  setimm(code, o, a1, info);
 	]
       else if (register?(a1))
@@ -532,8 +638,10 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
 	]
       else fail();
 
-  generic2math =
-    fn (n) generic2(0x83, 0x81, n, 0x01 | (n << 3), 0x03 | (n << 3));
+  // cannot use 8-bit unsigned ops for math since flags aren't set 
+  // as they would for 32-bit ops
+  generic2math = fn (n) generic2(null, 0x83, 0x81, n, 0x05 | (n << 3),
+                                 0x01 | (n << 3), 0x03 | (n << 3));
   generic2mathbyte =
     fn (n) generic2byte(0x80, n, (n << 3), 0x02 | (n << 3));
 
@@ -546,7 +654,8 @@ writes nins, nbytes, jccjmp_count, labeled_jmp, immediate8?
   igen[x86:op_and] = generic2math(4);
   igen[x86:op_cmpbyte] = generic2mathbyte(7);
   igen[x86:op_andbyte] = generic2mathbyte(4);
-  igen[x86:op_test]= generic2(null, 0xf7, 0, 0x85, null);
+
+  igen[x86:op_test] = generic2(0xa8 . 0xf6, null, 0xf7, 0, 0xa9, 0x85, null);
 
   generic1 = fn (memop, memextraop, regop)
     fn (code, a1, a2, o, info)

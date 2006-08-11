@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -41,80 +41,95 @@ static int isinf(double x)
 }
 #endif
 
-#define FUNFUNC(name)							\
-  OPERATION(f ## name, "f1 -> f2. Returns " #name "(f1)", 1,		\
-	    (value f), OP_LEAF | OP_NOESCAPE)				\
-{									\
-  return makefloat(name(floatval(f)));					\
+#define FUNFUNC(name)                                           \
+  OPERATION(f ## name, 0,                                       \
+            "`f1 -> `f2. Returns " #name "(`f1)", 1,            \
+	    (value f), OP_LEAF | OP_NOESCAPE)                   \
+{                                                               \
+  return makefloat(name(floatval(f)));                          \
 }
 
-#define FBINFUNC(name, fname)						\
-  OPERATION(f ## name, "f1 f2 -> f3. Returns " #name "(f1, f2)", 2,	\
-	    (value f1, value f2), OP_LEAF | OP_NOESCAPE)		\
-{									\
-  return makefloat(fname(floatval(f1), floatval(f2)));			\
+#define FBINFUNC(name, fname)                                   \
+  OPERATION(f ## name, 0,                                       \
+            "`f1 `f2 -> `f3. Returns " #name "(`f1, `f2)", 2,   \
+	    (value f1, value f2), OP_LEAF | OP_NOESCAPE)        \
+{                                                               \
+  return makefloat(fname(floatval(f1), floatval(f2)));          \
 }
 
-#define FBINOP(name, op)						\
-  OPERATION(f ## name, "f1 f2 -> f3. Returns f1 " #op " f2", 2,		\
-	    (value f1, value f2), OP_LEAF | OP_NOESCAPE)		\
-{									\
-  return makefloat(floatval(f1) op floatval(f2));			\
+#define FBINOP(name, op)                                        \
+  OPERATION(f ## name, 0,                                       \
+            "`f1 `f2 -> `f3. Returns `f1 " #op " `f2", 2,       \
+	    (value f1, value f2), OP_LEAF | OP_NOESCAPE)        \
+{                                                               \
+  return makefloat(floatval(f1) op floatval(f2));               \
 }
 
-OPERATION(isfloatp, "x -> b. Returns TRUE if x is a float", 1, (value x),
+OPERATION(isfloatp, "float?", "`x -> `b. Returns TRUE if `x is a float",
+          1, (value x),
 	  OP_LEAF | OP_NOESCAPE | OP_NOALLOC)
 {
   return makebool(TYPE(x, type_float));
 }
 
-OPERATION(isffinitep, "f -> b. Returns TRUE if x is neither infinite or not-a-number",
+OPERATION(isffinitep, "ffinite?",
+          "`f -> `b. Returns TRUE if `f is neither infinite or not-a-number",
 	  1, (value x), OP_LEAF | OP_NOESCAPE | OP_NOALLOC)
 {
   return makebool(finite(floatval(x)));
 }
 
-OPERATION(isfnanp, "f -> b. Returns TRUE if x is not-a-number (NaN)", 1, (value x),
+OPERATION(isfnanp, "fnan?",
+          "`f -> `b. Returns TRUE if `f is not-a-number (NaN)", 1, (value x),
 	  OP_LEAF | OP_NOESCAPE | OP_NOALLOC)
 {
   return makebool(isnan(floatval(x)));
 }
 
-OPERATION(isfinfp, "f -> n. Returns -1 if f is negative infinity (-Inf) or 1 for positive infinity (Inf), or 0 otherwise", 1, (value x),
+OPERATION(isfinfp, "finf?", "`f -> `n. Returns -1 if `f is negative infinity"
+          " (-Inf) or 1 for positive infinity (Inf), or 0 otherwise",
+          1, (value x),
 	  OP_LEAF | OP_NOESCAPE | OP_NOALLOC)
 {
   return makeint(isinf(floatval(x)));
 }
 
-OPERATION(fabs, "f1 -> f2. Returns | f1 |", 1,
+OPERATION(fabs, 0, "`f1 -> `f2. Returns | `f1 |", 1,
 	  (value f), OP_LEAF | OP_NOESCAPE)
 {
   return makefloat(fabs(floatval(f)));
 }
 
-OPERATION(fneg, "f1 -> f2. Returns -f1", 1,
+OPERATION(fneg, 0, "`f1 -> `f2. Returns -`f1", 1,
 	  (value f), OP_LEAF | OP_NOESCAPE)
 {
   return makefloat(-floatval(f));
 }
 
-OPERATION(frandom, " -> f. Returns a random value in [0, 1)", 0,
+OPERATION(frandom, 0, " -> `f. Returns a random value in [0, 1)", 0,
 	  (), OP_LEAF | OP_NOESCAPE)
 {
+#ifdef WIN32
+  return makefloat(rand() / (RAND_MAX + 1.0));
+#else
   return makefloat(random() / (RAND_MAX + 1.0));
+#endif
 }
 
-OPERATION(fsign, "f -> n. Returns -1 for negative f, 1 for positive, 0 for f == 0", 1,
+OPERATION(fsign, 0, "`f -> `n. Returns -1 for negative `f, 1 for positive,"
+          " 0 for `f == 0. Error for not-a-number (NaN)", 1,
 	  (value f), OP_LEAF | OP_NOESCAPE)
 {
-  double d;
-
-  d = copysign(1.0, floatval(f));
+  double d = floatval(f);
+  
+  if (isnan(d))
+    runtime_error(error_bad_value);
 
   return makeint(d < 0 ? -1 : d > 0 ? 1 : 0);
 }
 
-OPERATION(ftoi, "f -> n. Returns int(f). Error if out of range", 1, (value f), 
+OPERATION(ftoi, 0, "`f -> `n. Returns int(`f). Error if out of range",
+          1, (value f), 
 	  OP_LEAF | OP_NOESCAPE | OP_NOALLOC)
 {
   double d = floatval(f);
@@ -125,14 +140,15 @@ OPERATION(ftoi, "f -> n. Returns int(f). Error if out of range", 1, (value f),
   return makeint((long)d);
 }
 
-OPERATION(itof, "n -> f. Returns the integer n as a float", 1, (value n),
+OPERATION(itof, 0, "`n -> `f. Returns the integer `n as a float", 1, (value n),
 	  OP_LEAF | OP_NOESCAPE)
 {
   ISINT(n);
   return makefloat((double)intval(n));
 }
 
-OPERATION(atof, "s -> f. Converts string to float. Returns s if conversion failed",
+OPERATION(atof, 0, "`s -> `f. Converts string to float."
+          " Returns `s if conversion failed",
 	  1, (struct string *s),
 	  OP_LEAF | OP_NOESCAPE)
 {
@@ -145,7 +161,8 @@ OPERATION(atof, "s -> f. Converts string to float. Returns s if conversion faile
     return makefloat(d);
 }
 
-OPERATION(ftoa, "f -> s. Converts float to a 0f... string. See format_float", 1, (value f),
+OPERATION(ftoa, 0, "`f -> `s. Converts float to a 0f... string."
+          " See `format_float", 1, (value f),
 	  OP_LEAF | OP_NOESCAPE)
 {
   char buf[20];
@@ -160,13 +177,16 @@ OPERATION(ftoa, "f -> s. Converts float to a 0f... string. See format_float", 1,
   return alloc_string(buf);
 }
 
-OPERATION(format_float, "f s0 -> s1. Format float f using string s0 (printf format specifier eEgGf) into s1",
-	  2, (value f, struct string *s), OP_LEAF | OP_NOESCAPE)
+TYPEDOP(format_float, 0,
+        "`f `s0 -> `s1. Format float `f using string `s0 (printf format"
+        " specifier eEgGf) into `s1",
+        2, (value f, struct string *s), OP_LEAF | OP_NOESCAPE,
+        "os.s")
 {
   double d = floatval(f);
   char *sp, buf[128];
-  const char flags[] = "#0- +";
-  const char formats[] = "eEfgG";
+  static const char flags[] = "#0- +";
+  static const char formats[] = "eEfgG";
 
   TYPEIS(s, type_string);
 
@@ -193,14 +213,15 @@ OPERATION(format_float, "f s0 -> s1. Format float f using string s0 (printf form
   return alloc_string(buf);
 }
 
-OPERATION(fpow, "f1 f2 -> f3. Returns f1 raised to the power of f2",
+OPERATION(fpow, 0, "`f1 `f2 -> `f3. Returns `f1 raised to the power of `f2",
 	  2, (value f1, value f2), OP_LEAF | OP_NOESCAPE)
 {
   double d1 = floatval(f1), d2 = floatval(f2);
   return makefloat(pow(d1, d2));
 }
 
-OPERATION(fcmp, "f1 f2 -> n. Returns -1 if f1 < f2, 0 if f1 = f2, 1 if f1 > f2",
+OPERATION(fcmp, 0, "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
+          " 1 if `f1 > `f2",
 	  2, (value f1, value f2), OP_LEAF | OP_NOESCAPE | OP_NOALLOC)
 {
   double d1 = floatval(f1), d2 = floatval(f2);
@@ -227,6 +248,9 @@ FUNFUNC(atan)
 FUNFUNC(asin)
 FUNFUNC(acos)
 
+FUNFUNC(ceil)
+FUNFUNC(floor)
+
 FBINFUNC(atan2, atan2)
 FBINFUNC(hypot, hypot)
 FBINFUNC(mod, fmod)
@@ -237,47 +261,49 @@ FBINOP(mul, *)
 FBINOP(div, /)
 
 #define DEFCONST(name) system_define(#name, alloc_mudlle_float(name))
-#define DEF(name) DEFINE(#name, name)
 
 void float_init(void)
 {
-  DEF(fsqrt);
-  DEF(fexp);
-  DEF(flog);
-  DEF(fsin);
-  DEF(fcos);
-  DEF(ftan);
-  DEF(fatan);
-  DEF(fasin);
-  DEF(facos);
-  DEF(fmod);
+  DEFINE(fsqrt);
+  DEFINE(fexp);
+  DEFINE(flog);
+  DEFINE(fsin);
+  DEFINE(fcos);
+  DEFINE(ftan);
+  DEFINE(fatan);
+  DEFINE(fasin);
+  DEFINE(facos);
+  DEFINE(fmod);
 
-  DEF(fatan2);
-  DEF(fhypot);
-  DEF(fpow);
+  DEFINE(fceil);
+  DEFINE(ffloor);
 
-  DEF(fadd);
-  DEF(fsub);
-  DEF(fmul);
-  DEF(fdiv);
+  DEFINE(fatan2);
+  DEFINE(fhypot);
+  DEFINE(fpow);
 
-  DEF(fneg);
-  DEF(fabs);
-  DEF(fsign);
+  DEFINE(fadd);
+  DEFINE(fsub);
+  DEFINE(fmul);
+  DEFINE(fdiv);
 
-  DEF(ftoa);
-  DEF(ftoi);
-  DEF(itof);
-  DEF(fcmp);
-  DEF(atof);
-  DEF(format_float);
+  DEFINE(fneg);
+  DEFINE(fabs);
+  DEFINE(fsign);
 
-  DEF(frandom);
+  DEFINE(ftoa);
+  DEFINE(ftoi);
+  DEFINE(itof);
+  DEFINE(fcmp);
+  DEFINE(atof);
+  DEFINE(format_float);
 
-  DEFINE("float?", isfloatp);
-  DEFINE("fnan?", isfnanp);
-  DEFINE("finf?", isfinfp);
-  DEFINE("ffinite?", isffinitep);
+  DEFINE(frandom);
+
+  DEFINE(isfloatp);
+  DEFINE(isfnanp);
+  DEFINE(isfinfp);
+  DEFINE(isffinitep);
 
   DEFCONST(M_PI);
   DEFCONST(M_E);

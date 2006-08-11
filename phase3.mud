@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -237,8 +237,11 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	      if (ndvar = il[mc:il_defined_var]) dvar = vmap[ndvar]
 	      else dvar = false;
 	      
-	      // Add a fetch of each indirect arg (not for closures or memory ops)
-	      if (class != mc:i_closure && class != mc:i_memory &&
+	      // Add a fetch of each indirect arg (not for closures or
+	      // non-safe-write memory ops; the latter are only used for
+	      // non-indirect reasons)
+	      if (class != mc:i_closure &&
+                  (class != mc:i_memory || ins[mc:i_mop] == mc:memory_write_safe) &&
 		  (args = lfilter(fn (v) v[mc:v_indirect], mc:arguments(ins, null))) != null)
 		// Special case: replacing 'x := <indirect var>'
 		if (class == mc:i_compute && ins[mc:i_aop] == mc:b_assign)
@@ -333,7 +336,8 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	      fns);
     ];
 
-  mc:myself = mc:var_make_constant(null); // Placeholder for "myself" in functions
+  // Placeholder for "myself" in functions
+  mc:myself = mc:var_make_constant("<myself>");
 
   direct_recursion = fn (ifn)
     // Types: ifn: intermediate function
@@ -376,7 +380,7 @@ writes tnargs, tncstargs, tnpartial, tnfull
       lforeach(mc:split_blocks, fns);
       
       compute_closure_uses(fns);
-      lforeach(mc:optimise_function, fns);
+      mc:optimise_functions(fns);
 
       if (mc:verbose >= 2)
 	[

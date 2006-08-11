@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,22 +23,25 @@
 #include "interpret.h"
 #include <string.h>
 
-TYPEDOP(new_bitset, "n -> bitset. Returns a bitset usable for storing n bits",
+TYPEDOP(new_bitset, 0,
+        "`n -> `bitset. Returns a bitset usable for storing at least `n bits",
 	1, (value n),
-	OP_LEAF | OP_NOESCAPE, ".s")
+	OP_LEAF | OP_NOESCAPE, "n.s")
 {
   long size;
   struct string *newp;
-  
-  ISINT(n);
-  size = (intval(n) + 7) >> 3;
+
+  if ((size = GETINT(n)) < 0)
+    runtime_error(error_bad_value);
+
+  size = (size + 7) >> 3;
   newp = (struct string *)allocate_string(type_string, size + 1);
   newp->str[size] = '\0';
   
   return newp;
 }
 
-TYPEDOP(bcopy, "bitset1 -> bitset2. Makes a copy of bitset1",
+TYPEDOP(bcopy, 0, "`bitset1 -> `bitset2. Makes a copy of `bitset1",
 	1, (struct string *b),
 	OP_LEAF | OP_NOESCAPE, "s.s")
 {
@@ -57,7 +60,8 @@ TYPEDOP(bcopy, "bitset1 -> bitset2. Makes a copy of bitset1",
   return newp;
 }
 
-TYPEDOP(bclear, "bitset -> bitset. Clears all bits of bitset and returns it",
+TYPEDOP(bclear, 0,
+        "`bitset -> `bitset. Clears all bits of `bitset and returns it",
 	1, (struct string *b),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.s")
 {
@@ -66,14 +70,14 @@ TYPEDOP(bclear, "bitset -> bitset. Clears all bits of bitset and returns it",
   return b;
 }
 
-TYPEDOP(set_bitb, "bitset n -> . Sets bit n of specified bitset",
+TYPEDOP(set_bitb, "set_bit!", "`bitset `n -> . Sets bit `n in `bitset",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
 {
   long n, i;
   
   TYPEIS(b, type_string);
-  ISINT(_n); n = intval(_n);
+  n = GETINT(_n);
   
   i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
@@ -82,14 +86,15 @@ TYPEDOP(set_bitb, "bitset n -> . Sets bit n of specified bitset",
   undefined();
 }
 
-TYPEDOP(clear_bitb, "bitset n -> . Clears bit n of specified bitset",
+TYPEDOP(clear_bitb, "clear_bit!",
+        "`bitset `n -> . Clears bit `n in `bitset",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
 {
   long n, i;
   
   TYPEIS(b, type_string);
-  ISINT(_n); n = intval(_n);
+  n = GETINT(_n);
   
   i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
@@ -98,28 +103,29 @@ TYPEDOP(clear_bitb, "bitset n -> . Clears bit n of specified bitset",
   undefined();
 }
 
-TYPEDOP(bit_setp, "bitset n -> b. True if bit n is set",
+TYPEDOP(bit_setp, "bit_set?", "`bitset `n -> `b. True if bit `n is set",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
 {
   long n, i;
   
   TYPEIS(b, type_string);
-  ISINT(_n); n = intval(_n);
+  n = GETINT(_n);
   i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   
   return makeint(b->str[i] & 1 << (n & 7));
 }
 
-TYPEDOP(bit_clearp, "bitset n -> b. True if bit n is set",
+TYPEDOP(bit_clearp, "bit_clear?",
+        "`bitset `n -> `b. True if bit `n is not set",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
 {
   long n, i;
   
   TYPEIS(b, type_string);
-  ISINT(_n); n = intval(_n);
+  n = GETINT(_n);
   i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   
@@ -128,7 +134,8 @@ TYPEDOP(bit_clearp, "bitset n -> b. True if bit n is set",
 
 /* All binary ops expect same-sized bitsets */
 
-TYPEDOP(bunion, "bitset1 bitset2 -> bitset3. bitset3 = bitset1 U bitset2",
+TYPEDOP(bunion, 0,
+        "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 U `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
@@ -153,7 +160,8 @@ TYPEDOP(bunion, "bitset1 bitset2 -> bitset3. bitset3 = bitset1 U bitset2",
   return b3;
 }
 
-TYPEDOP(bintersection, "bitset1 bitset2 -> bitset3. bitset3 = bitset1 /\\ bitset2",
+TYPEDOP(bintersection, 0,
+        "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 /\\ `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
@@ -178,7 +186,8 @@ TYPEDOP(bintersection, "bitset1 bitset2 -> bitset3. bitset3 = bitset1 /\\ bitset
   return b3;
 }
 
-TYPEDOP(bdifference, "bitset1 bitset2 -> bitset3. bitset3 = bitset1 - bitset2",
+TYPEDOP(bdifference, 0,
+        "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 - `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
@@ -203,7 +212,8 @@ TYPEDOP(bdifference, "bitset1 bitset2 -> bitset3. bitset3 = bitset1 - bitset2",
   return b3;
 }
 
-TYPEDOP(bunionb, "bitset1 bitset2 -> bitset1. bitset1 = bitset1 U bitset2",
+TYPEDOP(bunionb, "bunion!",
+        "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset1 U `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
@@ -221,7 +231,8 @@ TYPEDOP(bunionb, "bitset1 bitset2 -> bitset1. bitset1 = bitset1 U bitset2",
   return b1;
 }
 
-TYPEDOP(bintersectionb, "bitset1 bitset2 -> bitset1. bitset1 = bitset1 /\\ bitset2",
+TYPEDOP(bintersectionb, "bintersection!",
+        "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset1 /\\ `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
@@ -239,7 +250,8 @@ TYPEDOP(bintersectionb, "bitset1 bitset2 -> bitset1. bitset1 = bitset1 /\\ bitse
   return b1;
 }
 
-TYPEDOP(bdifferenceb, "bitset1 bitset2 -> bitset1. bitset1 = bitset1 - bitset2",
+TYPEDOP(bdifferenceb, "bdifference!",
+        "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset1 - `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
@@ -257,7 +269,8 @@ TYPEDOP(bdifferenceb, "bitset1 bitset2 -> bitset1. bitset1 = bitset1 - bitset2",
   return b1;
 }
 
-TYPEDOP(bassignb, "bitset1 bitset2 -> bitset1. bitset1 = bitset2",
+TYPEDOP(bassignb, "bassign!",
+        "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
@@ -273,7 +286,8 @@ TYPEDOP(bassignb, "bitset1 bitset2 -> bitset1. bitset1 = bitset2",
   return b1;
 }
 
-TYPEDOP(bitset_inp, "bitset1 bitset2 -> b. True if bitset1 is a subset of bitset2",
+TYPEDOP(bitset_inp, "bitset_in?",
+        "`bitset1 `bitset2 -> `b. True if `bitset1 is a subset of `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -291,7 +305,8 @@ TYPEDOP(bitset_inp, "bitset1 bitset2 -> b. True if bitset1 is a subset of bitset
   return makebool(TRUE);
 }
 
-TYPEDOP(bitset_eqp, "bitset1 bitset2 -> b. True if bitset1 == bitset2",
+TYPEDOP(bitset_eqp, "bitset_eq?",
+        "`bitset1 `bitset2 -> `b. True if `bitset1 == `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
@@ -305,7 +320,8 @@ TYPEDOP(bitset_eqp, "bitset1 bitset2 -> b. True if bitset1 == bitset2",
   return makebool(memcmp(b1->str, b2->str, l) == 0);
 }
 
-TYPEDOP(bemptyp, "bitset -> b. True if bitset has all bits clear",
+TYPEDOP(bemptyp, "bempty?",
+        "`bitset -> `b. True if `bitset has all bits clear",
 	1, (struct string *b),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
@@ -322,13 +338,15 @@ TYPEDOP(bemptyp, "bitset -> b. True if bitset has all bits clear",
   return makebool(TRUE);
 }
 
-TYPEDOP(bcount, "bitset -> n. Returns the number of bits set in bitset",
+TYPEDOP(bcount, 0, "`bitset -> `n. Returns the number of bits set in `bitset",
 	1, (struct string *b),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
   long l, n;
   char bi, *sb;
-  static char count[16] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
+  static const char count[16] = {
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
+ };
   
   TYPEIS(b, type_string);
   l = string_len(b);
@@ -344,22 +362,22 @@ TYPEDOP(bcount, "bitset -> n. Returns the number of bits set in bitset",
 
 void bitset_init(void)
 {
-  DEFINE("new_bitset", new_bitset);
-  DEFINE("bcopy", bcopy);
-  DEFINE("bclear", bclear);
-  DEFINE("set_bit!", set_bitb);
-  DEFINE("clear_bit!", clear_bitb);
-  DEFINE("bit_set?", bit_setp);
-  DEFINE("bit_clear?", bit_clearp);
-  DEFINE("bunion", bunion);
-  DEFINE("bintersection", bintersection);
-  DEFINE("bdifference", bdifference);
-  DEFINE("bunion!", bunionb);
-  DEFINE("bintersection!", bintersectionb);
-  DEFINE("bdifference!", bdifferenceb);
-  DEFINE("bassign!", bassignb);
-  DEFINE("bitset_in?", bitset_inp);
-  DEFINE("bitset_eq?", bitset_eqp);
-  DEFINE("bempty?", bemptyp);
-  DEFINE("bcount", bcount);
+  DEFINE(new_bitset);
+  DEFINE(bcopy);
+  DEFINE(bclear);
+  DEFINE(set_bitb);
+  DEFINE(clear_bitb);
+  DEFINE(bit_setp);
+  DEFINE(bit_clearp);
+  DEFINE(bunion);
+  DEFINE(bintersection);
+  DEFINE(bdifference);
+  DEFINE(bunionb);
+  DEFINE(bintersectionb);
+  DEFINE(bdifferenceb);
+  DEFINE(bassignb);
+  DEFINE(bitset_inp);
+  DEFINE(bitset_eqp);
+  DEFINE(bemptyp);
+  DEFINE(bcount);
 }

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -24,14 +24,16 @@ requires compiler, vars, system, sequences
 defines mc:prelink
 writes mc:this_module, mc:erred, mc:linkrun
 [
-  | make_code, prelink, mstart, error, warning, append!, pmodule_class, 
-    pmodule_name, pmodule_imports, pmodule_defines, pmodule_reads, 
-    pmodule_writes, pmodule_body, pfn_code, pfn_help, pfn_varname, pfn_filename,
-    pfn_lineno, pfn_subfns, pfn_constants, pfn_builtins, pfn_globals, 
-    pfn_kglobals, pfn_primitives, check_presence, check_dependencies, 
+
+  | make_code, prelink, mstart, error, warning, append!, pmodule_class,
+    pmodule_name, pmodule_imports, pmodule_defines, pmodule_reads,
+    pmodule_writes, pmodule_body, pfn_code, pfn_help, pfn_varname,
+    pfn_filename, pfn_lineno, pfn_subfns, pfn_constants, pfn_builtins,
+    pfn_globals, pfn_kglobals, pfn_primitives, pfn_rel_primitives,
+    pfn_return_type, pfn_linenos, check_presence, check_dependencies,
     dependencies, depend_immutable, depend_none, depend_primitive, depend_type,
-    depend_integer, depend_signature, dependency, check_dependency, typenames,
-    check_present, map, foreach, pmodule_protect |
+    depend_closure, depend_integer, depend_signature, dependency,
+    check_dependency, check_present, map, foreach, pmodule_protect |
 
   // Linker:
 
@@ -79,7 +81,10 @@ writes mc:this_module, mc:erred, mc:linkrun
   pfn_builtins = 7;		// builtins (list of string . offset)
   pfn_globals = 8;		// globals (list of string . offset)
   pfn_kglobals = 9;		// constant globals (list of string . offset)
-  pfn_primitives = 10;		// primitives (list of string . offset)
+  pfn_primitives = 10;		// absolute prims (list of string . offset)
+  pfn_rel_primitives = 11;	// relative prims (list of string . offset)
+  pfn_return_type = 12;         // return type
+  pfn_linenos = 13;             // return type
 
   // Linking
   // -------
@@ -259,7 +264,10 @@ writes mc:this_module, mc:erred, mc:linkrun
 	   csts,
 	   prelinked_fn[pfn_builtins],
 	   prelinked_fn[pfn_globals],
-	   prelinked_fn[pfn_primitives])
+	   prelinked_fn[pfn_primitives],
+	   prelinked_fn[pfn_rel_primitives],
+           prelinked_fn[pfn_return_type],
+           prelinked_fn[pfn_linenos])
     ];
 
   // Prelinking
@@ -314,18 +322,22 @@ writes mc:this_module, mc:erred, mc:linkrun
 
       info = cdr(top[mc:c_fvalue]);
 
-      vector(car(top[mc:c_fvalue]), // code as string
-	     top[mc:c_fhelp], // help string
-	     if (top[mc:c_fvar]) top[mc:c_fvar][mc:v_name] else null, // variable function stored in
+      vector(car(top[mc:c_fvalue]),     // code as string
+	     top[mc:c_fhelp],           // help string
+	     if (top[mc:c_fvar]) top[mc:c_fvar][mc:v_name] else null,
+                                        // variable function stored in
 	     top[mc:c_ffilename],
 	     top[mc:c_flineno],
 	     lmap(fn (foffset) prelink(car(foffset)) . cdr(foffset),
-		  info[mc:a_subfns]), // sub-functions
-	     info[mc:a_constants], // constants
-	     info[mc:a_builtins], // builtins
-	     info[mc:a_globals], // globals (offsets)
-	     info[mc:a_kglobals], // globals (constant)
-	     info[mc:a_primitives]) // primitives
+		  info[mc:a_subfns]),   // sub-functions
+	     info[mc:a_constants],      // constants
+	     info[mc:a_builtins],       // builtins
+	     info[mc:a_globals],        // globals (offsets)
+	     info[mc:a_kglobals],       // globals (constant)
+	     info[mc:a_primitives],     // absolute primitives
+	     info[mc:a_rel_primitives], // relative primitives
+             top[mc:c_freturn_type],    // return type
+             info[mc:a_linenos])        // line numbers
     ];
 
 
@@ -336,11 +348,12 @@ writes mc:this_module, mc:erred, mc:linkrun
   depend_immutable = 1;		// or'ed into any other depend_xxx
 
   depend_none = 0;		// no checks
-  depend_primitive = 2;		// primitive with args & flags (later: signature)
-  // future dependencies:
+  depend_primitive = 2;		// primitive: type, args, flags, and signature
   depend_type = 4;		// type
   depend_integer = 6;		// integer with given value
-  depend_signature = 8;		// function with compatible signature
+  depend_closure = 8;		// closure with return value
+  // future dependencies:
+  depend_signature = 10;	// function with compatible signature
 
   dependency = fn (v)
     // Types: v: global constant variable
@@ -355,8 +368,13 @@ writes mc:this_module, mc:erred, mc:linkrun
       name = v[mc:v_name];
       val = global_value(v[mc:v_goffset]);
       type = typeof(val);
-      if (type == type_primitive)
-	vector(name, depend_primitive, primitive_nargs(val), primitive_flags(val))
+
+      if (type == type_primitive || type == type_varargs
+          || type == type_secure)
+	vector(name, depend_primitive, type, primitive_nargs(val),
+               primitive_flags(val), primitive_type(val))
+      else if (type == type_closure)
+        vector(name, depend_closure, closure_return_type(val))
       else if (type == type_integer)
 	vector(name, depend_integer, val)
       else // type dependency
@@ -364,18 +382,23 @@ writes mc:this_module, mc:erred, mc:linkrun
 	       type)
     ];
 
-  typenames = 
-    '["code" "closure" "variable" "internal" "primitive" "varargs" "secure"
-      "integer" "string" "vector" "list" "symbol" "table" "private"
-      "object" "character" "gone" "output-port" "mcode" "null" ];
-
-
   check_dependency = fn (d, n)
     // Types: d: dependency, n: int (index of d[0])
     // Effects: checks that dependency d is still valid
     //   giving appropriate error messages
     [
-      | name, val, dtype |
+      | name, val, dtype, myequal? |
+
+      myequal? = fn (a, b)
+        loop
+          [
+            if (a == null) exit b == null;
+            if (b == null) exit false;
+            if (string_cmp(car(a), car(b)) != 0)
+              exit 0;
+            a = cdr(a);
+            b = cdr(b);
+          ];
 
       name = d[0];
       val = global_value(n);
@@ -385,10 +408,17 @@ writes mc:this_module, mc:erred, mc:linkrun
 	error("%s is not a constant anymore", name)
       else if (dtype == depend_primitive)
 	[
-	  if (!primitive?(val) ||
-	      primitive_nargs(val) != d[2] ||
-	      d[3] & ~primitive_flags(val))
+	  if (typeof(val) != d[2] ||
+	      primitive_nargs(val) != d[3] ||
+	      d[4] & ~primitive_flags(val) ||
+              !myequal?(d[5], primitive_type(val)))
 	    error("primitive %s has suffered an incompatible change", name);
+	]
+      else if (dtype == depend_closure)
+	[
+	  if (!closure?(val) ||
+              (d[2] != stype_any && d[2] != closure_return_type(val)))
+	    error("closure %s has suffered an incompatible change", name);
 	]
       else if (dtype == depend_integer)
 	[
@@ -399,7 +429,7 @@ writes mc:this_module, mc:erred, mc:linkrun
 	[
 	  if (typeof(val) != d[2])
 	    error("the type of %s has changed (was %s, now %s)",
-		  name, typenames[d[2]], typenames[typeof(val)]);
+		  name, type_names[d[2]], type_names[typeof(val)]);
 	];
       // add other dtypes here...
     ];

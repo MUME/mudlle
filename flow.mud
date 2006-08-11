@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,7 +27,8 @@ defines
   mc:flow_ambiguous, mc:scan_ambiguous, mc:flow_uses, mc:flow_copies, 
   mc:flow_live, mc:rscan_live, mc:flow_display, mc:clear_dataflow,
   mc:split_blocks, mc:flatten_blocks, mc:display_blocks, mc:f_ilist, 
-  mc:f_ambiguous, mc:f_uses, mc:f_copies, mc:f_live, mc:f_dvars, mc:f_types
+  mc:f_ambiguous, mc:f_uses, mc:f_copies, mc:f_live, mc:f_dvars, mc:f_types,
+  mc:all_functions
 
 reads mc:show_type_info, mc:verbose
 
@@ -878,5 +879,42 @@ mc:rscan_live = fn (f, x, block)
 	dlist("out", info[mc:flow_out]);
 	newline();
       ];
+
+  mc:all_functions = fn (ifn)
+    // Types: ifn : intermediate function
+    // Effects: Returns all the functions in ifn
+    [
+      | todo, fns, check_ins |
+
+      check_ins = fn (ins)
+        [
+          | i |
+          i = ins[mc:il_ins];
+          if (i[mc:i_class] == mc:i_closure)
+            todo = i[mc:i_ffunction] . todo;
+        ];
+
+      todo = ifn . null;
+
+      while (todo != null)
+	[
+	  | first |
+	  first = car(todo);
+	  todo = cdr(todo);
+
+	  fns = first . fns;
+
+          if (pair?(first[mc:c_fvalue]))
+            [
+              graph_nodes_apply(fn (node) [
+                node = graph_node_get(node);
+                dforeach(check_ins, node[mc:f_ilist]);
+              ], cdr(first[mc:c_fvalue]));
+            ]
+          else
+            dforeach(check_ins, first[mc:c_fvalue]);
+	];
+      fns
+    ];
 
 ];

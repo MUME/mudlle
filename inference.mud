@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -351,11 +351,8 @@
 */
 
 library inference // type inference
-requires system, misc, sequences, graph, dlist,
-  compiler, vars, flow, optimise, ins3
-defines mc:infer_types, mc:show_type_info, mc:constant?, mc:itypemap,
-  itype_none, itype_function, itype_integer, itype_string, itype_vector,
-  itype_null, itype_symbol, itype_table, itype_pair, itype_other, itype_any
+requires graph, dlist, compiler, vars, flow, optimise, ins3
+defines mc:infer_types, mc:show_type_info, mc:constant?
 reads mc:verbose
 writes tnargs, tncstargs, tnfull, tnpartial
 [
@@ -363,21 +360,8 @@ writes tnargs, tncstargs, tnfull, tnpartial
     make_condition2, instantiate_constraint, build_iconstraint, new_typesets,
     generate_constraints, evaluate_condition, apply_iconstraint, typeset_eq?,
     typeset_union!, extract_types, show_typesets, showset, show_constraints,
-    show_constraint, show_c, show_condition, generate_branch_constraints |
-
-  itype_none = 0;		// no type
-
-  itype_function = 1;
-  itype_integer = 2;
-  itype_string = 4;
-  itype_vector = 8;
-  itype_null = 16;
-  itype_symbol = 32;
-  itype_table = 64;
-  itype_pair = 128;
-  itype_other = 256;
-
-  itype_any = 511;		// "any" type
+    show_constraint, show_c, show_condition, generate_branch_constraints,
+    simple_itypes, infer_typeof |
 
   op_types = // indexed by mc:b_xxx
     '[("xx.n") // or
@@ -416,6 +400,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
       ("s.n") // string_length
       ("v.n") // vector_length
       ("nn.n") // integer addition
+      ("x.n") // typeof
     ];
 
   branch_types = // indexed by mc:branch_xxx
@@ -450,34 +435,18 @@ writes tnargs, tncstargs, tnfull, tnpartial
   typesets[?S] = itype_string | itype_integer;
   protect(typesets);
 
-  mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
-    (itype_other,	// type_code
-     itype_function,	// type_closure
-     itype_other,	// type_variable
-     itype_other,	// type_internal
-     itype_function,	// type_primitive
-     itype_function,	// type_varargs
-     itype_function,	// type_secure
-     itype_integer,	// type_integer
-     itype_string,	// type_string
-     itype_vector,	// type_vector
-     itype_pair,	// type_pair
-     itype_symbol,	// type_symbol
-     itype_table,	// type_table
-     itype_other,	// type_private
-     itype_other,	// type_object
-     itype_other,	// type_character
-     itype_other,	// type_gone
-     itype_other,	// type_outputport
-     itype_other,	// type_mcode
-     itype_other,	// type_float
-     itype_other,	// type_bigint
-     itype_null,	// type_null
-     itype_none,	// stype_none
-     itype_any,		// stype_any
-     itype_function,	// stype_function
-     itype_pair | itype_null);	// stype_list
-  
+  simple_itypes = sequence
+    (itype_integer             . type_integer,
+     itype_string              . type_string,
+     itype_vector              . type_vector,
+     itype_pair                . type_pair,
+     itype_symbol              . type_symbol,
+     itype_table               . type_table,
+     itype_null                . type_null,
+     itype_none                . stype_none,
+     itype_function            . stype_function,
+     (itype_pair | itype_null) . stype_list);
+
   // traps are handled explicitly (only trap_type is of interest and
   // it is special)
 
@@ -532,19 +501,21 @@ writes tnargs, tncstargs, tnfull, tnpartial
     //   args and dest (if not false)
     // TBD: Prune constraints which contain a condition with itype_none.
     [
-      | dvar, consequence, conditions, nargs, type, sargs, i |
+      | dvar, consequence, conditions, nargs, type, sargs, i, ti |
 
       // Build conditions of constraint
       nargs = llength(args);
-      i = 0;
+      ti = i = 0;
       sargs = args;
       while (i < nargs)
 	[
 	  | arg, tsets |
 
 	  arg = car(sargs);
-	  type = template[i];
+	  type = template[ti];
 
+          if (type == ?*) type = template[--ti];
+            
 	  if (type >= ?1 && type <= ?9)
 	    [
 	      | ref, nref, cond |
@@ -561,7 +532,8 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	  else //if ((tsets = typesets[type]) != itype_any)
 	    conditions = make_condition1(typesets[type], arg) . conditions;
 
-	  i = i + 1;
+          ++i;
+          ++ti;
 	  sargs = cdr(sargs);
 	];
 
@@ -677,7 +649,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	]
       else if (class == mc:i_call)
 	[
-	  | escapes, f, prim, ndest |
+	  | escapes, f, prim, ndest, clos |
 
 	  dest = ins[mc:i_cdest];
 	  ndest = dest[mc:v_number];
@@ -687,21 +659,58 @@ writes tnargs, tncstargs, tnfull, tnpartial
 
 	  // Call to known function ?
 	  if (f[mc:v_class] == mc:v_global_constant &&
-	      primitive?(prim = global_value(f[mc:v_goffset])) &&
-	      primitive_nargs(prim) == llength(args))
-	    [
-	      | types |
+	      (primitive?(prim = global_value(f[mc:v_goffset]))
+               || secure?(prim)) &&
+              primitive_nargs(prim) == llength(args))
+            [
+              | types |
+              
+              if ((types = primitive_type(prim)) != null)
+                new = lmap(fn (sig) instantiate_constraint(sig, args, dest),
+                           types)
+              else
+                new = sequence(null, ndest, make_condition0(itype_any)) . null;
+              if (primitive_flags(prim) & OP_NOESCAPE) escapes = FALSE;
+            ]
+          else if (f[mc:v_class] == mc:v_global_constant &&
+                   varargs?(prim = global_value(f[mc:v_goffset])))
+            [
+              | types, nargs |
+              nargs = llength(args);
+              types = primitive_type(prim);
 
-	      if ((types = primitive_type(prim)) != null)
-		new = lmap(fn (sig) instantiate_constraint(sig, args, dest), types)
-	      else
-		new = sequence(null, ndest, make_condition0(itype_any)) . null;
-	      if (primitive_flags(prim) & OP_NOESCAPE) escapes = FALSE;
-	    ]
+              lforeach(fn (sig) [
+                | targs, ok? |
+                    
+                ok? =
+                  if ((targs = string_index(sig, ?*)) >= 0)
+                    targs - 1 <= nargs
+                  else if ((targs = string_index(sig, ?.)) >= 0)
+                    targs == nargs
+                  else
+                    fail();
+
+                if (ok?)
+                  new = instantiate_constraint(sig, args, dest) . new
+              ], types);
+
+              if (new == null)
+                new = sequence(null, ndest, make_condition0(itype_any)) . null;
+
+              if (primitive_flags(prim) & OP_NOESCAPE) escapes = FALSE;
+            ]
+          else if (f[mc:v_class] == mc:v_global_constant &&
+                   closure?(clos = global_value(f[mc:v_goffset])))
+            [
+              | t |
+              t = mc:itypemap[closure_return_type(clos)];
+              new = sequence(null, ndest, make_condition0(t)) . null
+            ]
 	  else
 	    [
 	      // destination is any
-	      new = sequence(null, ndest, make_condition0(itype_any)) . null;
+	      new = sequence(make_condition1(itype_function, f) . null,
+                             ndest, make_condition0(itype_any)) . null;
 	    ];
 
 	  if (escapes) // note global side effects
@@ -738,7 +747,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
     //   The first element of the pair is applied when the branch is taken,
     //   the 2nd when it isn't.
     [
-      | lastins, lastil, op, type, reversed, ctrue, cfalse, var |
+      | lastins, lastil, op, type, itype, reversed, ctrue, cfalse, var |
 
       lastil = dget(dprev(block[mc:f_ilist]));
       lastins = lastil[mc:il_ins];
@@ -749,35 +758,48 @@ writes tnargs, tncstargs, tnfull, tnpartial
       op = lastins[mc:i_bop];
       if (op >= mc:branch_type?)
 	[
+          | btype |
 	  var = car(lastins[mc:i_bargs]);
 	  if (op >= mc:branch_ntype?)
 	    [
-	      type = op - mc:branch_ntype?;
+	      btype = op - mc:branch_ntype?;
 	      reversed = true;
 	    ]
 	  else
 	    [
-	      type = op - mc:branch_type?;
+	      btype = op - mc:branch_type?;
 	      reversed = false;
-	    ]
+	    ];
+          type = mc:itypemap[btype];
+          itype = mc:itypemap_inverse[btype];
 	]
       else if ((op == mc:branch_eq || op == mc:branch_ne) &&
-	       lfind?(fn (v) mc:constant?(v) == itype_null,
-		      lastins[mc:i_bargs])) // comparison to null
+	       lexists?(fn (v) mc:constant?(v) == itype_null,
+                        lastins[mc:i_bargs])) // comparison to null
 	[
-	  type = type_null;
+	  type = mc:itypemap[type_null];
+	  itype = mc:itypemap_inverse[type_null];
+          
 	  // constant folding prevents null == null
-	  var = lfind?(fn (v) mc:constant?(v) != itype_null,
-		       lastins[mc:i_bargs]);
+	  var = lexists?(fn (v) mc:constant?(v) != itype_null,
+                         lastins[mc:i_bargs]);
 	  reversed = op == mc:branch_ne;
 	]
+      else if (op >= mc:branch_immutable && op <= mc:branch_writable)
+        [
+	  var = car(lastins[mc:i_bargs]);
+          reversed = op == mc:branch_mutable || op == mc:branch_writable;
+          // integer and null are always immutable and readonly 
+          type = itype_any;
+          itype = itype_any & ~(itype_integer | itype_null);
+        ]
       else
 	exit<function> false; // not interesting
 
-      type = mc:itypemap[type];
-      ctrue = sequence(make_condition1(type, var) . null, false, null);
+      ctrue = sequence(make_condition1(type, var) . null,
+                       false, null);
       ctrue = build_iconstraint(lastil, ctrue . null);
-      cfalse = sequence(make_condition1((itype_any & ~type) | itype_other, var) . null,
+      cfalse = sequence(make_condition1(itype, var) . null,
 			false, null);
       cfalse = build_iconstraint(lastil, cfalse . null);
 
@@ -884,6 +906,23 @@ writes tnargs, tncstargs, tnfull, tnpartial
       while ((l = l - 1) >= 0) ts1[l] = ts1[l] | ts2[l];
     ];
 
+  infer_typeof = fn (ins)
+    [
+      | simple, atype |
+      atype = car(ins[mc:i_atypes]);
+      simple = vexists?(fn (s) car(s) == atype, simple_itypes);
+      if (simple && cdr(simple) < last_type)
+        [
+          ins[mc:i_aop] = mc:b_assign;
+          ins[mc:i_aargs] = mc:var_make_constant(cdr(simple)) . null;
+          if (mc:verbose >= 3)
+            [
+              display("Inferred typeof completely!");
+              newline();
+            ]
+        ]
+    ];
+
   extract_types = fn (ifn)
     // Types: ifn: intermediate function
     // Modifies: ifn
@@ -939,7 +978,11 @@ writes tnargs, tncstargs, tnfull, tnpartial
 	  if (class == mc:i_compute)
 	    [
 	      if (ins[mc:i_aop] != mc:b_assign)
-		ins[mc:i_atypes] = lmap(vtype, ins[mc:i_aargs])
+                [
+                  ins[mc:i_atypes] = lmap(vtype, ins[mc:i_aargs]);
+                  if (ins[mc:i_aop] == mc:b_typeof)
+                    infer_typeof(ins);
+                ]
 	    ]
 	  else if (class == mc:i_branch)
 	    [
@@ -947,7 +990,21 @@ writes tnargs, tncstargs, tnfull, tnpartial
 		ins[mc:i_btypes] = lmap(vtype, ins[mc:i_bargs]);
 	    ]
 	  else if (class == mc:i_trap && ins[mc:i_top] == mc:trap_type)
-	    ins[mc:i_ttypes] = lmap(vtype, ins[mc:i_targs]);
+	    ins[mc:i_ttypes] = lmap(vtype, ins[mc:i_targs])
+          else if (class == mc:i_return)
+            [
+              | simple, rtype, ortype |
+              ortype = ifn[mc:c_freturn_type];
+              rtype = ins[mc:i_rtype] = vtype(ins[mc:i_rvalue]);
+
+              simple = vexists?(fn (s) car(s) == rtype, simple_itypes);
+              if (simple)
+                [
+                  simple = cdr(simple);
+                  assert(mc:itypemap[simple] & ~mc:itypemap[ortype] == 0);
+                  ifn[mc:c_freturn_type] = simple;
+                ];
+            ];
 
 	  if (cdr(types) != null && (iconstraint = cadr(types))[0] == il)
 	    [
@@ -1026,8 +1083,16 @@ writes tnargs, tncstargs, tnfull, tnpartial
 
       // init entry node:
       entry = graph_node_get(car(fg));
-      lforeach(fn (arg) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
-	       ifn[mc:c_fargs]);
+
+      if (ifn[mc:c_fvarargs])
+        [
+          // a vararg function always takes a vector argument
+          assert(llength(ifn[mc:c_fargs]) == 1);
+          entry[mc:f_types][mc:flow_in][car(ifn[mc:c_fargs])[mc:v_number]] = itype_vector;
+        ]
+      else
+        lforeach(fn (arg) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
+                 ifn[mc:c_fargs]);
       lforeach(fn (arg) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
 	       ifn[mc:c_fglobals]);
       lforeach(fn (arg) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
@@ -1110,8 +1175,7 @@ writes tnargs, tncstargs, tnfull, tnpartial
       ];
 
   show_typesets = fn (typeset)
-    for(1, vector_length(typeset) - 1,
-	fn (v) display(format(" %s(%s)", v, showset(typeset[v]))));
+    for (|v| v = 1; v < vector_length(typeset); ++v) display(format(" %s(%s)", v, showset(typeset[v])));
 
   showset = fn (tset)
     if (tset == itype_none) "none"

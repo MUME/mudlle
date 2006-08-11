@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,20 +22,28 @@
 // Load inferring, compiled x86 compiler
 // Bootstrap via interpreter (load minimum for linker)
 garbage_collect(700000);
-load("lib.mud");
-load("link.mud");
-load("interface.mud");
 
-load_library = fn (s) [ display(format("loading %s", s)); newline(); fload(s + ".obj") ];
+load("lib.mud") &&
+load("link.mud") &&
+load("interface.mud") &&
+
+[
+  load_library = fn (s)
+    [
+      display(format("loading %s", s)); newline();
+      fload(s + ".obj");
+    ];
+] &&
+
 // reload compiled modules
-fload("dlist.obj");
-fload("sequences.obj");
-fload("misc.obj");
-fload("vars.obj");
-fload("compiler.obj");
-fload("link.obj");
+fload("dlist.obj") &&
+fload("sequences.obj") &&
+fload("misc.obj") &&
+fload("vars.obj") &&
+fload("compiler.obj") &&
+fload("link.obj") &&
 
-fload("inference.obj");
-fload("x86.obj");
+fload("inference.obj") &&
+fload("x86.obj") &&
 fload("compile.obj");
 mc:verbose = 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -29,7 +29,8 @@ extern const char *filename;
 
 int yylex(void);
 
-void read_from_string(const char *str);
+void read_from_string(const char *str, const char *name);
 void read_from_file(FILE *f, const char *name);
+size_t convert_escape_char(const char *text, char *result);
 
 #endif

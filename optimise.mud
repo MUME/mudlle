@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,14 +20,16 @@
  */
 
 library optimise // The actual optimisations
-requires compiler, vars, flow, ins3, 
-  system, graph, dlist, sequences, misc
-defines mc:optimise_function, mc:recompute_vars
+requires compiler, vars, flow, ins3, phase2, graph, dlist, sequences, misc
+defines mc:optimise_functions, mc:recompute_vars
 reads mc:verbose
 [
-  | fold, compute_ops, branch_ops, useless_instructions,
-    remove_instruction, fold_constants, propagate_copies,
-    eliminate_dead_code, change, fold_branch, pfoldbranch, partialfold |
+  | fold, compute_ops, branch_ops, useless_instructions, remove_instruction,
+    fold_constants, propagate_copies, propagate_closure_constants,
+    propagate_closure_constant, eliminate_dead_code, change, fold_branch,
+    pfoldbranch, partialfold, replace_use, remaining_fns, optimise_function,
+    compute_trap_types, check_compute_trap, convert_to_type_trap,
+    consttype |
 
   fold = fn (ops, op, args, dofold)
     // Types: ops: array of function
@@ -80,7 +82,7 @@ reads mc:verbose
      fn (x, y) if (!integer?(x) || !integer?(y) || y == 0) false else true . x / y,
      fn (x, y) if (!integer?(x) || !integer?(y) || y == 0) false else true . x % y,
      fn (x) if (integer?(x)) true . -x else false,
-     fn (x) if (integer?(x)) true . not x else false,
+     fn (x) true . not x,
      fn (x) if (integer?(x)) true . ~x else false,
      false,
      false,
@@ -89,10 +91,10 @@ reads mc:verbose
      fn (x, y)
        if (integer?(y))
          if (vector?(x))
-           if (y >= 0 && y < vector_length(x)) true . x[y]
+           if (y >= -vector_length(x) && y < vector_length(x)) true . x[y]
 	   else false
          else if (string?(x))
-           if (y >= 0 && y < string_length(x)) true . x[y]
+           if (y >= -string_length(x) && y < string_length(x)) true . x[y]
 	   else false
          else false
        else if (string?(y) && table?(x)) true . x[y]
@@ -122,6 +124,48 @@ reads mc:verbose
      fn (x, y) if (integer?(x) && integer?(y)) true . x >= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x <= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x > y else false);
+
+  // false means cannot trap
+  // stype_any means always perform operation
+  // type_xxx means both arguments have to be of this type
+  compute_trap_types = sequence
+    (false,        // or
+     false,        // and
+     false,        // sc_or
+     false,        // sc_and
+     false,        // eq
+     false,        // ne
+     type_integer, // lt
+     type_integer, // le
+     type_integer, // gt
+     type_integer, // ge
+     type_integer, // bitor
+     type_integer, // bitxor
+     type_integer, // bitand
+     type_integer, // shift_left
+     type_integer, // shift_right 
+     null,         // add -- special case below
+     type_integer, // subtract
+     type_integer, // multiply
+     stype_any,    // divide -- may div zero trap
+     stype_any,    // remainder -- may div zero trap
+     type_integer, // negate   
+     false,        // not      
+     type_integer, // bitnot   
+     false,        // ifelse   
+     false,        // if       
+     false,        // while    
+     false,        // loop     
+     stype_any,    // ref      
+     false,        // set      
+     false,        // cons     
+     false,        // assign   
+     type_pair,    // car      
+     type_pair,    // cdr      
+     type_string,  // slength  
+     type_vector,  // vlength  
+     type_integer, // iadd     
+     false);       // typeof      
 
   fold_branch = fn (il, val) // folding function for branches
     [
@@ -261,9 +305,151 @@ reads mc:verbose
 		   else
 		     pfoldbranch(il, mc:branch_false, arg1)
 		 ])
-	];
+	]
     ];
+
+  replace_use = fn (use, dvar, repvar, closure_ok?)
+    [
+      | ins, class, rep, replist |
+		  
+      rep = fn (v) if (v == dvar) repvar else v;
+      replist = fn (s) 
+        while (s != null)
+          [
+            if (car(s) == dvar) set_car!(s, repvar);
+            s = cdr(s);
+          ];
+
+      ins = use[mc:il_ins];
+      if (ins == null) exit<function> 0; // instruction is gone
       
+      if (mc:verbose >= 3)
+        [
+          display(format("COPY %s to %s in %s",
+                         mc:svar(dvar), mc:svar(repvar), use[mc:il_number]));
+          newline();
+        ];
+      change = true;
+	      
+      class = ins[mc:i_class];
+	      
+      if (class == mc:i_compute)
+        replist(ins[mc:i_aargs])
+      else if (class == mc:i_branch)
+        replist(ins[mc:i_bargs])
+      else if (class == mc:i_trap)
+        replist(ins[mc:i_targs])
+      else if (class == mc:i_memory)
+        [
+          ins[mc:i_marray] = rep(ins[mc:i_marray]);
+          ins[mc:i_mindex] = rep(ins[mc:i_mindex]);
+          if (ins[mc:i_mop] == mc:memory_write ||
+              ins[mc:i_mop] == mc:memory_write_safe)
+            ins[mc:i_mscalar] = rep(ins[mc:i_mscalar])
+        ]
+      else if (class == mc:i_call)
+        [
+          replist(ins[mc:i_cargs]);
+          if (car(ins[mc:i_cargs]) == repvar)
+            mc:inline_builtin_call(use);
+        ]
+      else if (class == mc:i_return)
+        ins[mc:i_rvalue] = rep(ins[mc:i_rvalue])
+      else if (class == mc:i_closure && closure_ok?)
+        [
+          | clvar, func |
+
+          func = ins[mc:i_ffunction];
+
+          clvar = lexists?(fn (var) [
+            if (var[mc:v_cparent] == dvar)
+              var
+            else
+              false;
+          ], func[mc:c_fclosure]);
+
+          if (!clvar) exit<function> null;
+
+          func[mc:c_fclosure] = ldelete!(clvar, func[mc:c_fclosure]);
+          propagate_closure_constant(func, clvar, repvar);
+        ]
+      else
+        exit<function> null;
+    ];
+
+  propagate_closure_constant = fn (ifn, dvar, repvar)
+    [
+      | ndvar |
+      ndvar = dvar[mc:v_number];
+
+      graph_nodes_apply(fn (node) [
+        node = graph_node_get(node);
+
+        dforeach(fn (il) [
+          if (bit_set?(il[mc:il_arguments], ndvar))
+            [
+              if (!lfind?(ifn, remaining_fns))
+                remaining_fns = car(remaining_fns) . ifn . cdr(remaining_fns);
+              replace_use(il, dvar, repvar, true);
+            ]
+        ], node[mc:f_ilist]);
+      ], cdr(ifn[mc:c_fvalue]));
+    ];
+
+  // Constant-propagates single-assignment locals and that are read from
+  // closures
+  propagate_closure_constants = fn (ifn)
+    [
+      | vars |
+      lforeach (fn (var) [
+        | nodes, dilist, dins, vnum, value |
+
+        if (var[mc:v_class] != mc:v_local ||
+            var[mc:v_lclosure_uses] != mc:local_write_once | mc:closure_read)
+          exit<function> null;
+
+        nodes = graph_nodes(cdr(ifn[mc:c_fvalue]));
+        vnum = var[mc:v_number];
+        lexists?(fn (node) [
+          node = graph_node_get(node);
+          dexists?(fn (il) [
+            if (il[mc:il_defined_var] == vnum)
+              [
+                dilist = il;
+                true
+              ]
+            else
+              false
+          ], node[mc:f_ilist]);
+        ], nodes);
+
+        dins = dilist[mc:il_ins];
+
+        if (dins[mc:i_class] != mc:i_compute || dins[mc:i_aop] != mc:b_assign)
+          exit<function> null;
+
+        value = car(dins[mc:i_aargs]);
+        if (value[mc:v_class] != mc:v_constant && value[mc:v_class] != mc:v_global_constant)
+          exit<function> null;
+
+        vars = (var . value) . vars;
+      ], ifn[mc:c_flocals_write]);
+
+      if (vars == null) exit<function> false;
+
+      lforeach (fn (pvar) [
+        | dvar, repvar |
+
+        @(dvar . repvar) = pvar;
+
+        propagate_closure_constant(ifn, dvar, repvar);
+
+        dvar[mc:v_lclosure_uses] &= ~(mc:closure_read | mc:closure_write);
+      ], vars);
+
+      false
+    ];
+
   propagate_copies = fn (f)
     // Misses copies that are born and die within a basic block
     // This would not seem to be a great problem, as phase2 generates an
@@ -280,52 +466,10 @@ reads mc:verbose
       propagate_copy = fn (ncopy)
 	[
 	  | cblock, dvar, cins, repvar, cfirst, uses, local_uses, nrepvar,
-	    rep, replist, replaceable_use?, can_repall, scan, ndvar, umap,
-	      copy, repuse |
-	      
-	  rep = fn (v) if (v == dvar) repvar else v;
-	  replist = fn (s) 
-	    while (s != null)
-	      [
-		if (car(s) == dvar) set_car!(s, repvar);
-		s = cdr(s);
-	      ];
-	  repuse = fn (use)
-	    [
-	      | ins, class |
-		  
-	      ins = use[mc:il_ins];
-	      if (ins == null) exit<function> 0; // instruction is gone
-	      
-	      if (mc:verbose >= 3)
-		[
-		  display(format("COPY %s to %s in %s",
-				 mc:svar(dvar), mc:svar(repvar), use[mc:il_number]));
-		  newline();
-		];
-	      change = true;
-	      
-	      class = ins[mc:i_class];
-	      
-	      if (class == mc:i_compute)
-		replist(ins[mc:i_aargs])
-	      else if (class == mc:i_branch)
-		replist(ins[mc:i_bargs])
-	      else if (class == mc:i_trap)
-		replist(ins[mc:i_targs])
-	      else if (class == mc:i_memory)
-		[
-		  ins[mc:i_marray] = rep(ins[mc:i_marray]);
-		  ins[mc:i_mindex] = rep(ins[mc:i_mindex]);
-		  if (ins[mc:i_mop] == mc:memory_write)
-		    ins[mc:i_mscalar] = rep(ins[mc:i_mscalar])
-		]
-	      else if (class == mc:i_call)
-		replist(ins[mc:i_cargs])
-	      else if (class == mc:i_return)
-		ins[mc:i_rvalue] = rep(ins[mc:i_rvalue])
-	    ];
-	  
+	    replaceable_use?, can_repall, scan, ndvar, umap, copy, repuse |
+
+          repuse = fn (use) replace_use(use, dvar, repvar, false);
+
 	  replaceable_use? = fn (use)
 	    [
 	      | ublock, uins, first, uclass, ambvars |
@@ -433,9 +577,79 @@ reads mc:verbose
 	    ]
 	];
       
-      for (0, vector_length(all_copies) - 1, propagate_copy);
+      for (|i| i = 0; i < vector_length(all_copies); ++i)
+        propagate_copy(i)
     ];
+
+  consttype = fn (arg)
+    if (arg[mc:v_class] == mc:v_constant)
+      typeof(arg[mc:v_kvalue])
+    else if (arg[mc:v_class] == mc:v_global_constant)
+      typeof(global_value(arg[mc:v_goffset]))
+    else
+      false;
   
+  convert_to_type_trap = fn (ins, arg, type)
+    [
+      ins[mc:i_class] = mc:i_trap;
+      ins[mc:i_top] = mc:trap_type;
+      ins[mc:i_tdest] = error_bad_type;
+      ins[mc:i_targs] = list(arg, mc:var_make_constant(type));
+    ];
+
+  // Checks if "ins" has to be replaced by a type trap if removed by
+  // the optimiser. If so, changes the instruction and returns true.
+  check_compute_trap = fn (ins)
+    [
+      | ttype, cargs, op |
+
+      if (ins[mc:i_class] != mc:i_compute)
+        exit<function> false;
+      ttype = compute_trap_types[ins[mc:i_aop]];
+      if (!ttype)
+        exit<function> false;
+
+      cargs = ins[mc:i_aargs];
+      op = ins[mc:i_aop];
+
+      if (op == mc:b_add)
+        [
+          | ct |
+          if (ct = consttype(car(cargs)))
+            if (ct == type_integer || ct == type_string)
+              convert_to_type_trap(ins, cadr(cargs), ct)
+            else
+              convert_to_type_trap(ins, car(cargs), type_integer)
+          else if (ct = consttype(cadr(cargs)))
+            if (ct == type_integer || ct == type_string)
+              convert_to_type_trap(ins, car(cargs), ct)
+            else
+              convert_to_type_trap(ins, cadr(cargs), type_integer);
+        ]
+      else if (cdr(cargs) == null)              // unary op?
+        if (consttype(car(cargs)) == ttype)
+          exit<function> false
+        else
+          convert_to_type_trap(ins, car(cargs), ttype)
+      else if (consttype(car(cargs)) == ttype)
+        if (consttype(cadr(cargs)) == ttype)
+          exit<function> false
+        else
+          convert_to_type_trap(ins, cadr(cargs), ttype)
+      else if (consttype(cadr(cargs)) == ttype)
+        convert_to_type_trap(ins, car(cargs), ttype);
+      // otherwise, we have to test both arguments; can just as well
+      // do the real operation...
+
+      if (mc:verbose >= 3)
+        [
+          display(format("Trap prevent USELESS: %w", ins));
+          newline();
+        ];
+      
+      true
+    ];
+
   useless_instructions = fn (ifn, globals)
     [
       | useless |
@@ -443,8 +657,23 @@ reads mc:verbose
       graph_nodes_apply
 	(fn (n)
 	 [
-	   | block, uses, ilist, scan, defined, amblist, local_uses, vmap |
+	   | block, uses, ilist, scan, defined, amblist, local_uses, vmap,
+             closure_uses, leaf_call? |
 	   
+           // used as an approximation to "does not use closure variables"
+           leaf_call? = fn (ins)
+             [
+               | vfunc, prim |
+               assert(ins[mc:i_class] == mc:i_call);
+               vfunc = car(ins[mc:i_cargs]);
+
+               (vfunc[mc:v_class] == mc:v_global_constant &&
+                (primitive?(prim = global_value(vfunc[mc:v_goffset])) ||
+                 secure?(prim) ||
+                 varargs?(prim)) &&
+                (primitive_flags(prim) & OP_LEAF))
+             ];
+
 	   block = graph_node_get(n);
 	   uses = bitset_to_list(block[mc:f_uses][mc:flow_out],
 				 block[mc:f_uses][mc:flow_map]);
@@ -457,9 +686,16 @@ reads mc:verbose
 				       block, globals, mc:closure_write);
 	   
 	   defined = mc:new_varset(ifn);
-	   local_uses = mc:new_varset(ifn);
 	   vmap = ifn[mc:c_fallvars];
 	   scan = ilist;
+
+	   closure_uses = mc:new_varset(ifn);
+           lforeach(fn (var) [
+             if (var[mc:v_class] == mc:v_local &&
+                 (var[mc:v_lclosure_uses] & (mc:closure_read | mc:closure_write)))
+               set_bit!(closure_uses, var[mc:v_number]);
+           ], ifn[mc:c_flocals]);
+           local_uses = bcopy(closure_uses);
 	   
 	   loop
 	     [
@@ -476,25 +712,34 @@ reads mc:verbose
 	       
 	       if (class == mc:i_branch &&
 		   ins[mc:i_bop] == mc:branch_never ||
+
 		   class == mc:i_trap &&
 		   ins[mc:i_top] == mc:trap_never ||
+
 		   (class == mc:i_compute && // a = a is useless
 		    ins[mc:i_aop] == mc:b_assign &&
 		    ins[mc:i_adest] == car(ins[mc:i_aargs])) ||
+
 		   (class == mc:i_compute ||
 		    class == mc:i_memory && ins[mc:i_mop] == mc:memory_read) &&
 		   bit_clear?(local_uses, ndvar) &&
-		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)) &&
-		   mc:var_base(vmap[ndvar])[mc:v_lclosure_uses] == 0)
-		 useless = scan . useless;
+		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)))
+                 if (!check_compute_trap(ins))
+                   useless = scan . useless;
 	       
 	       if (ndvar)
 		 [
 		   set_bit!(defined, ndvar);
 		   clear_bit!(local_uses, ndvar);
 		 ];
-	       bunion!(local_uses, args);
-	       
+
+	       if (class != mc:i_closure)
+                 bunion!(local_uses, args);
+
+	       if (class == mc:i_return ||
+                   (class == mc:i_call && !leaf_call?(ins)))
+                 bunion!(local_uses, closure_uses);
+
 	       if (scan == ilist) exit 0;
 	     ];
 	 ], cdr(ifn[mc:c_fvalue]));
@@ -632,7 +877,20 @@ reads mc:verbose
 		]
 	      else if (class == mc:v_local)
 		[
-		  if (!memq(dvar, wlocals)) new = wlocals = dvar . wlocals
+		  if (!memq(dvar, wlocals))
+                    [
+                      | ouse |
+                      new = wlocals = dvar . wlocals;
+                      ouse = dvar[mc:v_lclosure_uses];
+                      ouse &= ~(mc:local_write_once | mc:local_write_many);
+
+                      if (lfind?(dvar, ifn[mc:c_fargs]))
+                        dvar[mc:v_lclosure_uses] = ouse | mc:local_write_many
+                      else
+                        dvar[mc:v_lclosure_uses] = ouse | mc:local_write_once;
+                    ]
+                  else
+                    dvar[mc:v_lclosure_uses] |= mc:local_write_many;
 		]
 	      else if (class == mc:v_closure)
 		[
@@ -749,7 +1007,7 @@ reads mc:verbose
 
     ];
 
-  mc:optimise_function = fn (f)
+  optimise_function = fn (f)
     [
       if (mc:verbose >= 2)
 	[
@@ -758,7 +1016,7 @@ reads mc:verbose
 	];
       change = true;
       while (change)
-	[
+	<continue> [
 	  change = false;
 
 	  // fold constants in all basic blocks
@@ -769,6 +1027,11 @@ reads mc:verbose
 
 	  // compute basic information
 	  mc:recompute_vars(f, false);
+          if (propagate_closure_constants(f))
+            [
+              change = true;
+              exit<continue> null;
+            ];
 	  mc:flow_ambiguous(f, mc:closure_write);
 	  mc:flow_uses(f);
 
@@ -778,4 +1041,15 @@ reads mc:verbose
       // clear data-flow information
       mc:clear_dataflow(f);
     ];
+
+  mc:optimise_functions = fn (fns)
+    [
+      remaining_fns = fns;
+      while (remaining_fns != null)
+        [
+          optimise_function(car(remaining_fns));
+          remaining_fns = cdr(remaining_fns);
+        ];
+    ];
+
 ];

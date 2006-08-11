@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -26,7 +26,6 @@
    interpreter */
 
 
-#include <assert.h>
 #include "options.h"
 
 
@@ -47,10 +46,24 @@ typedef char mp_limb_t;
 #define mpz_cmp(b1, b2) 1
 #endif
 
+#  include <assert.h>
 
 #ifdef HAVE_ALLOCA_H
-#include <alloca.h>
+#  include <alloca.h>
 #endif
+
+#ifdef HAVE_MALLOC_H
+#  include <malloc.h>
+#endif
+
+#define VLENGTH(name) (sizeof (name) / sizeof (name)[0])
+
+#define CASSERT_STMT(what) do {			\
+  typedef int __cassert_type[(what) ? 1 : -1];	\
+} while (0)
+#define CASSERT(name, what) typedef int __cassert_ ## name[(what) ? 1 : -1]
+#define CASSERT_VLEN(name, len) \
+  CASSERT(name ## _length, VLENGTH(name) == (len))
 
 #include "context.h"
 #include "mudio.h"
@@ -70,6 +83,24 @@ extern int debug_level;
 #endif
 
 int load_file(const char *name, const char *nicename, int seclev, int reload);
-int catch_load_file(const char *name, const char *nicename, int seclev, int reload);
+int catch_load_file(const char *name, const char *nicename, int seclev,
+                    int reload);
+
+
+#ifdef WIN32
+static inline long __ntohl(long n) 
+{
+  return (((n & 0xff) << 24)
+          | ((n & 0xff00) << 8)
+          | ((n & 0xff0000) >> 8)
+          | ((n & 0xff000000) >> 24));
+}
+
+static inline short __ntohs(short n)
+{
+  return (((n & 0xff) << 8)
+          | ((n & 0xff00) >> 8));
+}
+#endif /* WIN32 */
 
 #endif

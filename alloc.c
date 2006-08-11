@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,7 +27,9 @@
 #include <unistd.h>
 #include <setjmp.h>
 #include <stddef.h>
-#include <netinet/in.h>
+#ifndef WIN32
+#  include <netinet/in.h>
+#endif
 #include "alloc.h"
 #include "utils.h"
 #include "types.h"
@@ -113,12 +115,6 @@ static void unmark_safe_registers(void);
 static INLINE void save_restore_mcode(struct mcode *code);
 static INLINE void scan_mcode(struct mcode *code);
 void flush_icache(ubyte *from, ubyte *to);
-
-#if 0
-/* External permanent pointers */
-#define MAX_PERMANENT 1024
-static void *permanent_obj[MAX_PERMANENT];
-#endif
 
 void _staticpro(value *pro, const char *desc, const char *file, int line)
 {
@@ -1171,7 +1167,8 @@ struct grecord *unsafe_allocate_record(ubyte type, ulong entries)
   newp->o.size = size;
   newp->o.garbage_type = garbage_record;
   newp->o.type = type;
-  newp->o.flags = 0;
+
+  newp->o.flags = entries == 0 ? OBJ_READONLY | OBJ_IMMUTABLE : 0;
 
   /* WARNING: data is not initialised!!! */
 #ifdef GCSTATS
@@ -1185,11 +1182,9 @@ struct grecord *unsafe_allocate_record(ubyte type, ulong entries)
 struct grecord *allocate_record(ubyte type, ulong entries)
 {
   struct grecord *newp = unsafe_allocate_record(type, entries);
-  value *o;
 
   /* Initialise data to NULL */
-  o = (value *)&newp->data;
-  while (entries) { entries--; *o++ = NULL; }
+  memset(newp->data, 0, entries * sizeof *newp->data);
 
   return newp;
 }
@@ -1227,11 +1222,6 @@ struct gpermanent *allocate_permanent(ubyte type, ulong nb, void *ext)
   newp->external = ext;
   newp->nb = nb;
   newp->call_count = 0;
-
-#if 0
-  assert(nb < MAX_PERMANENT && !permanent_obj[nb]);
-  permanent_obj[nb] = ext;
-#endif
 
   return newp;
 }
@@ -1301,6 +1291,40 @@ struct vector *allocate_locals(ulong n)
 /* Detect immutability */
 /* ------------------- */
 
+/* checks if one object can be made immutable; returns true if possible */
+int check_immutable(struct obj *obj)
+{
+  struct grecord *rec = (struct grecord *)obj;
+  struct obj **o, **recend;
+      
+  if (obj->garbage_type != garbage_record ||
+      (obj->flags & (OBJ_READONLY | OBJ_IMMUTABLE)) != OBJ_READONLY)
+    return FALSE;
+
+  recend = (struct obj **)((ubyte *)rec + rec->o.size);
+  o = rec->data;
+
+  /* Scan & check if it can be made immutable */
+  for (;;)
+    {
+      if (o == recend)
+        {
+          /* Readonly objects can be made immutable if all their
+             contents are themselves immutable.
+             Note that this will not detect non-trivial recursive
+             immutable objects */
+          
+          rec->o.flags |= OBJ_IMMUTABLE;
+          return TRUE;
+        }
+      /* If contains non-immutable pointer, give up */
+      if (*o != obj && !immutablep(*o)) break;
+      o++;
+    }
+
+  return FALSE;
+}
+
 void detect_immutability(void)
 {
   ubyte *ptr;
@@ -1317,33 +1341,7 @@ void detect_immutability(void)
 
 	  ptr += ALIGN(obj->size, sizeof(value));
 
-	  if (obj->garbage_type == garbage_record &&
-	      (obj->flags & (OBJ_READONLY | OBJ_IMMUTABLE)) == OBJ_READONLY)
-	    {
-	      struct grecord *rec = (struct grecord *)obj;
-	      struct obj **o, **recend;
-
-	      recend = (struct obj **)((ubyte *)rec + rec->o.size);
-	      o = rec->data;
-
-	      /* Scan & check if it can be made immutable */
-	      for (;;)
-		{
-		  if (o == recend)
-		    {
-		      /* Readonly objects can be made immutable if all their contents
-			 are themselves immutable.
-			 Note that this will not detect recursive immutable objects */
-
-		      change = TRUE;
-		      rec->o.flags |= OBJ_IMMUTABLE;
-		      break;
-		    }
-		  /* If contains non-immutable pointer, give up */
-		  if (pointerp(*o) && !((*o)->flags & OBJ_IMMUTABLE)) break;
-		  o++;
-		}
-	    }
+          change |= check_immutable(obj);
 	}
     }
   while (change);
@@ -1411,7 +1409,7 @@ void save_restore(struct obj *obj)
     }
 }
 
-jmp_buf nomem;
+static jmp_buf nomem;
 static unsigned long mutable_size;
 
 static int size_forward(struct obj **ptr)
@@ -2309,7 +2307,11 @@ static void forward_registers(void)
 
   /* Also forward saved ccontexts */
   for (mcc = catch_context; mcc; mcc = mcc->parent)
-    forward_ccontext(&mcc->occontext);
+    {
+      if (pointerp(mcc->_mjmpbuf))
+        special_forward((struct obj **)&mcc->_mjmpbuf);
+      forward_ccontext(&mcc->occontext);
+    }
 }
 
 static void unmark_safe_registers(void)
@@ -2340,6 +2342,7 @@ static INLINE void scan_mcode(struct mcode *code)
   if (pointerp(code->help)) special_forward((struct obj **)&code->help);
   if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
   if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
+  if (pointerp(code->linenos)) special_forward((struct obj **)&code->linenos);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2372,6 +2375,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
   save_restore((struct obj *)code->help);
   save_restore((struct obj *)code->varname);
   save_restore((struct obj *)code->filename);
+  save_restore((struct obj *)code->linenos);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));

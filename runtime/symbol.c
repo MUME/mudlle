@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,17 +20,19 @@
  */
 
 #include <string.h>
+
+#include "mudlle.h"
 #include "runtime/runtime.h"
 #include "table.h"
 #include "call.h"
 
-TYPEDOP(symbolp, "x -> b. TRUE if x is a symbol", 1, (value v),
+TYPEDOP(symbolp, "symbol?", "`x -> `b. TRUE if `x is a symbol", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_symbol));
 }
 
-TYPEDOP(symbol_name, "sym -> s. Returns the name of a symbol",
+TYPEDOP(symbol_name, 0, "`sym -> `s. Returns the name of a symbol",
 	1, (struct symbol *v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "y.s")
 {
@@ -38,7 +40,7 @@ TYPEDOP(symbol_name, "sym -> s. Returns the name of a symbol",
   return (v->name);
 }
 
-TYPEDOP(symbol_get, "sym -> x. Returns the value of a symbol",
+TYPEDOP(symbol_get, 0, "`sym -> `x. Returns the value of a symbol",
 	1, (struct symbol *v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "y.x")
 {
@@ -46,7 +48,8 @@ TYPEDOP(symbol_get, "sym -> x. Returns the value of a symbol",
   return (v->data);
 }
 
-TYPEDOP(symbol_set, "sym x -> . Sets the value of symbol sym to x",
+TYPEDOP(symbol_set, "symbol_set!",
+        "`sym `x -> . Sets the value of symbol `sym to `x",
 	2, (struct symbol *s, value val),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "yx.")
 {
@@ -57,22 +60,22 @@ TYPEDOP(symbol_set, "sym x -> . Sets the value of symbol sym to x",
   undefined();
 }
 
-TYPEDOP(tablep, "x -> b. TRUE if x is a symbol table", 1, (value v),
+TYPEDOP(tablep, "table?", "`x -> `b. TRUE if `x is a symbol table", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_table));
 }
 
-TYPEDOP(make_table, "-> table. Create a new (empty) symbol table", 0, (void),
-	OP_LEAF | OP_NOESCAPE, "n.t")
+TYPEDOP(make_table, 0, "-> `table. Create a new (empty) symbol table",
+        0, (void), OP_LEAF | OP_NOESCAPE, ".t")
 {
   return (alloc_table(DEF_TABLE_SIZE));
 }
 
-TYPEDOP(table_list,
-	"table -> l. Returns list of symbols in table whose value isn't null",
+TYPEDOP(table_list, 0,
+	"`table -> `l. Returns list of symbols in `table whose value non-null",
 	1, (struct table *table),
-	OP_LEAF | OP_NOESCAPE, "n.l")
+	OP_LEAF | OP_NOESCAPE, "t.l")
 {
   TYPEIS(table, type_table);
 
@@ -108,7 +111,9 @@ static struct vector *make_table_copy(struct table *table, int *used)
   return copied_table.buckets;
 }
 
-TYPEDOP(table_foreach, "c table -> . Runs c(x) for each element x in table",
+TYPEDOP(table_foreach, 0,
+        "`c `table -> . Runs `c(`x) for each element `x in `table. It is safe"
+        " to modify `table from `c()",
 	2, (value f, struct table *table),
 	0, "ft.")
 {
@@ -130,8 +135,32 @@ TYPEDOP(table_foreach, "c table -> . Runs c(x) for each element x in table",
   undefined();
 }
 
-TYPEDOP(table_existsp, "c table -> x. Returns the first element x in table "
-	"for which c(x) is true, or false",
+TYPEDOP(table_reduce, 0, "`f `x0 `t -> `x. Reduces table `t with function"
+        " `x = `f(`s, `x) for each symbol `s and initial value `x0",
+	3, (value f, value x, struct table *table),
+	0, "fxt.x")
+{
+  struct gcpro gcpro1, gcpro2, gcpro3;
+  struct vector *buckets = NULL;
+  int used;
+
+  GCPRO3(f, x, buckets);
+  callable(f, 2);
+
+  buckets = make_table_copy(table, &used);
+
+  for (int i = 0; i < used; ++i)
+    if (buckets->data[i])
+      x = call2(f, buckets->data[i], x);
+
+  UNGCPRO();
+
+  return x;
+}
+
+TYPEDOP(table_existsp, "table_exists?",
+        "`c `table -> `x. Returns the first symbol `s in `table"
+	" for which `c(`s) is true, or false",
 	2, (value f, struct table *table),
 	0, "ft.x")
 {
@@ -158,7 +187,8 @@ TYPEDOP(table_existsp, "c table -> x. Returns the first element x in table "
   return res;
 }
 
-TYPEDOP(table_vector, "table -> v. Returns a vector of the entries in table",
+TYPEDOP(table_vector, 0,
+        "`table -> `v. Returns a vector of the entries in table",
 	1, (struct table *table),
 	OP_LEAF | OP_NOESCAPE, "t.v")
 {
@@ -185,9 +215,10 @@ TYPEDOP(table_vector, "table -> v. Returns a vector of the entries in table",
   return res;
 }
 
-TYPEDOP(table_prefix, "table s -> l. Returns list of symbols in table whose value isn't null, and whose name starts with s",
-	  2, (struct table *table, struct string *name),
-	  OP_LEAF | OP_NOESCAPE, "ts.l")
+TYPEDOP(table_prefix, 0, "`table `s -> `l. Returns list of symbols in `table"
+        " whose value is non-null, and whose name starts with `s",
+        2, (struct table *table, struct string *name),
+        OP_LEAF | OP_NOESCAPE, "ts.l")
 {
   TYPEIS(table, type_table);
   TYPEIS(name, type_string);
@@ -195,7 +226,8 @@ TYPEDOP(table_prefix, "table s -> l. Returns list of symbols in table whose valu
   return table_prefix(table, name);
 }
 
-EXT_TYPEDOP(table_ref, "table s -> x. Returns the value of s in symbol table",
+EXT_TYPEDOP(table_ref, 0,
+            "`table `s -> `x. Returns the value of `s in `table, or null",
 	    2, (struct table *table, struct string *s),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
 {
@@ -204,20 +236,23 @@ EXT_TYPEDOP(table_ref, "table s -> x. Returns the value of s in symbol table",
   TYPEIS(table, type_table);
   TYPEIS(s, type_string);
 
-  if (!table_lookup(table, s->str, &sym)) return NULL;
+  if (!table_lookup_len(table, s->str, string_len(s), &sym)) return NULL;
   return sym->data;
 }
 
-TYPEDOP(table_lookup, "table s -> x. Returns the symbol for s in symbol table, or false if none",
-	  2, (struct table *table, struct string *s),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
+TYPEDOP(table_lookup, 0, "`table `s -> `x. Returns the symbol for `s in"
+        " `table, or false if none",
+        2, (struct table *table, struct string *s),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
 {
   struct symbol *sym;
 
   TYPEIS(table, type_table);
   TYPEIS(s, type_string);
 
-  if (!table_lookup(table, s->str, &sym) || !sym->data) return makebool(FALSE);
+  if (!table_lookup_len(table, s->str, string_len(s), &sym)
+      || !sym->data)
+    return makebool(FALSE);
   return sym;
 }
 
@@ -230,7 +265,7 @@ static value table_mset(struct table *table, struct string *s, value x)
   if (((struct obj *)table)->flags & OBJ_READONLY) 
     runtime_error(error_value_read_only);
 
-  if (table_lookup(table, s->str, &sym)) 
+  if (table_lookup_len(table, s->str, string_len(s), &sym)) 
     {
       if (sym->o.flags & OBJ_READONLY) runtime_error(error_value_read_only);
       sym->data = x;
@@ -242,16 +277,12 @@ static value table_mset(struct table *table, struct string *s, value x)
       GCPRO2(table, x);
       if (!(s->o.flags & OBJ_READONLY))
 	{
-	  struct string *news;
-	  struct gcpro gcpro3;
+          char *scopy;
 
-	  /* Make a copy of index string (otherwise it may get modified...) */
-	  GCPRO(gcpro3, s);
-	  news = (struct string *)allocate_string(type_string, string_len(s) + 1);
-	  strcpy(news->str, s->str);
-	  UNGCPRO1(gcpro3);
-	  
-	  s = news;
+          LOCALSTR(scopy, s);
+
+	  /* make a copy of index string (otherwise it may get modified...) */
+	  s = alloc_string_length(scopy, string_len(s));
 	  s->o.flags |= OBJ_READONLY;
 	}
       table_add_fast(table, s, x);
@@ -260,16 +291,18 @@ static value table_mset(struct table *table, struct string *s, value x)
   return x;
 }
 
-EXT_TYPEDOP(table_set, "table s x -> x. Sets the value of entry s in symbol "
-	    "table to x",
+EXT_TYPEDOP(table_set, "table_set!",
+            "`table `s `x -> `x. Sets the value of entry `s in"
+	    " `table to `x",
 	    3, (struct table *table, struct string *s, value x),
-	    OP_LEAF | OP_NOESCAPE, "tsx.")
+	    OP_LEAF | OP_NOESCAPE, "tsx.3")
 {
   TYPEIS(table, type_table);
   return table_mset(table, s, x);
 }
 
-TYPEDOP(table_remove, "table s -> b. Removes the entry for s in the table x. "
+TYPEDOP(table_remove, "table_remove!",
+        "`table `s -> `b. Removes the entry for `s in `table `x. "
 	"Returns true if such an entry was found.",
 	2, (struct table *table, struct string *s),
 	OP_LEAF | OP_NOESCAPE, "ts.n")
@@ -282,7 +315,7 @@ TYPEDOP(table_remove, "table s -> b. Removes the entry for s in the table x. "
   if (((struct obj *)table)->flags & OBJ_READONLY)
     runtime_error(error_value_read_only);
   GCPRO1(s);
-  r = table_remove(table, s->str);
+  r = table_remove_len(table, s->str, string_len(s));
   UNGCPRO();
   return makebool(r);
 }
@@ -290,21 +323,22 @@ TYPEDOP(table_remove, "table s -> b. Removes the entry for s in the table x. "
 
 void symbol_init(void)
 {
-  DEFINE("table?", tablep);
-  DEFINE("make_table", make_table);
-  DEFINE("table_ref", table_ref);
-  DEFINE("table_lookup", table_lookup);
-  DEFINE("table_set!", table_set);
-  DEFINE("table_remove!", table_remove);
+  DEFINE(tablep);
+  DEFINE(make_table);
+  DEFINE(table_ref);
+  DEFINE(table_lookup);
+  DEFINE(table_set);
+  DEFINE(table_remove);
 
-  DEFINE("table_list", table_list);
-  DEFINE("table_vector", table_vector);
-  DEFINE("table_prefix", table_prefix);
-  DEFINE("table_foreach", table_foreach);
-  DEFINE("table_exists?", table_existsp);
+  DEFINE(table_list);
+  DEFINE(table_vector);
+  DEFINE(table_prefix);
+  DEFINE(table_foreach);
+  DEFINE(table_reduce);
+  DEFINE(table_existsp);
 
-  DEFINE("symbol?", symbolp);
-  DEFINE("symbol_name", symbol_name);
-  DEFINE("symbol_get", symbol_get);
-  DEFINE("symbol_set!", symbol_set);
+  DEFINE(symbolp);
+  DEFINE(symbol_name);
+  DEFINE(symbol_get);
+  DEFINE(symbol_set);
 }

@@ -1,5 +1,5 @@
-/*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+/*                                                                    -*- c -*-
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -37,9 +37,12 @@
 #define YY_USE_PROTOS
 
 #undef YY_INPUT
-#define YY_INPUT(buf, result, max_size) \
-  { if (!line_read) (result) = read(fileno(yyin), (buf), (max_size)); \
-  else (result) = string_read((buf), (max_size)); }
+#define YY_INPUT(buf, result, max_size) do {            \
+  if (!line_read)                                       \
+    (result) = fread((buf), 1, (max_size), yyin);       \
+  else                                                  \
+    (result) = string_read((buf), (max_size));          \
+} while (0)
 
 static int string_read(char *buf, int max_size);
 
@@ -55,24 +58,25 @@ struct lkeyword {
   int value;
 };
 
-static struct lkeyword keywords[] = {
-  { "fn", FUNCTION },
-  { "if", IF },
-  { "else", ELSE },
-  { "while", WHILE },
-  { "or", OR },
-  { "and", AND },
-  { "not", NOT },
-  { "exit", MEXIT },
-  { "loop", LOOP },
-  { "match", MATCH },
+static const struct lkeyword keywords[] = {
+ { "fn",       FUNCTION }, 
+  { "if",       IF },       
+  { "else",     ELSE },     
+  { "while",    WHILE },    
+  { "or",       OR },       
+  { "and",      AND },      
+  { "not",      NOT },      
+  { "exit",     MEXIT },    
+  { "loop",     LOOP },     
+  { "for",      FOR },      
+  { "match",    MATCH },    
 
-  { "library", LIBRARY },
-  { "module", MODULE },
-  { "requires", IMPORTS },
-  { "reads", READS },
-  { "writes", WRITES },
-  { "defines", DEFINES }
+  { "library",  LIBRARY },  
+  { "module",   MODULE },   
+  { "requires", IMPORTS },  
+  { "reads",    READS },    
+  { "writes",   WRITES },   
+  { "defines",  DEFINES }
 };
 #define NKEYWORDS (sizeof keywords / sizeof(struct lkeyword))
 
@@ -166,18 +170,17 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 "_"     { return SINK; }
 "..."   { return ELLIPSIS; }
 
-\?\\.	{
-	  switch (yytext[2])
-	    {
-	    case 'n': yylval.integer = '\n'; break;
-	    case 'r': yylval.integer = '\r'; break;
-	    case 't': yylval.integer = '\t'; break;
-	    case 'f': yylval.integer = '\f'; break;
-	    default: yylval.integer = (unsigned char) yytext[2]; break;
-	    }
-	  return INTEGER;
+\?\\(x{HEXDIGIT}{HEXDIGIT}|{OCTDIGIT}{OCTDIGIT}?{OCTDIGIT}?|.) {
+          char c;
+          convert_escape_char(yytext + 2, &c);
+          yylval.integer = (unsigned char)c;
+          return INTEGER;
+        }
+
+\?.	{
+	  yylval.integer = (unsigned char)yytext[1];
+          return INTEGER;
 	}
-\?.	{ yylval.integer = (unsigned char) yytext[1]; return INTEGER; }
 
 -?({DIGIT}+|0[xX]{HEXDIGIT}+) {
 	  if (!mudlle_strtoint(yytext, &yylval.integer))
@@ -199,7 +202,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
           yyterminate();
 	}
 
-[#][bB]-?(0{OCTDIGIT}*|{NONZERODIGIT}{DIGIT}*|0[xX]{HEXDIGIT}+) {
+[#][bB]-?(0{OCTDIGIT}*|{NONZERODIGIT}{DIGIT}*|0[xX]{HEXDIGIT}+)	{
           yylval.bigint_str = allocate(parser_memory, strlen(yytext) - 1);
           strcpy(yylval.bigint_str, yytext + 2);
 	  return BIGINT;
@@ -215,43 +218,49 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
             return FLOAT;
 	}
 
-\"([^\n\\"]*(\\(.|\n))?)+\" {char *str = yylval.string =
-				allocate(parser_memory, strlen(yytext));
-			      const char *text = yytext + 1;
+\"([^\n\\\"]*(\\(.|\n))?)+\" {
+          char *str = yylval.string.str =
+            allocate(parser_memory, strlen(yytext));
+          const char *text = yytext + 1;
+          
+          while (*text)
+            if (*text == '\\')
+              {
+                char c;
 
-			      while (*text)
-				if (*text == '\\' && text[1])
-				  {
-				    switch (text[1])
-				      {
-				      case '\n': lineno++; break;
-				      case 'n': *str++ = '\n'; break;
-				      case 'r': *str++ = '\r'; break;
-				      case 't': *str++ = '\t'; break;
-				      case 'f': *str++ = '\f'; break;
-				      default: *str++ = text[1]; break;
-				      }
-				    text += 2;
-				  }
-				else *str++ = *text++;
+                if (text[1] == '\n')
+                  {
+                    text += 2;
+                    lineno++;
+                  }
+                else
+                  {
+                    text += convert_escape_char(text + 1, &c) + 1;
+                    *str++ = c;
+                  }
+              }
+            else
+              *str++ = *text++;
+          
+          *--str = '\0';
+          yylval.string.len = str - yylval.string.str;
+          return STRING;
+	}
 
-			      str[-1] = '\0';
-			      return STRING;
-			    }
 {GLOBAL_PREFIX}?{SYMBOL_NAME} { 
-			      int i, global;
-
-			      for (i = 0; i < NKEYWORDS; i++)
-			        if (stricmp(yytext, keywords[i].name) == 0)
-			          return keywords[i].value;
-
-			      yylval.symbol = allocate(parser_memory,
-						       strlen(yytext) + 1);
-			      strlwr(strcpy(yylval.symbol, yytext));
-                              global = strncmp(yytext, GLOBAL_ENV_PREFIX,
-                                               strlen(GLOBAL_ENV_PREFIX)) == 0;
-			      return global ? GLOBAL_SYMBOL : SYMBOL;
-			    }
+          int i, global;
+          
+          for (i = 0; i < NKEYWORDS; i++)
+            if (stricmp(yytext, keywords[i].name) == 0)
+              return keywords[i].value;
+          
+          yylval.symbol = allocate(parser_memory,
+                                   strlen(yytext) + 1);
+          strlwr(strcpy(yylval.symbol, yytext));
+          global = strncmp(yytext, GLOBAL_ENV_PREFIX,
+                           strlen(GLOBAL_ENV_PREFIX)) == 0;
+          return global ? GLOBAL_SYMBOL : SYMBOL;
+        }
 
 .	{ 
           int c = (unsigned char)yytext[0];
@@ -282,30 +291,91 @@ static int string_read(char *abuf, int max_size)
 
 void read_from_file(FILE *f, const char *name)
 {
-  if (!mbuf) mbuf = yy_create_buffer(f, YY_BUF_SIZE);
-  else yy_init_buffer(mbuf, f);
-  
-  yy_current_buffer = 0;
-  yy_switch_to_buffer(mbuf);
+  if (!mbuf)
+    {
+      mbuf = yy_create_buffer(f, YY_BUF_SIZE);
+      yy_switch_to_buffer(mbuf);
+    }
+  else
+    {
+      yyrestart(f);
+      
+    }
+
   line_read = FALSE;
   lineno = 1;
   filename = name;
 }
 
-void read_from_string(const char *str)
+void read_from_string(const char *str, const char *name)
 {
-  if (!mbuf) mbuf = yy_create_buffer(stdin, YY_BUF_SIZE);
-  else yy_init_buffer(mbuf, stdin);
-  
-  yy_current_buffer = 0;
+  if (!mbuf)
+    {
+      mbuf = yy_create_buffer(stdin, YY_BUF_SIZE);
+      yy_switch_to_buffer(mbuf);
+    }
+  else
+    yyrestart(stdin);
+
   yy_switch_to_buffer(mbuf);
   line_read = TRUE;
   line = str;
   length = strlen(line);
   lineno = 0;
-  filename = "<string>";
+  filename = name ? name : "<string>";
 }
-void dummy_function_lexer_l() {
+
+void dummy_function_lexer_l(void)
+{
+  /* removes warning about yyunput being unused */
   volatile void *x = yyunput;
   (void)x;
+}
+
+size_t convert_escape_char(const char *text, char *result)
+{
+  switch (text[0])
+    {
+    case 'a': *result = '\a'; break;
+    case 'b': *result = '\b'; break;
+    case 'f': *result = '\f'; break;
+    case 'n': *result = '\n'; break;
+    case 'r': *result = '\r'; break;
+    case 't': *result = '\t'; break;
+    case 'v': *result = '\v'; break;
+    case '0': case '1': case '2': case '3':
+    case '4': case '5': case '6': case '7': {
+      int n = 0, i;
+      for (i = 0; i < 3; ++i)
+        {
+          if (text[i] < '0' || text[i] > '7')
+            break;
+          n = n * 8 | (text[i] - '0');
+        }
+      *result = n;
+      return i;
+    }
+    case 'x':
+      if (isxdigit(text[1]) && isxdigit(text[2]))
+        {
+          int n, c = toupper(text[1]);
+          if (isdigit(c))
+            n = c - '0';
+          else
+            n = c - 'A' + 10;
+          n *= 16;
+          c = toupper(text[2]);
+          if (isdigit(c))
+            n += c - '0';
+          else
+            n += c - 'A' + 10;
+          *result = n;
+          return 3;
+        }
+      /* fallthrough */
+    default:
+      *result = text[0];
+      break;
+    }
+  return 1;
 }

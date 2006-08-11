@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -52,8 +52,8 @@ void massign(ulong n, const char *name, fncode fn);
 /* Effects: Generate code to assign to variable n
 */
 
-void mwarn_module(void);
-/* Effects: Warns about unused variables
+void mwarn_module(const char *name);
+/* Effects: Warns about unused variables in module name
  */
 
 void mcompile_init(void);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -47,14 +47,14 @@ static ubyte builtin_ops[last_builtin];
 component component_undefined, component_true, component_false;
 
 static struct string *last_filename;
-static const char *last_c_filename;
+static char *last_c_filename;
 static uword compile_level;	/* Security level for generated code */
 
 struct string *make_filename(const char *fname)
 {
   if (strcmp(fname, last_c_filename))
     {
-      free((void *)last_c_filename);
+      free(last_c_filename);
       last_c_filename = xstrdup(fname);
       last_filename = alloc_string(fname);
       last_filename->o.flags |= OBJ_READONLY;
@@ -139,8 +139,10 @@ static value make_table(cstlist csts)
   
   GCPRO1(t);
   for (; csts; csts = csts->next)
-    table_set(t, csts->cst->u.constpair->cst1->u.string,
-	      make_constant(csts->cst->u.constpair->cst2));
+    table_set_len(t,
+                  csts->cst->u.constpair->cst1->u.string.str,
+                  csts->cst->u.constpair->cst1->u.string.len,
+                  make_constant(csts->cst->u.constpair->cst2));
   table_foreach(t, protect_symbol);
   immutable_table(t);
   UNGCPRO();
@@ -152,7 +154,8 @@ static value make_symbol(cstpair p)
 {
   struct symbol *sym;
   struct gcpro gcpro1;
-  struct string *s = alloc_string(p->cst1->u.string);
+  struct string *s = alloc_string_length(p->cst1->u.string.str,
+                                         p->cst1->u.string.len);
 
   GCPRO1(s);
   s->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
@@ -169,7 +172,7 @@ value make_constant(constant c)
   switch (c->vclass)
     {
     case cst_string:
-      cst = (value)alloc_string(c->u.string);
+      cst = (value)alloc_string_length(c->u.string.str, c->u.string.len);
       cst->flags |= OBJ_READONLY | OBJ_IMMUTABLE;
       return cst;
     case cst_list: return make_list(c->u.constants, 1);
@@ -581,8 +584,8 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
   varlist closure, cvar;
 
   /* Make help string (must be allocated before code (immutability restriction)) */
-  if (f->help)
-    help = alloc_string(f->help);
+  if (f->help.len)
+    help = alloc_string_length(f->help.str, f->help.len);
   else
     help = NULL;
   GCPRO1(help);
@@ -638,6 +641,7 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
   peephole(newfn);
   c = generate_fncode(newfn, help, varname, filename, f->lineno,
 		      compile_level);
+  c->return_type = f->type;
   closure = env_pop(&c->nb_locals);
 
   UNGCPRO();
@@ -662,20 +666,28 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
 
 struct closure *compile_code(mfile f, int seclev)
 {
+  str_and_len_t sl = {};
   struct code *cc;
   struct gcpro gcpro1;
   uword dummy;
   fncode top;
   block b = f->body;
 
+  const char *filename = (f->body->filename
+                          ? f->body->filename
+                          : "");
   compile_level = seclev;
   erred = FALSE;
   env_reset();
   top = new_fncode(TRUE);
   env_push(NULL, top);		/* Environment must not be totally empty */
-  cc = generate_function(new_function(fnmemory(top), stype_any, NULL, NULL,
-				      new_component(fnmemory(top), c_block, b),
-				      0, ""), TRUE, top);
+  function func = new_function(fnmemory(top), stype_any, sl, NULL,
+                               new_component(fnmemory(top), c_block, b),
+                               f->body->lineno,
+                               filename);
+  func->varname = "top-level";
+  cc = generate_function(func, TRUE, top);
+
   GCPRO1(cc);
   generate_fncode(top, NULL, NULL, NULL, 0, seclev);
   env_pop(&dummy);
@@ -711,7 +723,7 @@ int interpret(value *result, int seclev, int reload)
 
 	  if (closure)
 	    {
-	      mwarn_module();
+	      mwarn_module(f->name);
 
 	      *result = mcatch_call0(closure);
 

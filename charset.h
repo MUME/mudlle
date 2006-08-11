@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -26,11 +26,13 @@
 #ifndef UTILS_CHARSET_H
 #define UTILS_CHARSET_H
 
-#define CHARSET_UNKNOWN 0        /* we don't know yet - assume ASCII */
-#define CHARSET_ASCII   1
-#define CHARSET_LATIN1  2
+#include <string.h>
 
-typedef unsigned int charset_t;
+typedef enum {
+  CHARSET_UNKNOWN = 0,          /* we don't know yet - assume ASCII */
+  CHARSET_ASCII   = 1,
+  CHARSET_LATIN1  = 2
+} charset_t;
 
 #define IS_8NAME(x) (latin1_char_class[(unsigned char) (x)] & 1)
 #define IS_8PRINT(x) (latin1_char_class[(unsigned char) (x)] & 2)
@@ -50,12 +52,13 @@ extern const unsigned char latin1_char_class[256];
 extern const unsigned char latin1_to_upper[256];
 extern const unsigned char latin1_to_lower[256];
 
-extern int str_is8bit(const char *str);
-extern int str8icmp(const char *s1, const char *s2);
-extern int str8nicmp(const char *s1, const char *s2, int n);
-extern void strto7print(char *str);
-extern void str8lwr(char *str);
-extern void str7lwr(char *str);
-extern char *str8cap(char *str);
+int str_is8bit(const char *str);
+int str8icmp(const char *s1, const char *s2);
+int mem8icmp(const void *_s1, const void *_s2, size_t n);
+int str8nicmp(const char *s1, const char *s2, int n);
+void strto7print(char *str);
+void str8lwr(char *str);
+void str7lwr(char *str);
+char *str8cap(char *str);
 
 #endif // UTILS_CHARSET_H

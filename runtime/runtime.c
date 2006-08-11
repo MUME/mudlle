@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,6 +20,7 @@
  */
 
 #include <stdlib.h>
+#include <signal.h>
 
 #include "runtime/runtime.h"
 #include "module.h"
@@ -38,7 +39,8 @@
 #include "support.h"
 #include "bitset.h"
 #include "debug.h"
-#include <signal.h>
+#include "xml.h"
+
 #ifdef AMIGA
 #include <dos.h>
 #endif
@@ -49,7 +51,6 @@
 
 static ulong op_count;
 static FILE *ops, *binops;
-value undefined_value;
 static struct string *system_module;
 
 #define MAXNAME 32
@@ -68,13 +69,13 @@ void system_define(const char *name, value val)
   aindex = global_lookup(name); /* may allocate ... */
   UNGCPRO();
 
-  assert(GVAR(aindex) == NULL);
+  assert(GVAR(aindex) == NULL /* cannot define same constant twice */);
 
   GVAR(aindex) = val;
   module_vset(aindex, var_module, system_module);
 }
 
-void define_string_vector(const char *name, const char **vec, int count)
+void define_string_vector(const char *name, const char *const *vec, int count)
 {
   struct vector *v;
   struct gcpro gcpro1;
@@ -115,35 +116,69 @@ void define_int_vector(const char *name, const int *vec, int count)
   system_define(name, v);
 }
 
-void runtime_define(const char *name, struct primitive_ext *op)
+void runtime_define(const struct primitive_ext *op)
 {
+  const char *const *type;
+
   struct primitive *prim;
   char bname[MAXNAME];
 
-  op->name = name;
+  assert(op->nargs <= MAX_PRIMITIVE_ARGS);
+
+  if (op->type == NULL)
+    goto no_types;
+
+  for (type = op->type; *type; ++type)
+    {
+      char *period = strchr(*type, '.');
+      char *star = strchr(*type, '*');
+      int args;
+      /* all type specifications have to have a period in them, with 0
+         or 1 characters after it! */
+      assert(period);
+      assert(period[1] == 0 || period[2] == 0);
+      if (op->nargs >= 0)
+        {
+          args = period - *type;
+          assert(op->nargs == args);
+        }
+
+      if (star)
+        {
+          /* Kleene closure only allowed with varargs; must be followed by . */
+          assert(star > *type);
+          assert(star + 1 == period);
+          assert(op->nargs < 0);
+        }
+    }
+
+ no_types:
 
   if (binops)
     {
       bname[MAXNAME - 1] = '\0';
-      strncpy(bname, name, MAXNAME - 1);
+      strncpy(bname, op->name, MAXNAME - 1);
       fwrite(bname, MAXNAME, 1, binops);
     }
 
   if (op->seclevel > 0)
     {
       prim = alloc_secure(op_count++, op);
-      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", name, op->help, op->seclevel);
+      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", op->name, op->help, 
+                       op->seclevel);
     }
   else
     {
       prim = alloc_primitive(op_count++, op);
 
       if (op->nargs < 0)	/* Varargs */
-	prim->o.type = type_varargs;
-
-      if (ops) fprintf(ops, "%-20s %s\n", name, op->help);
+        {
+          prim->o.type = type_varargs;
+          assert(~op->flags & OP_NOALLOC);
+        }
+      if (ops) fprintf(ops, "%-20s %s\n", op->name, op->help);
     }
-  system_define(name, prim);
+  system_define(op->name, prim);
 }
 
 #ifdef MUDLLE_INTERRUPT
@@ -191,6 +226,32 @@ void catchint(int sig)
 static struct sigaction oldsegact;
 #endif
 
+static struct primitive *get_ref_primitive(void)
+{
+  static int nenv;
+  struct primitive *prim;
+
+  if (nenv == 0)
+    nenv = global_lookup("ref");
+
+  prim = GVAR(nenv);
+  assert(TYPE(prim, type_primitive));
+  return prim;
+}
+
+static struct primitive *get_set_primitive(void)
+{
+  static int nenv;
+  struct primitive *prim;
+
+  if (nenv == 0)
+    nenv = global_lookup("set!");
+
+  prim = GVAR(nenv);
+  assert(TYPE(prim, type_primitive));
+  return prim;
+}
+
 void got_real_segv(int sig)
 {
   /* 
@@ -220,12 +281,23 @@ static INLINE void check_segv(int sig, struct sigcontext *scp)
 	  ccontext.frame_end_sp = (ulong *)scp->esp;
 	  ccontext.frame_end_sp[-1] = 0; /* This sometimes contains a mudlle value */
 	  ccontext.frame_end_bp = (ulong *)scp->ebp;
-	  ccontext.retadr = (ulong)eip;
+	  ccontext.retadr = (ulong)eip + 4; /* retadr points to next instr. */
 	  runtime_error(error_bad_type);
 	}
       /* bref and bset */
       if (eip >= (ubyte *)bref && eip < (ubyte *)bwglobal)
 	{
+          int is_set = eip >= (ubyte *)bset;
+          struct call_stack me;
+          me.type = call_c;
+          me.u.c.prim = is_set ? get_set_primitive() : get_ref_primitive();
+          me.u.c.nargs = is_set ? 3 : 2;
+          me.u.c.arg1 = (value)scp->eax;
+          me.u.c.arg2 = (value)scp->ecx;
+          me.u.c.arg3 = (value)scp->edx;
+          me.next = call_stack;
+          call_stack = &me;
+
 	  ccontext.frame_end_sp = (ulong *)scp->esp + 1;
 	  ccontext.frame_end_bp = (ulong *)scp->ebp;
 	  runtime_error(error_bad_type);
@@ -397,7 +469,6 @@ void runtime_init(void)
   ops = fopen("mudlle-functions", "w+");
   binops = fopen("mudlle-primitives", "w+");
   op_count = 0;
-  undefined_value = makeint(42);
   system_module = alloc_string("system");
   staticpro((value *)&system_module);
 
@@ -409,11 +480,15 @@ void runtime_init(void)
     act.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
     sigemptyset(&act.sa_mask);
     sigaction(SIGINT, &act, NULL);
+#ifdef SIGQUIT
     sigaction(SIGQUIT, &act, NULL);
+#endif
   }    
 #else
   signal(SIGINT, catchint);
+#ifdef SIGQUIT
   signal(SIGQUIT, catchint);
+#endif
 #endif
 #endif
 
@@ -477,6 +552,9 @@ void runtime_init(void)
   bigint_init();
   pattern_init();
   mudlle_consts_init();
+  xml_init();
+#if 0
+#endif
   module_set("system", module_protected, 0);
   if (ops) fclose(ops);
   if (binops) fclose(binops);

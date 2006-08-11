@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,12 +25,13 @@ defines
   mc:v_class, mc:v_name, mc:v_number, mc:v_indirect, mc:v_uses, mc:svar,
   mc:v_neighbours, mc:v_alias, mc:v_location, mc:v_lclass, mc:v_lregister,
   mc:v_lrtype, mc:v_lrnumber, mc:v_lspill, mc:v_lstype, mc:v_lsoffset,
-  mc:reg_scratch, mc:reg_caller, mc:reg_callee, mc:spill_closure, mc:spill_args,
-  mc:spill_spill, mc:v_global, mc:v_goffset, mc:v_local, mc:v_lclosure_uses,
-  mc:closure_read, mc:closure_write, mc:v_closure, mc:v_cparent, mc:v_constant,
-  mc:v_kvalue, mc:v_global_constant, mc:var_make_local, mc:var_make_dglobal,
+  mc:reg_scratch, mc:reg_caller, mc:reg_callee, mc:spill_closure,
+  mc:spill_args, mc:spill_spill, mc:v_global, mc:v_goffset, mc:v_local,
+  mc:v_lclosure_uses, mc:closure_read, mc:closure_write, mc:local_write_once,
+  mc:local_write_many, mc:v_closure, mc:v_cparent, mc:v_constant, mc:v_kvalue,
+  mc:v_global_constant, mc:var_make_local, mc:var_make_dglobal,
   mc:var_make_global, mc:var_make_constant, mc:var_base, mc:var_value,
-  mc:alias_base, mc:alias, mc:var_make_closure, mc:var_make_kglobal, 
+  mc:alias_base, mc:alias, mc:var_make_closure, mc:var_make_kglobal,
   mc:v_global_define, mc:in_reg, mc:get_reg
 
 [
@@ -38,7 +39,8 @@ defines
 
 // Variables are represented by a vector, as follows:
 // Variable structure:
-//   [0] : class (mc:v_global, mc:v_local, mc:v_closure, mc:v_constant)
+//   [0] : class (mc:v_global, mc:v_local, mc:v_closure, mc:v_constant,
+//                mc:v_global_constant, mc:v_global_define)
 //   [1] : name (string)
 //   [2] : class dependent data
 //   [3..n] : other data
@@ -75,8 +77,10 @@ mc:v_global = 0;
 
 mc:v_local = 1;
  mc:v_lclosure_uses = 2; // data: how variable is used in closures (read, write, bitmask)
- mc:closure_read = 1; // bitmasks for above field
- mc:closure_write = 2;
+   mc:closure_read = 1;  // bitmasks for above field
+   mc:closure_write = 2;
+   mc:local_write_once = 4;
+   mc:local_write_many = 8;
 
 mc:v_closure = 2;
  mc:v_cparent = 2; // data: variable of parent (variable)
@@ -169,7 +173,7 @@ mc:v_global_define = 5; // from own or loaded module
 	  if (class == mc:v_global) format("global %s(%s)", var[mc:v_name], var[mc:v_number])
 	  else if (class == mc:v_global_constant) format("kglobal %s", var[mc:v_name])
 	  else if (class == mc:v_global_define) format("dglobal %s", var[mc:v_name])
-	  else if (class == mc:v_constant) format("%s", var[mc:v_kvalue])
+	  else if (class == mc:v_constant) format("%w", var[mc:v_kvalue])
 	  else if (class == mc:v_local)
 	    [
 	      | type |

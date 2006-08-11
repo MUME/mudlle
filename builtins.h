@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -70,15 +70,18 @@ void flush_icache(ubyte *from, ubyte *to);
 #endif
 
 #ifdef i386
-void bshift_left(), bshift_right(), badd(), bmultiply(), bdivide(), 
+
+void bshift_left(), bshift_right(), badd(), bmultiply(), bdivide(), btypeof(),
   bremainder(), bref(), bset(), bwglobal(), bcleargc(), bvarargs(), bcall(), 
   balloc_variable(), balloc_cons(), balloc_closure(), bcall_primitive(), 
   bcall_primitive_leaf(), bcall_primitive_leaf_noalloc(), bcall_secure(), 
-  bcall_varargs(), berror_bad_function(), berror_stack_underflow(), 
+  bcall_varargs(),  bapply_varargs(),
+  berror_bad_function(), berror_stack_underflow(), 
   berror_bad_type(), berror_divide_by_zero(), berror_bad_index(), 
   berror_bad_value(), berror_variable_read_only(), berror_loop(), 
   berror_recurse(), berror_wrong_parameters(), berror_security_violation(), 
-  berror_value_read_only(), berror_user_interrupt(), 
+  berror_value_read_only(), berror_user_interrupt(), berror_no_match(),
+  berror_compile(),
   bcleargc0(void), bcleargc1(void), bcleargc2(void);
 
 #endif

@@ -1,7 +1,7 @@
 mudlle: MUD Language for Little Extensions
 ------------------------------------------
 
-This software is Copyright (C) 1993-2004 David Gay and Gustav Hållberg.
+This software is Copyright (C) 1993-2006 David Gay and Gustav Hållberg.
 Read the COPYRIGHT file for terms of use.
 
 Installation
@@ -63,6 +63,6 @@ Remember, the source code is the documentation.
 Contact Information
 -------------------
 
-You can contect me at dgay@acm.org. My response time varies from 3 minutes
+You can contact me at dgay@acm.org. My response time varies from 3 minutes
 to 3 months...
 

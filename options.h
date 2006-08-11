@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -58,6 +58,10 @@
 #  define GCDEBUG_CHECK
 #endif
 
+#ifdef linux
+#  define HAVE_ALLOCA_H
+#endif
+
 #ifdef AMIGA
 #  define HAVE_MEMMOVE
 #endif
@@ -85,8 +89,6 @@
 
 
 
-/* Define NORETURN as a qualifier to indicate that a function never returns.
-   With gcc, this is `volatile'. The empty definition is ok too. */
 #ifdef __GNUC__
 #  define NORETURN __attribute__ ((noreturn))
 #else
@@ -139,10 +141,22 @@
 #endif /* linux */
 
 #ifdef __CYGWIN__
+#  define HAVE_ALLOCA_H
 #  define NOCOMPILER
 #  define nosigsetjmp setjmp
 #  define nosiglongjmp longjmp
 #endif /* __CYGWIN__ */
+
+#ifdef WIN32
+#  define NOCOMPILER
+#  define HAVE_MALLOC_H
+#  define nosigsetjmp setjmp
+#  define nosiglongjmp longjmp
+#  define htonl __ntohl
+#  define ntohl __ntohl
+#  define ntohs __ntohs
+#  define htons __ntohs
+#endif /* WIN32 */
 
 #ifdef AMIGA
 #  define HAVE_ALLOCA_H
@@ -158,4 +172,4 @@
 
 #define MAX_FAST_CALLS 1000000 /* Max # of faster calls (machine code) */
 
-#endif
+#endif /* OPTIONS_H */

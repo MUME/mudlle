@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -517,7 +517,7 @@ int get_code_line_number(struct code *code, int offset)
     return -1;
 
   dlen = string_len(code->lineno_data);
-  data = code->lineno_data->str;
+  data = (ubyte *)code->lineno_data->str;
 
   for (;;)
     {
@@ -589,6 +589,7 @@ struct code *generate_fncode(fncode fn,
   gencode->o.garbage_type = garbage_code;
   gencode->o.type = type_code;
   gencode->o.flags = OBJ_IMMUTABLE; /* Code is immutable */
+  gencode->return_type = stype_any;
   gencode->nb_constants = fn->cstindex;
   gencode->nb_locals = 0; /* Initialised later */
   gencode->stkdepth = fn->max_depth;

@@ -27,9 +27,17 @@
   regressunary('[99], '[])("vector_length", fn (x) vector_length(x));
 
   gi = 41;
-  regresseval("*", "gi * 3", gi * 3);
-  regresseval("/", "gi / 3", gi / 3);
-  regresseval("%", "gi % 3", gi % 3);
+  loop
+    [
+      regresseval("*", "gi * 3", gi * 3);
+      regresseval("/", "gi / 3", gi / 3);
+      regresseval("%", "gi % 3", gi % 3);
+      regresseval("*", "gi * -3", gi * -3);
+      regresseval("/", "gi / -3", gi / -3);
+      regresseval("%", "gi % -3", gi % -3);
+      if (gi < 0) exit null;
+      gi = -41;
+    ];
   eval("gf = fn (x) gi/x"); regressfail("/0", fn () gf(0));
   eval("gf = fn (x) gi%x"); regressfail("%0", fn () gf(0));
   gi = 2;
@@ -45,7 +53,8 @@
   regresseval("vref0", "gi[0]", gi[0]);
   regresseval("vref1", "gi[1]", gi[1]);
   regresseval("vref2", "gi[2]", gi[2]);
-  regressqfail("vref-1", "gi[-1]");
+  regresseval("vref-2", "gi[-2]", gi[-2]);
+  regressqfail("vref-5", "gi[-5]");
   regressqfail("vref3", "gi[3]");
   regressqfail("vref221", "gi[221]");
 
@@ -53,7 +62,8 @@
   regresseval("sref0", "gi[0]", gi[0]);
   regresseval("sref1", "gi[1]", gi[1]);
   regresseval("sref3", "gi[3]", gi[3]);
-  regressqfail("sref-1", "gi[-1]");
+  regresseval("sref-1", "gi[-1]", gi[-1]);
+  regressqfail("sref-7", "gi[-7]");
   regressqfail("sref5", "gi[5]");
   regressqfail("sref221", "gi[221]");
   gi = "";

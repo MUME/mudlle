@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -375,53 +375,52 @@ int callablep(value c, int nargs)
      nargs arguments.
 */
 {
-  if (pointerp(c))
-    {
-      struct obj *o = c;
+  struct obj *o = c;
 
-      switch (o->type)
-	{
-	case type_closure: return TRUE;
-	case type_secure:
-	  if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
-	    return FALSE;
-	  /* fall through */
-	case type_primitive: 
-	  if (((struct primitive *)o)->op->nargs == nargs) return TRUE;
-	  break;
-	case type_varargs: return TRUE;
-	default:
-	  break;
-	}
+  if (!pointerp(c))
+    return FALSE;
+
+  switch (o->type)
+    {
+    case type_closure: return TRUE;
+    case type_secure:
+    case type_primitive: 
+      if (nargs < 0 || ((struct primitive *)o)->op->nargs == nargs)
+	return TRUE;
+      return FALSE;
+    case type_varargs: return TRUE;
+    default:
+      break;
     }
   return FALSE;
 }
 
 void callable(value c, int nargs)
 /* Effects: Causes an error if c is not something that can be called with
-     nargs arguments.
+     nargs arguments (-1 only checks type of c).
 */
 {
-  if (pointerp(c))
-    {
-      struct obj *o = c;
+  struct obj *o = c;
 
-      switch (o->type)
-	{
-	case type_closure: return;
-	case type_secure:
-	  if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
-	    runtime_error(error_security_violation);
-	  /* fall through */
-	case type_primitive: 
-	  if (((struct primitive *)o)->op->nargs == nargs) return;
-	  break;
-	case type_varargs: return;
-	default:
-	  break;
-	}
+  if (!pointerp(c))
+    runtime_error(error_bad_function);
+
+  switch (o->type)
+    {
+    case type_closure: return;
+    case type_secure:
+      if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
+	runtime_error(error_security_violation);
+      /* fall through */
+    case type_primitive: 
+      if (nargs < 0 || ((struct primitive *)o)->op->nargs == nargs)
+	return;
+      runtime_error(error_wrong_parameters);
+    case type_varargs: return;
+    default:
+      break;
     }
-  runtime_error(error_wrong_parameters);
+  runtime_error(error_bad_function);
 }
 
 INLINE value call0(value c)
@@ -685,7 +684,7 @@ value call1plus(value c, value arg, struct vector *args)
   struct obj *o = c;
   struct gcpro gcpro1, gcpro2;
   int i, nargs;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   value result = NULL;
 
   nargs = 1 + vector_len(args);
@@ -762,7 +761,7 @@ value call(value c, struct vector *args)
   struct obj *o = c;
   struct gcpro gcpro1, gcpro2;
   int i, nargs;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   value result = NULL;
 
   nargs = vector_len(args);
@@ -832,19 +831,53 @@ static INLINE int display_error(void)
   else return TRUE;		/* Default is display errors */
 }
 
-struct val3 { value v1, v2, v3, v4, v5; };
+struct val5 { value v1, v2, v3, v4, v5; };
 static value result;
+
+static void docall0_setjmp(void *f)
+{
+  struct gcpro gcpro1;
+  value buf;
+
+  GCPRO1(f);
+  buf = mjmpbuf();
+  result = call1(f, buf);
+  UNGCPRO();
+}
+
+value msetjmp(value f)
+{
+  if (mcatch(docall0_setjmp, f, catch_context->display_error)) 
+    return result;
+  return NULL;
+}
+
+void mlongjmp(value buf, value x)
+{
+  assert(is_mjmpbuf(buf));
+  
+  exception_context = ((struct mjmpbuf *)buf)->context;
+  result = x;
+  mthrow(SIGNAL_LONGJMP, x);
+}
+
+void mthrow(long sig, value val)
+{
+  exception_signal = sig;
+  exception_value = val;
+  nosiglongjmp(catch_context->exception, sig);
+}
 
 static void docall(void *x)
 {
-  struct val3 *args = x;
+  struct val5 *args = x;
 
   result = call(args->v1, args->v2);
 }
 
 value mcatch_call(value c, struct vector *arguments)
 {
-  struct val3 args;
+  struct val5 args;
 
   args.v1 = c; args.v2 = arguments;
   if (mcatch(docall, &args, display_error())) return result;
@@ -864,14 +897,14 @@ value mcatch_call0(value c)
 
 static void docall1(void *x)
 {
-  struct val3 *args = x;
+  struct val5 *args = x;
 
   result = call1(args->v1, args->v2);
 }
 
 value mcatch_call1(value c, value arg)
 {
-  struct val3 args;
+  struct val5 args;
 
   args.v1 = c; args.v2 = arg;
   if (mcatch(docall1, &args, display_error())) return result;
@@ -880,14 +913,14 @@ value mcatch_call1(value c, value arg)
 
 static void docall2(void *x)
 {
-  struct val3 *args = x;
+  struct val5 *args = x;
 
   result = call2(args->v1, args->v2, args->v3);
 }
 
 value mcatch_call2(value c, value arg1, value arg2)
 {
-  struct val3 args;
+  struct val5 args;
 
   args.v1 = c; args.v2 = arg1; args.v3 = arg2;
   if (mcatch(docall2, &args, display_error())) return result;
@@ -896,14 +929,14 @@ value mcatch_call2(value c, value arg1, value arg2)
 
 static void docall3(void *x)
 {
-  struct val3 *args = x;
+  struct val5 *args = x;
 
   result = call3(args->v1, args->v2, args->v3, args->v4);
 }
 
 value mcatch_call3(value c, value arg1, value arg2, value arg3)
 {
-  struct val3 args;
+  struct val5 args;
 
   args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3;
   if (mcatch(docall3, &args, display_error())) return result;
@@ -912,14 +945,14 @@ value mcatch_call3(value c, value arg1, value arg2, value arg3)
 
 static void docall4(void *x)
 {
-  struct val3 *args = x;
+  struct val5 *args = x;
 
   result = call4(args->v1, args->v2, args->v3, args->v4, args->v5);
 }
 
 value mcatch_call4(value c, value arg1, value arg2, value arg3, value arg4)
 {
-  struct val3 args;
+  struct val5 args;
 
   args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3; args.v5 = arg4;
   if (mcatch(docall4, &args, display_error())) return result;
@@ -928,14 +961,14 @@ value mcatch_call4(value c, value arg1, value arg2, value arg3, value arg4)
 
 static void docall1plus(void *x)
 {
-  struct val3 *args = x;
+  struct val5 *args = x;
 
   result = call1plus(args->v1, args->v2, args->v3);
 }
 
 value mcatch_call1plus(value c, value arg, struct vector *arguments)
 {
-  struct val3 args;
+  struct val5 args;
 
   args.v1 = c; args.v2 = arg; args.v3 = arguments;
   if (mcatch(docall1plus, &args, display_error())) return result;

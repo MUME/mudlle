@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -26,6 +26,10 @@
 
 #include "options.h"
 
+#ifdef USE_GMP
+#include <gmp.h>
+#endif
+
 #ifdef __sparc__
 #include <sys/types.h>
 #endif
@@ -39,6 +43,9 @@ typedef signed short word;
 typedef unsigned short uword;
 typedef signed char byte;
 typedef unsigned char ubyte;
+
+#define sizeoffield(type, field) (sizeof ((type *)0)->field)
+#define offsetinobj(type, field) (offsetof(type, field) - sizeof (struct obj))
 
 /* The basic classes of all objects, as seen by the garbage collector */
 enum garbage_type {
@@ -54,7 +61,7 @@ enum garbage_type {
 typedef enum 
 {
   /* The values below MUST NEVER CHANGE. Stored data depends on them.
-     Add new types just before 'last_type'.
+     Add new types just before 'type_null'.
      Also some generated code depends on the values. */
   type_code, type_closure, type_variable, type_internal,
   type_primitive, type_varargs, type_secure,
@@ -77,6 +84,8 @@ typedef enum
   stype_list,			/* { pair, null } */
   last_synthetic_type
 } mtype;
+
+extern const char *const mtypenames[];
 
 /* The basic structure of all values */
 typedef void *value;
@@ -149,9 +158,11 @@ struct primitive		/* Is a permanent external */
 {
   struct obj o;
   ulong nb;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   ulong call_count;
 };
+
+#define MAX_PRIMITIVE_ARGS 5
 
 typedef const char *typing[];
 
@@ -166,8 +177,10 @@ struct primitive_ext		/* The external structure */
 #endif
   word nargs;
   uword flags;			/* Helps compiler select calling sequence */
-  const char **type;		/* Pointer to a typing array */
+  const char *const *type;	/* Pointer to a typing array */
   uword seclevel;		/* Only for type_secure */
+  const char *filename;
+  int lineno;
 };
 
 #define OP_LEAF     1           /* Operation is leaf (calls no other mudlle
@@ -203,9 +216,16 @@ struct object			/* Is a temporary external */
   struct obj_data *obj;
 };
 
+struct mjmpbuf {
+  struct obj o;
+  value ptype;
+  struct catch_context *context;
+};
+
 struct closure *unsafe_alloc_closure(ulong nb_variables);
 struct closure *alloc_closure0(struct code *code);
 struct string *alloc_string(const char *s);
+struct string *alloc_string_length(const char *s, size_t length);
 struct mudlle_float *alloc_mudlle_float(double d);
 struct bigint *alloc_bigint(mpz_t mpz);
 struct string *safe_alloc_string(const char *s);
@@ -215,15 +235,16 @@ struct vector *alloc_vector(ulong size);
 struct list *alloc_list(value car, value cdr);
 struct character *alloc_character(struct char_data *ch);
 struct object *alloc_object(struct obj_data *obj);
-struct primitive *alloc_primitive(ulong nb, struct primitive_ext *op);
-struct primitive *alloc_secure(ulong nb, struct primitive_ext *op);
+struct primitive *alloc_primitive(ulong nb, const struct primitive_ext *op);
+struct primitive *alloc_secure(ulong nb, const struct primitive_ext *op);
 void check_bigint(struct bigint *bi);
 
 /* Private types which are visible to the mudlle programmer must be
    records identified by their first element with one of the following
    constants: */
 enum {
-  PRIVATE_CALL_IN = 1
+  PRIVATE_CALL_IN = 1,
+  PRIVATE_MJMPBUF = 2
 };
 
 struct grecord *alloc_private(int id, ulong size);
@@ -231,8 +252,9 @@ struct grecord *alloc_private(int id, ulong size);
 #define string_len(str) ((str)->o.size - (sizeof(struct obj) + 1))
 #define vector_len(vec) (((vec)->o.size - sizeof(struct obj)) / sizeof(value))
 
-/* For the time being, 0 is false, everything else is true */
-#define istrue(v) ((value)(v) != makebool(FALSE))
+/* 0 is false, everything else is true */
+#define isfalse(v) ((value)(v) == makebool(FALSE))
+#define istrue(v)  (!isfalse(v))
 /* Make a mudlle boolean from a C boolean (1 or 0) */
 #define makebool(i) makeint(!!(i))
 

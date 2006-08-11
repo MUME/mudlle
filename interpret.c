@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,7 +19,6 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <alloca.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -39,7 +38,7 @@
 
 /* As good a place as any other */
 const char COPYRIGHT[] = "\
-Copyright (c) 1993-2004 David Gay and Gustav Hållberg\n\
+Copyright (c) 1993-2006 David Gay and Gustav Hållberg\n\
 All rights reserved.\n\
 \n\
 Permission to use, copy, modify, and distribute this software for any\n\
@@ -106,7 +105,7 @@ void do_interpret(struct closure *fn, int nargs)
   value arg1, arg2, result;
   struct obj *called;
   struct primitive *pop;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   
 
 #ifdef i386
@@ -336,12 +335,15 @@ void do_interpret(struct closure *fn, int nargs)
 		C_SETARG(3, FAST_POP());
 		C_SETARG(2, FAST_POP());
 		C_SETARG(1, FAST_POP());
-		result = op->op(C_ARG(1), C_ARG(2), C_ARG(3), C_ARG(4), C_ARG(5));
+		result = op->op(C_ARG(1), C_ARG(2), C_ARG(3), C_ARG(4),
+				C_ARG(5));
 		break;
 	      default:
-		assert(0);	/* A primitive can have a maximum of 5 arguments.
-				   If you need more, use VAROP() and check the
-				   argument count in the primitive */
+		/* A primitive can have a maximum of 5 arguments.
+		 * If you need more, use VAROP() and check the argument count
+		 * in the primitive */
+		CASSERT_STMT(MAX_PRIMITIVE_ARGS == 5);
+		assert(0);
 	      }
 	    C_END_CALL();
 	    break;

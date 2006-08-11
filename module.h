@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,7 +25,8 @@
 #include "types.h"
 
 enum module_status { 
-  module_unloaded, module_error, module_loading, module_loaded, module_protected
+  module_unloaded, module_error, module_loading, module_loaded,
+  module_protected
 };
 
 extern struct table *module_data;

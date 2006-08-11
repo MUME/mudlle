@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -42,9 +42,8 @@ mprofile = fn (name, f)
 	    nprofile_size = profile_size * 2;
 	    nprofile = make_vector(nprofile_size);
 	    ncprofile = make_vector(nprofile_size);
-	    for(0, profile_size - 1,
-		fn (i) [ ncprofile[i] = profile_count[i];
-			 nprofile[i] = profile_data[i] ]);
+	    for (|i| i = 0; i < profile_size; ++i) [ ncprofile[i] = profile_count[i];
+			 nprofile[i] = profile_data[i] ];
 	    profile_size = nprofile_size;
 	    profile_count = ncprofile;
 	    profile_data = nprofile;

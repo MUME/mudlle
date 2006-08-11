@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -23,7 +23,7 @@
  * Support routines for different charsets
  */
 
-#include "utils.charset.h"
+#include "charset.h"
 
 /*
  * conversion table for latin1 to 7-bit ascii (for output)
@@ -291,14 +291,29 @@ int str8icmp(const char *s1, const char *s2)
   return (c1 < c2) ? -1 : (c1 != c2);
 }
 
-int str8nicmp(const char *s1, const char *s2, int n)
+int mem8icmp(const void *_s1, const void *_s2, size_t n)
 {
+  const char *s1 = _s1, *s2 = _s2;
   int c1, c2;
 
-  while ((c1 = TO_7LOWER(*s1++)) == (c2 = TO_7LOWER(*s2++)) && c1 && --n)
-    ;
-  
-  return (c1 < c2) ? -1 : (c1 != c2);
+  while (n-- > 0)
+    if ((c1 = TO_7LOWER(*s1++)) != (c2 = TO_7LOWER(*s2++)))
+      return (c1 < c2) ? -1 : 1;
+  return 0;
+}
+
+int str8nicmp(const char *s1, const char *s2, int n)
+{
+  while (n-- > 0)
+    {
+      int c1 = TO_7LOWER(*s1++);
+      int c2 = TO_7LOWER(*s2++);
+      if (c1 != c2)
+        return (c1 < c2) ? -1 : (c1 != c2);
+      if (c1 == 0)
+        return 0;
+    }
+  return 0;
 }
 
 void strto7print(char *str)

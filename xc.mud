@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -21,9 +21,10 @@
 
 // Load interrpeted x86 compiler
 garbage_collect(700000);
-load("lib.mud");
-load("noinf.mud");
-load("x86.mud");
-load("compile.mud");
-load("interface.mud");
+load("lib.mud") &&
+load("noinf.mud") &&
+load("x86.mud") &&
+load("compile.mud") &&
+load("interface.mud") &&
+protect_compiler_libs();
 mc:verbose = 4;

@@ -1,5 +1,5 @@
 /* 
- * Copyright (c) 1993-2004 David Gay
+ * Copyright (c) 1993-2006 David Gay
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -21,9 +21,9 @@
 
 library phase2 // Phase 2: 3-address (not really) generation
 requires system, sequences, misc, compiler, vars, ins3
-defines mc:phase2
+defines mc:phase2, mc:inline_builtin_call
 reads mc:this_module
-writes mc:this_function
+writes mc:this_function, mc:lineno
 // See ins3.mud for details on these instructions
 
 // temporaries are added to the local variables of each function
@@ -40,10 +40,14 @@ writes mc:this_function
 // them.
 
 [
+
   | cundefined, ctrue, cfalse, closure_count, builtin_branch, builtin_call?,
     builtin_branch_not, comp_undefined, comp_true, comp_false, vset, phase2,
     gen_clist, gen_component, gen_if, gen_while, gen_condition, make_bf,
-    builtin_functions, builtin_branches, make_bb, make_btype |
+    builtin_functions, builtin_branches, make_bb, make_btype, gen_abs_comp,
+    gen_list, gen_set_cxr!, vlist |
+
+  vlist = mc:var_make_kglobal("list", global_lookup("list"));
 
   // Mapping of tree-operators to intermediate code branch operators
   builtin_branch = sequence
@@ -65,11 +69,53 @@ writes mc:this_function
   make_bf = fn (name, op, nargs)
     sequence(mc:var_make_kglobal(name, global_lookup(name)), nargs, op);
 
+  // this can/could/should have been done on parse tree level...
+  gen_abs_comp = fn (fcode, result, args)
+    [
+      | plab |
+
+      plab = mc:new_label(fcode);
+      mc:ins_assign(fcode, result, car(args));
+      mc:ins_branch(fcode, mc:branch_ge, plab,
+                    list(result, mc:var_make_constant(0)));
+      mc:ins_compute(fcode, mc:b_negate, result, list(result));
+      mc:ins_label(fcode, plab);
+      result
+    ];
+
+  gen_list = fn (fcode, result, args)
+    [
+      if (args == null)
+        mc:ins_assign(fcode, result, mc:var_make_constant(null))
+      else if (cdr(args) == null)
+        mc:ins_compute(fcode, mc:b_cons, result, 
+                       list(car(args), mc:var_make_constant(null)))
+      else
+        mc:ins_call(fcode, result, vlist . args);
+      result
+    ];
+
+  gen_set_cxr! = fn (offset) fn (fcode, result, args)
+    [
+      mc:ins_trap(fcode, mc:trap_type, error_bad_type,
+                  list(car(args), mc:var_make_constant(type_pair)));
+      mc:ins_memory(fcode, mc:memory_write_safe, car(args), offset,
+                    cadr(args));
+      mc:ins_assign(fcode, result, cundefined);
+    ];
+
   builtin_functions = sequence
-    (make_bf("car", mc:b_car, 1),
-     make_bf("cdr", mc:b_cdr, 1),
-     make_bf("string_length", mc:b_slength, 1),
-     make_bf("vector_length", mc:b_vlength, 1));
+    (make_bf("car",           mc:b_car,        1), 
+     make_bf("cdr",           mc:b_cdr,        1), 
+     make_bf("string_length", mc:b_slength,    1), 
+     make_bf("slength",       mc:b_slength,    1), 
+     make_bf("vector_length", mc:b_vlength,    1), 
+     make_bf("vlength",       mc:b_vlength,    1),
+     make_bf("typeof",        mc:b_typeof,     1),
+     make_bf("list",          gen_list,        -1),
+     make_bf("abs",           gen_abs_comp,    1),
+     make_bf("set_car!",      gen_set_cxr!(0), 2),
+     make_bf("set_cdr!",      gen_set_cxr!(1), 2));
 
   make_bb = fn (name, op, notop, nargs)
     sequence(mc:var_make_kglobal(name, global_lookup(name)), nargs, op, notop);
@@ -80,6 +126,8 @@ writes mc:this_function
   builtin_branches = sequence
     (make_btype("function?", stype_function),
      make_btype("closure?", type_closure),
+     make_btype("secure?", type_secure),
+     make_btype("varargs?", type_varargs),
      make_btype("primitive?", type_primitive),
      make_btype("integer?", type_integer),
      make_btype("float?", type_float),
@@ -94,7 +142,10 @@ writes mc:this_function
 
      make_btype("object?", type_object),
      make_btype("character?", type_character),
-     make_btype("gone?", type_gone));
+     make_btype("gone?", type_gone),
+
+     make_bb("immutable?", mc:branch_immutable, mc:branch_mutable, 1),
+     make_bb("readonly?", mc:branch_readonly, mc:branch_writable, 1));
 
   builtin_call? = fn (function, args, builtins)
     [
@@ -111,16 +162,32 @@ writes mc:this_function
 
   // gniark, gniark, guess the values
   cundefined = mc:var_make_constant(42);
-  comp_undefined = sequence(mc:c_recall, cundefined) . null;
+  comp_undefined = sequence(mc:c_recall, -1, cundefined) . null;
   ctrue = mc:var_make_constant(true);
-  comp_true = sequence(mc:c_recall, ctrue);
+  comp_true = sequence(mc:c_recall, -1, ctrue);
   cfalse = mc:var_make_constant(false);
-  comp_false = sequence(mc:c_recall, cfalse);
+  comp_false = sequence(mc:c_recall, -1, cfalse);
 
   vset = mc:var_make_kglobal("set!", global_lookup("set!"));
 
   mc:phase2 = fn (mod)
     mod[mc:m_body] = phase2(mod[mc:m_body]);
+
+  mc:inline_builtin_call = fn (il)
+    [
+      | ins, args, result, function, bf |
+
+      ins = il[mc:il_ins];
+      assert(ins[mc:i_class] == mc:i_call);
+      args = ins[mc:i_cargs];
+      result = ins[mc:i_cdest];
+      function = car(args);
+
+      if ((bf = builtin_call?(function, args, builtin_functions)) &&
+          !function?(bf[2]))
+        il[mc:il_ins] = vector(mc:i_compute, bf[2], result, cdr(args),
+                               false);
+    ];
 
   phase2 = fn (top)
     // Returns: intermediate rep of function top
@@ -132,6 +199,8 @@ writes mc:this_function
       topf = mc:new_fncode(top);
       args = top[mc:c_fargs];
       types = top[mc:c_fargtypes];
+
+      mc:lineno = top[mc:c_flineno];
 
       // generate argument count check trap (not for varargs functions)
       if (!top[mc:c_fvarargs])
@@ -186,9 +255,15 @@ writes mc:this_function
     // Effects: Generates 3-address code to evaluate c in fcode
     // Returns: The variable that contains the expression's value
     [
-      | class |
+      | class, olineno, result |
+
+      olineno = mc:lineno;
+      if (c[mc:c_lineno] > 0)
+	mc:lineno = c[mc:c_lineno];
+
       class = c[mc:c_class];
-      if (class == mc:c_assign)
+
+      result = if (class == mc:c_assign)
 	[
 	  | var |
 	  var = c[mc:c_asymbol];
@@ -223,7 +298,10 @@ writes mc:this_function
 
 	  // Check for builtin functions
 	  if (bf = builtin_call?(function, args, builtin_functions))
-	    mc:ins_compute(fcode, bf[2], result, cdr(args))
+            if (function?(bf[2]))
+              bf[2](fcode, result, cdr(args))
+            else
+              mc:ins_compute(fcode, bf[2], result, cdr(args))
 	  else
 	    mc:ins_call(fcode, result, args);
 	  result
@@ -289,7 +367,10 @@ writes mc:this_function
 	      result
 	    ]
 	]
-      else 1/0;
+      else fail();
+      
+      mc:lineno = olineno;
+      result
     ];
       
   gen_if = fn (fcode, condition, success, failure)
@@ -368,7 +449,7 @@ writes mc:this_function
     //   success() and failure() are called to generate the actual code
     //   for theses cases.
     [
-      | done, class, bargs, branch_succeed, branch_fail |
+      | class, bargs, branch_succeed, branch_fail |
 
       // Generate code for all but last expression
       while (cdr(condition) != null)
@@ -379,7 +460,6 @@ writes mc:this_function
       condition = car(condition); // The actual condition
 
       class = condition[mc:c_class];
-      done = false;
       if (class == mc:c_builtin)
 	[
 	  | op, args |
@@ -397,7 +477,7 @@ writes mc:this_function
 					    slab, success, flab, failure);
 			    ],
 			    flab, false);
-	      done = true;
+	      exit<function> null;
 	    ]
 	  else if (op == mc:b_sc_or)
 	    [
@@ -411,13 +491,13 @@ writes mc:this_function
 			      gen_condition(fcode, cadr(args),
 					    slab, success, flab, failure);
 			    ]);
-	      done = true;
+	      exit<function> null;
 	    ]
 	  else if (op == mc:b_not)
 	    [
 	      // Swap conclusions
 	      gen_condition(fcode, car(args), flab, failure, slab, success);
-	      done = true;
+	      exit<function> null;
 	    ]
 	  else if (builtin_branch[op])
 	    [
@@ -455,7 +535,10 @@ writes mc:this_function
 
 	      result = mc:new_local(fcode);
 	      if (bf = builtin_call?(function, bargs, builtin_functions))
-		mc:ins_compute(fcode, bf[2], result, cdr(bargs))
+                if (function?(bf[2]))
+                  bf[2](fcode, result, cdr(bargs))
+                else
+                  mc:ins_compute(fcode, bf[2], result, cdr(bargs))
 	      else
 		mc:ins_call(fcode, result, bargs);
 	      bargs = result . null;
@@ -471,21 +554,19 @@ writes mc:this_function
 	  branch_succeed = mc:branch_true;
 	];
       
-      if (!done) // generate basic code
-	[
-	  if (success)
-	    [
-	      mc:ins_branch(fcode, branch_fail, flab, bargs);
-	      success();
-	      if (failure) failure();
-	    ]
-	  else
-	    [
-	      mc:ins_branch(fcode, branch_succeed, slab, bargs);
-	      if (failure) failure()
-	      else mc:ins_branch(fcode, mc:branch_always, flab, null);
-	    ];
-	]
+      // generate basic code
+      if (success)
+        [
+          mc:ins_branch(fcode, branch_fail, flab, bargs);
+          success();
+          if (failure) failure();
+        ]
+      else
+        [
+          mc:ins_branch(fcode, branch_succeed, slab, bargs);
+          if (failure) failure()
+          else mc:ins_branch(fcode, mc:branch_always, flab, null);
+        ];
     ];
 
 ];

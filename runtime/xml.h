@@ -19,13 +19,25 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef PARSER_H
-#define PARSER_H
+#ifndef MXML_H
+#define MXML_H
 
-#include "tree.h"
-#include "tokens.h"
+#ifdef USE_XML
+enum xml_node {
+  xmlnode_parent,
+  xmlnode_children,
+  xmlnode_sibling,
 
-mfile parse(block_t heap);
-void parser_init(void);
+  xmlnode_depth,
+  xmlnode_type,
+  xmlnode_name,
+  xmlnode_value,
+  xmlnode_attributes,
 
+  xmlnode_entries
+};
 #endif
+
+void xml_init(void);
+
+#endif /* XML_H */

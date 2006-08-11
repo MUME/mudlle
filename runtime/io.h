@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,6 +22,18 @@
 #ifndef IO_H
 #define IO_H
 
+enum {
+  tm_sec,
+  tm_min,
+  tm_hour,
+  tm_mday,
+  tm_mon,
+  tm_year,
+  tm_wday,
+  tm_yday,
+  time_fields
+};
+
 void io_init(void);
 
-#endif
+#endif /* IO_H */

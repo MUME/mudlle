@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -91,7 +91,7 @@ static void execute(char *line)
 {
   value result;
 
-  read_from_string(line);
+  read_from_string(line, NULL);
   if (interpret(&result, 1, TRUE))
     {
       printf("Result: ");
@@ -157,6 +157,7 @@ int main(int argc, char **argv)
       char line[512];
 
       fputs("mudlle> ", stdout);
+      fflush(stdout);
       if (!fgets(line, sizeof line, stdin))
 	break;
       if (*line)

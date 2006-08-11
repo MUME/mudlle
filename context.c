@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -52,6 +52,7 @@ uword seclevel;
 
 long exception_signal;
 value exception_value;
+struct catch_context *exception_context;
 
 int mcatch(void (*fn)(void *x), void *x, int display_error)
 {
@@ -74,10 +75,12 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
   context.old_call_stack = call_stack;
   context.old_seclevel = seclevel;
 
+  context._mjmpbuf = NULL;
+
   context.parent = catch_context;
   catch_context = &context;
 
-  if (nosigsetjmp(context.exception)) 
+  if (nosigsetjmp(context.exception))
     { 
       int extra_depth;
 
@@ -112,7 +115,28 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
 
   seclevel = context.old_seclevel;
 
-  catch_context = context.parent;
+  /* handle setjmp context */
+  if (context._mjmpbuf)
+    {
+      context._mjmpbuf->context = NULL;
+      context._mjmpbuf = NULL;
+
+      catch_context = context.parent;
+
+      switch (exception_signal) {
+      case SIGNAL_ERROR:
+        mthrow(exception_signal, exception_value);
+      case SIGNAL_LONGJMP:
+        if (exception_context != &context)
+          mthrow(exception_signal, exception_value);
+        ok = TRUE;
+        break;
+      case 0:
+        break;
+      }
+    }
+  else
+    catch_context = context.parent;
 
 #ifdef AMIGA
   UNGCPRO();
@@ -121,11 +145,26 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
   return ok;
 }
 
-void mthrow(long sig, value val)
+value mjmpbuf(void)
 {
-  exception_signal = sig;
-  exception_value = val;
-  nosiglongjmp(catch_context->exception, sig);
+  if (catch_context->_mjmpbuf == NULL)
+    {
+      catch_context->_mjmpbuf =
+        (struct mjmpbuf *)allocate_string(type_private,
+                                          sizeof *catch_context->_mjmpbuf
+                                          - sizeof (struct obj));
+      catch_context->_mjmpbuf->ptype = makeint(PRIVATE_MJMPBUF);
+      catch_context->_mjmpbuf->context = catch_context;
+    }
+  return catch_context->_mjmpbuf;
+}
+
+int is_mjmpbuf(value buf)
+{
+  struct mjmpbuf *mbuf = buf;
+  return (TYPE(mbuf, type_private)
+          && mbuf->ptype == makeint(PRIVATE_MJMPBUF)
+          && mbuf->context != NULL);
 }
 
 /* Session context */
@@ -210,34 +249,18 @@ void add_call_trace(value v, int unhandled_only)
 
 void remove_call_trace(value v)
 {
-  struct list *prev, *this;
-  struct gcpro gcpro1, gcpro2, gcpro3;
-
-  prev = NULL;
-  this = mudcalltrace;
-
-  GCPRO2(prev, this);
-  GCPRO(gcpro3, v);
-
-  while (this)
+  for (struct list **this = &mudcalltrace;
+       *this;
+       this = (struct list **)&(*this)->cdr)
     {
-      struct list *elem = this->car;
+      struct list *elem = (*this)->car;
       assert(TYPE(elem, type_pair));
-
       if (elem->car == v)
-	{
-	  if (prev == NULL)
-	    mudcalltrace = this->cdr;
-	  else
-	    prev->cdr = this->cdr;
-	  break;
-	}
-
-      prev = this;
-      this = this->cdr;
+        {
+          *this = (*this)->cdr;
+          break;
+        }
     }
-
-  UNGCPRO();
 }
 
 void context_init(void)

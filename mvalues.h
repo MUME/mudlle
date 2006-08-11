@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -22,12 +22,13 @@
 #ifndef VALUES_H
 #define VALUES_H
 
+#include <stddef.h>
 #include "types.h"
 
-/* Objects are either integers or pointers to more complex things (like variables)
-   The low order bit differentiates between the 2, 0 for pointers, 1 for integers
-   If the object is a pointer, it is directly valid, if an integer the low order
-   bit must be ignored */
+/* Objects are either integers or pointers to more complex things (like
+   variables) The low order bit differentiates between the 2, 0 for pointers, 1
+   for integers If the object is a pointer, it is directly valid, if an integer
+   the low order bit must be ignored */
 
 #define pointerp(obj) ((obj) && ((long)(obj) & 1) == 0)
 #define integerp(obj) (((long)(obj) & 1) == 1)
@@ -108,13 +109,14 @@ struct code
   uword stkdepth;
   uword seclevel;
   uword lineno;
-  ubyte filler0[2];
+  mtype return_type : 16;
   ulong call_count;		/* Profiling */
   ulong instruction_count;
   struct string *varname;
   struct string *filename;
   struct string *help;
   struct string *lineno_data;
+  ulong dummy;
   ubyte magic_dispatch[7];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
@@ -126,10 +128,11 @@ struct mcode /* machine-language code object */
 {
   struct obj o;
   uword seclevel;
-  uword pad0;
+  mtype return_type : 16;
   struct string *filename;
   struct string *varname;
   struct string *help;
+  struct string *linenos;
   uword lineno;
   uword code_length;		/* Length of machine code in words */
   uword nb_constants;
@@ -143,6 +146,9 @@ struct mcode /* machine-language code object */
        - nb_rel relative addresses of C functions in mcode
   */
 };
+
+CASSERT(mdispatch, (offsetof(struct mcode, mcode)
+                    == offsetof(struct code, magic_dispatch)));
 #endif
 
 #ifdef sparc
@@ -180,8 +186,8 @@ struct mcode /* machine-language code object */
   struct string *help;
   void *filler;
   ubyte *myself;		/* Self address, for relocation */
-  ubyte magic[8];		/* A magic pattern that doesn't occur in code */
-  ulong mcode[1/*code_length*/];
+  ubyte magic[8];		/* magic pattern that doesn't occur in code */
+  ulong mcode[1];               /* really of size code_length */
   /* the constant's offsets follow the machine code (they are word
      offsets, not byte offsets) */
 };
@@ -218,8 +224,8 @@ struct mcode /* machine-language code object */
   struct string *filename;
   struct string *varname;
   struct string *help;
-  ubyte magic[8];		/* A magic pattern that doesn't occur in code */
-  ubyte mcode[1/*code_length*/];
+  ubyte magic[8];		/* magic pattern that doesn't occur in code */
+  ulong mcode[1];               /* really of size code_length */
   /* the constant's offsets follow the machine code */
 };
 #endif
@@ -233,6 +239,7 @@ struct code
   uword stkdepth;
   uword seclevel;
   uword lineno;
+  mtype return_type : 16;
   ulong call_count;		/* Profiling */
   ulong instruction_count;
   struct string *varname;
@@ -251,6 +258,7 @@ struct mcode /* machine-language code object */
   struct string *help;
   struct string *varname;
   uword lineno;
+  mtype return_type : 16;
   uword seclevel;
   ubyte mcode[1];
 };

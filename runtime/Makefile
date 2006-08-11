@@ -1,6 +1,6 @@
 #                                                              -*- makefile -*-
 
-# Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+# Copyright (c) 1993-2006 David Gay and Gustav Hållberg
 # All rights reserved.
 # 
 # Permission to use, copy, modify, and distribute this software for any
@@ -21,16 +21,21 @@
 
 OBJS=  basic.o arith.o bool.o symbol.o runtime.o io.o string.o	 \
        list.o vector.o support.o bitset.o debug.o files.o float.o \
-       bigint.o pattern.o mudllecst.o
+       bigint.o pattern.o mudllecst.o xml.o
 
 SRC = $(OBJS:%.o=%.c)
 
-CFLAGS +=-fno-optimize-sibling-calls -I.. -DHAVE_PCRE_PCRE_H
+CFLAGS +=-fno-optimize-sibling-calls -I..
 
 CC=gcc
 MAKEDEPEND=gcc -MM
 
-CSTFILES = files.h
+CSTFILES = files.h io.h ../module.h
+
+ifneq ($(USE_XML),)
+CFLAGS += -I/usr/include/libxml2
+CSTFILES += xml.h
+endif
 
 all: librun.a
 
@@ -43,8 +48,8 @@ librun.a: $(OBJS)
 	ar r librun.a $(OBJS)
 	-ranlib librun.a
 
-mudllecst.c: consts.pl $(CSTFILES)
-	perl $^ > $@
+mudllecst.c: consts.pl $(CSTFILES) Makefile
+	perl $< $(CSTFILES) > $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
@@ -55,15 +60,5 @@ dep depend: .depend
 
 .depend: $(SRC)
 	$(MAKEDEPEND) $(CFLAGS) $(SRC)> .depend
-
-lsimple.c: simple.l
-	flex -F -Psimple simple.l
-	mv lex.simple.c lsimple.c
-
-psimple.c: psimple.h
-psimple.h: simple.y
-	bison -b psimple -d -p simple -t -v simple.y
-	mv psimple.tab.c psimple.c
-	mv psimple.tab.h psimple.h
 
 -include .depend

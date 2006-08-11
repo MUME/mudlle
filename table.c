@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2004 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
  * All rights reserved.
  * 
  * Permission to use, copy, modify, and distribute this software for any
@@ -25,7 +25,7 @@
 #include "types.h"
 #include "table.h"
 #include "alloc.h"
-#include "utils.charset.h"
+#include "charset.h"
 
 /* The hash table size must be a power of 2 */
 
@@ -37,13 +37,13 @@ struct table			/* Is a record */
   struct vector *buckets;
 };
 
-static ulong hash(const char *_name)
+static ulong hash_len(const char *_name, size_t len)
 /* Randomly chosen hash function. Probably not very good. */
 {
   unsigned const char *name = (unsigned const char *)_name;
   ulong code = 0;
 
-  while (*name)
+  while (len--)
     {
       code = ((code << 1) + TO_7LOWER(*name)) ^ 0x57954317;
       name++;
@@ -75,7 +75,8 @@ struct table *alloc_table(ulong size)
 
 static ulong add_position;
 
-int table_lookup(struct table *table, const char *name, struct symbol **sym)
+int table_lookup_len(struct table *table, const char *name, size_t nlength,
+                     struct symbol **sym)
 /* Effects: Looks for name in the symbol table table.
    Returns: TRUE if name is found. *pos is set to name's data.
      Otherwise, returns FALSE. table_add_fast can be called immediately
@@ -84,7 +85,7 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym)
 */
 {
   ulong size = intval(table->size);
-  ulong hashcode = hash(name) & (size - 1), scan;
+  ulong hashcode = hash_len(name, nlength) & (size - 1), scan;
   struct symbol **bucket;
 
   /* Search for name in table */
@@ -96,7 +97,8 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym)
 	add_position = scan;
 	return FALSE;
       }
-    if (str8icmp(name, (*bucket)->name->str) == 0)
+    if (string_len((*bucket)->name) == nlength
+        && mem8icmp(name, (*bucket)->name->str, nlength) == 0)
       {
 	*sym = *bucket;
 	return TRUE;
@@ -112,7 +114,23 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym)
   } while (1);
 }
 
+int table_lookup(struct table *table, const char *name, struct symbol **sym)
+/* Effects: Looks for name in the symbol table table.
+   Returns: TRUE if name is found. *pos is set to name's data.
+     Otherwise, returns FALSE. table_add_fast can be called immediately
+     if you wish to add an entry to name to the symbol table (but no intervening
+     call to the module should be made).
+*/
+{
+  return table_lookup_len(table, name, strlen(name), sym);
+}
+
 int table_remove(struct table *table, const char *name)
+{
+  return table_remove_len(table, name, strlen(name));
+}
+
+int table_remove_len(struct table *table, const char *name, size_t nlength)
 /* Effects: Removes table[name] from data. Rehashes nescessary values.
    Modifies: table
    Returns: FALSE if the entry wasn't found
@@ -121,13 +139,14 @@ int table_remove(struct table *table, const char *name)
   struct symbol **bucket;
   ulong size = intval(table->size), scan;
 
-  scan = hash(name) & (size - 1);
+  scan = hash_len(name, nlength) & (size - 1);
   bucket = (struct symbol **)&table->buckets->data[scan];
 
   do {
     if (!*bucket) 
       return FALSE;
-    if (str8icmp(name, (*bucket)->name->str) == 0)
+    if (string_len((*bucket)->name) == nlength
+        && mem8icmp(name, (*bucket)->name->str, nlength) == 0)
       {
 	*bucket = 0;
 	++bucket;
@@ -140,7 +159,8 @@ int table_remove(struct table *table, const char *name)
 	while (*bucket)
 	  {
 	    struct symbol *sym = *bucket, **newbuck;
-	    ulong newpos = hash(sym->name->str) & (size - 1);
+	    ulong newpos = (hash_len(sym->name->str, string_len(sym->name)) 
+                            & (size - 1));
 	    
 	    *bucket = 0;
 	    newbuck = (struct symbol **)&table->buckets->data[newpos];
@@ -177,6 +197,12 @@ int table_remove(struct table *table, const char *name)
 }
 
 int table_set(struct table *table, const char *name, value data)
+{
+  return table_set_len(table, name, strlen(name), data);
+}
+
+int table_set_len(struct table *table, const char *name, size_t nlength,
+                  value data)
 /* Effects: Sets table[name] to data, adds it if not already present
    Modifies: table
    Returns: FALSE if entry name was readonly
@@ -184,7 +210,7 @@ int table_set(struct table *table, const char *name, value data)
 {
   struct symbol *sym;
 
-  if (table_lookup(table, name, &sym)) 
+  if (table_lookup_len(table, name, nlength, &sym)) 
     {
       if (sym->o.flags & OBJ_READONLY) return FALSE;
       sym->data = data;
@@ -195,7 +221,7 @@ int table_set(struct table *table, const char *name, value data)
       struct string *s;
 
       GCPRO2(table, data);
-      s = alloc_string(name);
+      s = alloc_string_length(name, nlength);
       s->o.flags |= OBJ_READONLY;
       UNGCPRO();
       table_add_fast(table, s, data);
@@ -216,7 +242,8 @@ struct symbol *table_add(struct table *table, struct string *name, value data)
   return table_add_fast(table, name, data);
 }
 
-struct symbol *table_add_fast(struct table *table, struct string *name, value data)
+struct symbol *table_add_fast(struct table *table, struct string *name,
+                              value data)
 /* Requires: table_lookup(table, name->str, ...) to have just failed.
    Effects: Adds <name,data> to the symbol table.
    Modifies: table
@@ -233,7 +260,8 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
   assert(~table->buckets->o.flags & OBJ_READONLY);
 
   GCCHECK(name); GCCHECK(data);
-  assert(add_position < intval(table->size) && !table->buckets->data[add_position]);
+  assert(add_position < intval(table->size)
+         && !table->buckets->data[add_position]);
   GCPRO1(table);
   sym = alloc_symbol(name, data);
   table->buckets->data[add_position] = sym;
@@ -261,7 +289,10 @@ struct symbol *table_add_fast(struct table *table, struct string *name, value da
   for (oldbucket = (struct symbol **)old->data, i = 0; i < size; oldbucket++, i++)
     if (*oldbucket)
       {
-	ulong hashcode = hash((*oldbucket)->name->str) & (newsize - 1), scan;
+	ulong hashcode = (hash_len((*oldbucket)->name->str,
+                                   string_len((*oldbucket)->name)) 
+                          & (newsize - 1));
+        ulong scan;
 	value *bucket;
 
 	scan = hashcode;
@@ -316,13 +347,8 @@ static int prefixp(struct string *s1, struct string *s2)
   const char *t1 = s1->str, *t2 = s2->str;
 
   if (l1 > l2) return FALSE;
-  while (l1-- != 0)
-    {
-      if (TO_7LOWER(*t1) != TO_7LOWER(*t2)) return FALSE;
-      t1++; t2++;
-    }
-
-  return TRUE;
+  
+  return mem8icmp(t1, t2, l1) == 0;
 }
 
 struct list *table_prefix(struct table *table, struct string *prefix)
