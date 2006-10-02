@@ -241,8 +241,10 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	      // non-safe-write memory ops; the latter are only used for
 	      // non-indirect reasons)
 	      if (class != mc:i_closure &&
-                  (class != mc:i_memory || ins[mc:i_mop] == mc:memory_write_safe) &&
-		  (args = lfilter(fn (v) v[mc:v_indirect], mc:arguments(ins, null))) != null)
+                  (class != mc:i_memory
+                   || ins[mc:i_mop] == mc:memory_write_safe) &&
+		  (args = lfilter(fn (v) v[mc:v_indirect],
+                                  mc:arguments(ins, null))) != null)
 		// Special case: replacing 'x := <indirect var>'
 		if (class == mc:i_compute && ins[mc:i_aop] == mc:b_assign)
 		  // replaced by x := <indirect var>[0]
@@ -264,7 +266,8 @@ writes tnargs, tncstargs, tnpartial, tnfull
 			if (!assq(arg, replist)) // only fetch each var once
 			  [
 			    temp = mc:new_local(fcode);
-			    mc:ins_memory(fcode, mc:memory_read, car(args), 0, temp);
+			    mc:ins_memory(fcode, mc:memory_read, car(args),
+                                          0, temp);
 			    replist = (arg . temp) . replist;
 			  ];
 			args = cdr(args);
@@ -336,7 +339,8 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	      fns);
     ];
 
-  mc:myself = mc:var_make_constant(null); // Placeholder for "myself" in functions
+  // Placeholder for "myself" in functions
+  mc:myself = mc:var_make_constant("<myself>");
 
   direct_recursion = fn (ifn)
     // Types: ifn: intermediate function

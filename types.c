@@ -24,9 +24,16 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <math.h>
-#include "mudlle.h"
-#include "types.h"
 #include "alloc.h"
+
+const char *const mtypenames[] = {
+  "code",   "closure", "variable", "internal",  "primitive", "varargs",     
+  "secure", "integer", "string",   "vector",    "list",      "symbol",      
+  "table",  "private", "object",   "character", "gone",      "output-port", 
+  "mcode",  "float",   "bigint",   "null",      
+  "none",   "any",     "function", "list"
+};
+CASSERT_VLEN(mtypenames, last_synthetic_type);
 
 #ifdef ALLOC_STATS
 
@@ -404,14 +411,14 @@ struct object *alloc_object(struct obj_data *obj)
   return (struct object *)allocate_temp(type_object, obj);
 }
 
-struct primitive *alloc_primitive(ulong nb, struct primitive_ext *op)
+struct primitive *alloc_primitive(ulong nb, const struct primitive_ext *op)
 {
-  return (struct primitive *)allocate_permanent(type_primitive, nb, op);
+  return (struct primitive *)allocate_permanent(type_primitive, nb, (void *)op);
 }
 
-struct primitive *alloc_secure(ulong nb, struct primitive_ext *op)
+struct primitive *alloc_secure(ulong nb, const struct primitive_ext *op)
 {
-  return (struct primitive *)allocate_permanent(type_secure, nb, op);
+  return (struct primitive *)allocate_permanent(type_secure, nb, (void *)op);
 }
 
 struct grecord *alloc_private(int id, ulong size)

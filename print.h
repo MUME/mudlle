@@ -23,7 +23,6 @@
 #define PRINT_H
 
 #include "ports.h"
-#include "mvalues.h"
 
 typedef enum { prt_display, prt_print, prt_examine } prt_level;
 

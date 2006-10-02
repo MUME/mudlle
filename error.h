@@ -48,6 +48,7 @@ typedef enum {
 } runtime_errors;
 
 extern const char *const mudlle_errors[last_runtime_error];
+extern int suppress_extra_calltrace;
 
 void error_init(void);
 

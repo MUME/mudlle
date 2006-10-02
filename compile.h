@@ -33,4 +33,6 @@ struct closure *compile_code(mfile f, int seclev);
 
 void compile_init(void);
 
+extern mfile this_mfile;
+
 #endif

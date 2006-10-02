@@ -57,9 +57,14 @@ context (in that case the current value is in global variable x).
 #define CONTEXT_H
 
 #include <setjmp.h>
-#include "mvalues.h"
-#include "types.h"
+
 #include "mudio.h"
+
+enum call_trace_mode {
+  call_trace_off,
+  call_trace_barrier,
+  call_trace_on
+};
 
 /* Function context */
 /* ---------------- */
@@ -133,8 +138,8 @@ extern struct call_stack *call_stack;
 
 struct catch_context
 {
-  int display_error;		/* Should error messages be shown if an error
-				   occurs in this context ? */
+  /* How should call traces be shown if errors occur in this context ? */
+  enum call_trace_mode call_trace_mode;
 
   /* "Private" ifnromation */
   struct catch_context *parent;
@@ -162,7 +167,7 @@ extern long exception_signal;	/* Last exception that occured, 0 for none */
 extern value exception_value;
 extern struct catch_context *exception_context;
 
-int mcatch(void (*fn)(void *x), void *x, int display_error);
+int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode);
 /* Effects: Executes fn(x) with error protection in place.
    Returns: TRUE if all went well, FALSE otherwise.
      If FALSE, information on the exeception that occurred is in 
@@ -198,6 +203,11 @@ struct session_context
 };
 
 extern struct session_context *session_context;
+
+/* end mudlle const */
+#define mudout  (session_context->_mudout)
+#define muduser (session_context->_muduser)
+#define muderr  (session_context->_muderr)
 
 extern ulong xcount;			/* Loop detection */
 extern uword minlevel;			/* Minimum security level */

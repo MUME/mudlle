@@ -44,5 +44,5 @@ fload("link.obj") &&
 
 fload("noinf.obj") &&
 fload("x86.obj") &&
-fload("compile.obj") &&
+fload("compile.obj");
 mc:verbose = 0;

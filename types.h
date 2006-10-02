@@ -24,7 +24,7 @@
 
 /* The different types */
 
-#include "options.h"
+#include "mudlle.h"
 
 #ifdef USE_GMP
 #include <gmp.h>
@@ -43,6 +43,9 @@ typedef signed short word;
 typedef unsigned short uword;
 typedef signed char byte;
 typedef unsigned char ubyte;
+
+#define sizeoffield(type, field) (sizeof ((type *)0)->field)
+#define offsetinobj(type, field) (offsetof(type, field) - sizeof (struct obj))
 
 /* The basic classes of all objects, as seen by the garbage collector */
 enum garbage_type {
@@ -81,6 +84,8 @@ typedef enum
   stype_list,			/* { pair, null } */
   last_synthetic_type
 } mtype;
+
+extern const char *const mtypenames[];
 
 /* The basic structure of all values */
 typedef void *value;
@@ -153,7 +158,7 @@ struct primitive		/* Is a permanent external */
 {
   struct obj o;
   ulong nb;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   ulong call_count;
 };
 
@@ -174,6 +179,8 @@ struct primitive_ext		/* The external structure */
   uword flags;			/* Helps compiler select calling sequence */
   const char *const *type;	/* Pointer to a typing array */
   uword seclevel;		/* Only for type_secure */
+  const char *filename;
+  int lineno;
 };
 
 #define OP_LEAF     1           /* Operation is leaf (calls no other mudlle
@@ -228,8 +235,8 @@ struct vector *alloc_vector(ulong size);
 struct list *alloc_list(value car, value cdr);
 struct character *alloc_character(struct char_data *ch);
 struct object *alloc_object(struct obj_data *obj);
-struct primitive *alloc_primitive(ulong nb, struct primitive_ext *op);
-struct primitive *alloc_secure(ulong nb, struct primitive_ext *op);
+struct primitive *alloc_primitive(ulong nb, const struct primitive_ext *op);
+struct primitive *alloc_secure(ulong nb, const struct primitive_ext *op);
 void check_bigint(struct bigint *bi);
 
 /* Private types which are visible to the mudlle programmer must be
@@ -245,8 +252,9 @@ struct grecord *alloc_private(int id, ulong size);
 #define string_len(str) ((str)->o.size - (sizeof(struct obj) + 1))
 #define vector_len(vec) (((vec)->o.size - sizeof(struct obj)) / sizeof(value))
 
-/* For the time being, 0 is false, everything else is true */
-#define istrue(v) ((value)(v) != makebool(FALSE))
+/* 0 is false, everything else is true */
+#define isfalse(v) ((value)(v) == makebool(FALSE))
+#define istrue(v)  (!isfalse(v))
 /* Make a mudlle boolean from a C boolean (1 or 0) */
 #define makebool(i) makeint(!!(i))
 

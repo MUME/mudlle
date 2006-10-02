@@ -19,16 +19,12 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "mudlle.h"
-#include "tree.h"
+#include <string.h>
+#include <stdlib.h>
+
 #include "alloc.h"
-#include "types.h"
-#include "code.h"
-#include "ins.h"
 #include "env.h"
 #include "global.h"
-#include "valuelist.h"
-#include "calloc.h"
 #include "runtime/runtime.h"
 #include "utils.h"
 #include "module.h"
@@ -38,23 +34,24 @@
 #include "runtime/bigint.h"
 #include "table.h"
 #include "compile.h"
+#include "context.h"
 
-#include <string.h>
-#include <stdlib.h>
 
 static ulong builtin_functions[last_builtin];
 static ubyte builtin_ops[last_builtin];
 component component_undefined, component_true, component_false;
 
 static struct string *last_filename;
-static const char *last_c_filename;
+static char *last_c_filename;
 static uword compile_level;	/* Security level for generated code */
+
+mfile this_mfile;
 
 struct string *make_filename(const char *fname)
 {
   if (strcmp(fname, last_c_filename))
     {
-      free((void *)last_c_filename);
+      free(last_c_filename);
       last_c_filename = xstrdup(fname);
       last_filename = alloc_string(fname);
       last_filename->o.flags |= OBJ_READONLY;
@@ -488,9 +485,9 @@ static void generate_component(component comp, fncode fn)
       generate_component(comp->u.labeled.expression, fn);
       if (!exit_block(comp->u.labeled.name, fn)) {
 	if (!comp->u.labeled.name)
-	  log_error("No loop to exit from");
+	  log_error("no loop to exit from");
 	else
-	  log_error("No block labeled %s", comp->u.labeled.name);
+	  log_error("no block labeled %s", comp->u.labeled.name);
       }
       break;
     case c_execute:
@@ -573,33 +570,61 @@ static void generate_component(component comp, fncode fn)
     }
 }
 
+static struct string *make_arg_types(function f)
+{
+  if (f->varargs)
+    return NULL;
+
+  int i = 0;
+  for (vlist a = f->args; a; a = a->next)
+    ++i;
+ 
+  struct string *result = (struct string *)allocate_string(type_string, i + 1);
+  result->str[i] = 0;
+  for (vlist a = f->args; a; a = a->next)
+    result->str[--i] = a->type;
+
+  result->o.flags |= OBJ_READONLY;
+  return result;
+}
+
 static struct code *generate_function(function f, int toplevel, fncode fn)
 {
-  struct code *c;
-  struct string *help, *filename, *varname;
   fncode newfn;
   vlist argument;
   uword nargs, clen;
-  struct gcpro gcpro1, gcpro2, gcpro3;
+  struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
   varlist closure, cvar;
 
   /* Make help string (must be allocated before code (immutability restriction)) */
+  struct string *help;
   if (f->help.len)
-    help = alloc_string_length(f->help.str, f->help.len);
+    {
+      help = alloc_string_length(f->help.str, f->help.len);
+      help->o.flags |= OBJ_READONLY;
+    }
   else
     help = NULL;
   GCPRO1(help);
 
   /* Make variable name (if present) */
+  struct string *varname;
   if (f->varname)
-    varname = alloc_string(f->varname);
+    {
+      varname = alloc_string(f->varname);
+      varname->o.flags |= OBJ_READONLY;
+    }
   else
     varname = NULL;
   GCPRO(gcpro2, varname);
 
   /* Make filename string */
-  filename = make_filename(f->filename);
+  struct string *filename = make_filename(f->filename);
+  filename->o.flags |= OBJ_READONLY;
   GCPRO(gcpro3, filename);
+
+  struct string *arg_types = make_arg_types(f);
+  GCPRO(gcpro4, arg_types);
 
   newfn = new_fncode(toplevel);
 
@@ -639,9 +664,11 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
   if (f->type != stype_any) ins1(op_typecheck + f->type, 0, newfn);
   ins0(op_return, newfn);
   peephole(newfn);
-  c = generate_fncode(newfn, help, varname, filename, f->lineno,
-		      compile_level);
+
+  struct code *c = generate_fncode(newfn, help, varname, filename, f->lineno,
+                                   compile_level);
   c->return_type = f->type;
+  c->arg_types = arg_types;
   closure = env_pop(&c->nb_locals);
 
   UNGCPRO();
@@ -673,14 +700,21 @@ struct closure *compile_code(mfile f, int seclev)
   fncode top;
   block b = f->body;
 
+  const char *filename = (f->body->filename
+                          ? f->body->filename
+                          : "");
   compile_level = seclev;
   erred = FALSE;
   env_reset();
   top = new_fncode(TRUE);
   env_push(NULL, top);		/* Environment must not be totally empty */
-  cc = generate_function(new_function(fnmemory(top), stype_any, sl, NULL,
-				      new_component(fnmemory(top), c_block, b),
-				      0, ""), TRUE, top);
+  function func = new_function(fnmemory(top), stype_any, sl, NULL,
+                               new_component(fnmemory(top), c_block, b),
+                               f->body->lineno,
+                               filename);
+  func->varname = "top-level";
+  cc = generate_function(func, TRUE, top);
+
   GCPRO1(cc);
   generate_fncode(top, NULL, NULL, NULL, 0, seclev);
   env_pop(&dummy);
@@ -710,13 +744,15 @@ int interpret(value *result, int seclev, int reload)
 	  return status == module_loaded;
 	}
 
+      mfile prev_mfile = this_mfile;
+      this_mfile = f;
       if (mstart(parser_block, f, seclev))
 	{
 	  struct closure *closure = compile_code(f, seclev);
 
 	  if (closure)
 	    {
-	      mwarn_module();
+	      mwarn_module(f->name ? f->name : f->body->filename);
 
 	      *result = mcatch_call0(closure);
 
@@ -725,6 +761,7 @@ int interpret(value *result, int seclev, int reload)
 	  if (f->name)
 	    module_set(f->name, ok ? module_loaded : module_error, seclev);
 	}
+      this_mfile = prev_mfile;
     }
 
   free_block(parser_block);

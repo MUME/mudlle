@@ -22,6 +22,8 @@
 #ifndef INTERPRET_H
 #define INTERPRET_H
 
+#include "types.h"
+
 void do_interpret(struct closure *c, int nargs);
 void interpret_init(void);
 

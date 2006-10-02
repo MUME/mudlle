@@ -27,11 +27,12 @@
 #define BEFORE_SKIP_FRAMES 32
 
 #include "runtime/runtime.h"
-#include "mudio.h"
-#include "print.h"
+
+#include "context.h"
 #include "alloc.h"
 #include "error.h"
 #include "ins.h"
+
 
 const char *const mudlle_errors[] = {
   "bad function",
@@ -51,6 +52,8 @@ const char *const mudlle_errors[] = {
   "compilation error"
 };
 CASSERT_VLEN(mudlle_errors, last_runtime_error);
+
+int suppress_extra_calltrace;
 
 static void print_error(int error)
 {
@@ -378,6 +381,7 @@ static void basic_error(runtime_errors error, int onstack) NORETURN;
 
 static void print_call_trace(runtime_errors error, int onstack)
 {
+  struct catch_context *catch_ctxt = catch_context;
   struct call_stack *scan;
   int count = 0;
 #ifndef NOCOMPILER
@@ -388,10 +392,19 @@ static void print_call_trace(runtime_errors error, int onstack)
 
   for (scan = call_stack; scan; scan = scan->next)
     {
+      /* not sure if 'while' is necessary here... */
+      while (catch_ctxt && scan == catch_ctxt->old_call_stack)
+        {
+          if (catch_ctxt->call_trace_mode == call_trace_barrier)
+            return;
+          catch_ctxt = catch_ctxt->parent;
+        }
+
       if (count++ == BEFORE_SKIP_FRAMES)
 	{
 	  struct call_stack *scans[AFTER_SKIP_FRAMES];
 	  int i;
+
 	  for (i = 0; i < AFTER_SKIP_FRAMES && scan; ++i, scan = scan->next)
 	    scans[i] = scan;
 	  if (scan == NULL)
@@ -497,13 +510,15 @@ struct vector *get_mudlle_call_trace(void)
 
 static void basic_error(runtime_errors error, int onstack)
 {
-  if (catch_context->display_error && muderr)
+  int seen = 0;
+  if (catch_context->call_trace_mode != call_trace_off && muderr)
     {
       if (mudout) mflush(mudout);
       print_call_trace(error, onstack);
+      seen = 1;
     }
 
-  if (mudcalltrace)
+  if (mudcalltrace && (!seen || !suppress_extra_calltrace))
     {
       struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
       struct list *l = mudcalltrace;
@@ -531,10 +546,12 @@ static void basic_error(runtime_errors error, int onstack)
 	      goto nevermind;
 	    }
 
-	  if (catch_context->display_error && muderr == omuderr)
+          /* ignore elem if elem has already seen the call trace */
+	  if (seen && muderr == omuderr)
 	    goto nevermind;
 
-	  if (istrue(elem->cdr) && (!catch_context->display_error || omuderr))
+          /* if cdr(elem), ignore call traces that are handled otherwise */
+	  if (istrue(elem->cdr) && (seen || omuderr))
 	    goto nevermind;
 
 	  print_call_trace(error, onstack);

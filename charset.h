@@ -34,11 +34,12 @@ typedef enum {
   CHARSET_LATIN1  = 2
 } charset_t;
 
+#define IS_8SPACE(x) (latin1_char_class[(unsigned char) (x)] & 0x20)
 #define IS_8NAME(x) (latin1_char_class[(unsigned char) (x)] & 1)
 #define IS_8PRINT(x) (latin1_char_class[(unsigned char) (x)] & 2)
 #define IS_8ALPHA(x) (latin1_char_class[(unsigned char) (x)] & 4)
-#define IS_8ALPHANUM(x) (latin1_char_class[(unsigned char) (x)] & 20)
-#define IS_8NOSPACE(x) (IS_8PRINT(x) && !isspace(x))
+#define IS_8ALPHANUM(x) (latin1_char_class[(unsigned char) (x)] & 0x14)
+#define IS_8NOSPACE(x) ((latin1_char_class[(unsigned char) (x)] & 0x22) == 2)
 #define IS_8OBJNAME(x) (latin1_char_class[(unsigned char) (x)] & 9)
 
 #define TO_7PRINT(x) (latin1_to_ascii_print[(unsigned char) (x)])

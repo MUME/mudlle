@@ -22,6 +22,8 @@
 #ifndef CALL_H
 #define CALL_H
 
+#include "types.h"
+
 value call0(value c);
 /* Effects: Calls c with no arguments
    Returns: c's result

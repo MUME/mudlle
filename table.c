@@ -21,11 +21,9 @@
 
 #include <string.h>
 #include <ctype.h>
-#include "mudlle.h"
-#include "types.h"
 #include "table.h"
 #include "alloc.h"
-#include "utils.charset.h"
+#include "charset.h"
 
 /* The hash table size must be a power of 2 */
 

@@ -20,15 +20,16 @@
  */
 
 library optimise // The actual optimisations
-requires compiler, vars, flow, ins3, 
-  system, graph, dlist, sequences, misc
+requires compiler, vars, flow, ins3, phase2, graph, dlist, sequences, misc
 defines mc:optimise_functions, mc:recompute_vars
 reads mc:verbose
 [
   | fold, compute_ops, branch_ops, useless_instructions, remove_instruction,
     fold_constants, propagate_copies, propagate_closure_constants,
     propagate_closure_constant, eliminate_dead_code, change, fold_branch,
-    pfoldbranch, partialfold, replace_use, remaining_fns, optimise_function |
+    pfoldbranch, partialfold, replace_use, remaining_fns, optimise_function,
+    compute_trap_types, check_compute_trap, convert_to_type_trap,
+    consttype |
 
   fold = fn (ops, op, args, dofold)
     // Types: ops: array of function
@@ -62,8 +63,8 @@ reads mc:verbose
   compute_ops = sequence
     (fn (x, y) true . x or y,
      fn (x, y) true . x and y,
-     false,
-     false,
+     false,                     // sc_or
+     false,                     // sc_and
      fn (x, y) true . x == y,
      fn (x, y) true . x != y,
      fn (x, y) if (integer?(x) && integer?(y)) true . x < y else false,
@@ -83,10 +84,10 @@ reads mc:verbose
      fn (x) if (integer?(x)) true . -x else false,
      fn (x) true . not x,
      fn (x) if (integer?(x)) true . ~x else false,
-     false,
-     false,
-     false,
-     false,
+     false,                     // ifelse
+     false,                     // if
+     false,                     // while
+     false,                     // loop
      fn (x, y)
        if (integer?(y))
          if (vector?(x))
@@ -98,15 +99,20 @@ reads mc:verbose
          else false
        else if (string?(y) && table?(x)) true . x[y]
        else false,
-     false,
-     fn (x, y) false, // cons's are mutable
-     fn (x) false,
+     false,                     // set
+     fn (x, y) false,           // cons's are mutable
+     fn (x) false,              // assign
      fn (x) if (pair?(x)) true . car(x) else false,
      fn (x) if (pair?(x)) true . cdr(x) else false,
      fn (x) if (string?(x)) true . string_length(x) else false,
      fn (x) if (vector?(x)) true . vector_length(x) else false,
-     fn (x, y) if (integer?(x) && integer?(y)) true . x + y else false);
-
+     fn (x, y) if (integer?(x) && integer?(y)) true . x + y else false,
+     fn (x) true . typeof(x),
+     fn () false,               // loop_count
+     fn () false,               // max_loop_count
+     fn (x) if (symbol?(x)) true . symbol_name(x) else false,
+     fn (x) if (symbol?(x)) true . symbol_get(x) else false);
+  assert(vlength(compute_ops) == mc:builtins);
 
   branch_ops = sequence
     (fn () false,
@@ -123,6 +129,53 @@ reads mc:verbose
      fn (x, y) if (integer?(x) && integer?(y)) true . x >= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x <= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x > y else false);
+
+  // false means cannot trap
+  // stype_any means always perform operation
+  // type_xxx means both arguments have to be of this type
+  compute_trap_types = sequence
+    (false,        // or
+     false,        // and
+     false,        // sc_or
+     false,        // sc_and
+     false,        // eq
+     false,        // ne
+     type_integer, // lt
+     type_integer, // le
+     type_integer, // gt
+     type_integer, // ge
+     type_integer, // bitor
+     type_integer, // bitxor
+     type_integer, // bitand
+     type_integer, // shift_left
+     type_integer, // shift_right 
+     null,         // add -- special case below
+     type_integer, // subtract
+     type_integer, // multiply
+     stype_any,    // divide -- may div zero trap
+     stype_any,    // remainder -- may div zero trap
+     type_integer, // negate   
+     false,        // not      
+     type_integer, // bitnot   
+     false,        // ifelse   
+     false,        // if       
+     false,        // while    
+     false,        // loop     
+     stype_any,    // ref      
+     false,        // set      
+     false,        // cons     
+     false,        // assign   
+     type_pair,    // car      
+     type_pair,    // cdr      
+     type_string,  // slength  
+     type_vector,  // vlength  
+     type_integer, // iadd     
+     false,        // typeof      
+     false,        // loop_count
+     false,        // max_loop_count
+     type_symbol,  // symbol_name
+     type_symbol); // symbol_get
+  assert(vlength(compute_trap_types) == mc:builtins);
 
   fold_branch = fn (il, val) // folding function for branches
     [
@@ -305,7 +358,11 @@ reads mc:verbose
             ins[mc:i_mscalar] = rep(ins[mc:i_mscalar])
         ]
       else if (class == mc:i_call)
-        replist(ins[mc:i_cargs])
+        [
+          replist(ins[mc:i_cargs]);
+          if (car(ins[mc:i_cargs]) == repvar)
+            mc:inline_builtin_call(use);
+        ]
       else if (class == mc:i_return)
         ins[mc:i_rvalue] = rep(ins[mc:i_rvalue])
       else if (class == mc:i_closure && closure_ok?)
@@ -533,7 +590,76 @@ reads mc:verbose
       for (|i| i = 0; i < vector_length(all_copies); ++i)
         propagate_copy(i)
     ];
+
+  consttype = fn (arg)
+    if (arg[mc:v_class] == mc:v_constant)
+      typeof(arg[mc:v_kvalue])
+    else if (arg[mc:v_class] == mc:v_global_constant)
+      typeof(global_value(arg[mc:v_goffset]))
+    else
+      false;
   
+  convert_to_type_trap = fn (ins, arg, type)
+    [
+      ins[mc:i_class] = mc:i_trap;
+      ins[mc:i_top] = mc:trap_type;
+      ins[mc:i_tdest] = error_bad_type;
+      ins[mc:i_targs] = list(arg, mc:var_make_constant(type));
+    ];
+
+  // Checks if "ins" has to be replaced by a type trap if removed by
+  // the optimiser. If so, changes the instruction and returns true.
+  check_compute_trap = fn (ins)
+    [
+      | ttype, cargs, op |
+
+      if (ins[mc:i_class] != mc:i_compute)
+        exit<function> false;
+      ttype = compute_trap_types[ins[mc:i_aop]];
+      if (!ttype)
+        exit<function> false;
+
+      cargs = ins[mc:i_aargs];
+      op = ins[mc:i_aop];
+
+      if (op == mc:b_add)
+        [
+          | ct |
+          if (ct = consttype(car(cargs)))
+            if (ct == type_integer || ct == type_string)
+              convert_to_type_trap(ins, cadr(cargs), ct)
+            else
+              convert_to_type_trap(ins, car(cargs), type_integer)
+          else if (ct = consttype(cadr(cargs)))
+            if (ct == type_integer || ct == type_string)
+              convert_to_type_trap(ins, car(cargs), ct)
+            else
+              convert_to_type_trap(ins, cadr(cargs), type_integer);
+        ]
+      else if (cdr(cargs) == null)              // unary op?
+        if (consttype(car(cargs)) == ttype)
+          exit<function> false
+        else
+          convert_to_type_trap(ins, car(cargs), ttype)
+      else if (consttype(car(cargs)) == ttype)
+        if (consttype(cadr(cargs)) == ttype)
+          exit<function> false
+        else
+          convert_to_type_trap(ins, cadr(cargs), ttype)
+      else if (consttype(cadr(cargs)) == ttype)
+        convert_to_type_trap(ins, car(cargs), ttype);
+      // otherwise, we have to test both arguments; can just as well
+      // do the real operation...
+
+      if (mc:verbose >= 3)
+        [
+          display(format("Trap prevent USELESS: %w", ins));
+          newline();
+        ];
+      
+      true
+    ];
+
   useless_instructions = fn (ifn, globals)
     [
       | useless |
@@ -608,7 +734,8 @@ reads mc:verbose
 		    class == mc:i_memory && ins[mc:i_mop] == mc:memory_read) &&
 		   bit_clear?(local_uses, ndvar) &&
 		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)))
-                 useless = scan . useless;
+                 if (!check_compute_trap(ins))
+                   useless = scan . useless;
 	       
 	       if (ndvar)
 		 [

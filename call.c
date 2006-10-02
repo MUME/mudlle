@@ -23,13 +23,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "mudlle.h"
 #include "alloc.h"
 #include "builtins.h"
 #include "interpret.h"
 #include "error.h"
 #include "stack.h"
 #include "call.h"
+#include "context.h"
 
 /* Interface to machine code. */
 
@@ -684,7 +684,7 @@ value call1plus(value c, value arg, struct vector *args)
   struct obj *o = c;
   struct gcpro gcpro1, gcpro2;
   int i, nargs;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   value result = NULL;
 
   nargs = 1 + vector_len(args);
@@ -761,7 +761,7 @@ value call(value c, struct vector *args)
   struct obj *o = c;
   struct gcpro gcpro1, gcpro2;
   int i, nargs;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   value result = NULL;
 
   nargs = vector_len(args);
@@ -825,10 +825,11 @@ value call(value c, struct vector *args)
 
 /* Calls with error trapping */
 
-static INLINE int display_error(void)
+static INLINE enum call_trace_mode call_trace_mode(void)
 {
-  if (catch_context) return catch_context->display_error;
-  else return TRUE;		/* Default is display errors */
+  if (catch_context)
+    return catch_context->call_trace_mode;
+  return call_trace_on;
 }
 
 struct val5 { value v1, v2, v3, v4, v5; };
@@ -847,7 +848,7 @@ static void docall0_setjmp(void *f)
 
 value msetjmp(value f)
 {
-  if (mcatch(docall0_setjmp, f, catch_context->display_error)) 
+  if (mcatch(docall0_setjmp, f, catch_context->call_trace_mode)) 
     return result;
   return NULL;
 }
@@ -880,7 +881,7 @@ value mcatch_call(value c, struct vector *arguments)
   struct val5 args;
 
   args.v1 = c; args.v2 = arguments;
-  if (mcatch(docall, &args, display_error())) return result;
+  if (mcatch(docall, &args, call_trace_mode())) return result;
   else return NULL;
 }
 
@@ -891,7 +892,7 @@ static void docall0(void *x)
 
 value mcatch_call0(value c)
 {
-  if (mcatch(docall0, c, display_error())) return result;
+  if (mcatch(docall0, c, call_trace_mode())) return result;
   else return NULL;
 }
 
@@ -907,7 +908,7 @@ value mcatch_call1(value c, value arg)
   struct val5 args;
 
   args.v1 = c; args.v2 = arg;
-  if (mcatch(docall1, &args, display_error())) return result;
+  if (mcatch(docall1, &args, call_trace_mode())) return result;
   else return NULL;
 }
 
@@ -923,7 +924,7 @@ value mcatch_call2(value c, value arg1, value arg2)
   struct val5 args;
 
   args.v1 = c; args.v2 = arg1; args.v3 = arg2;
-  if (mcatch(docall2, &args, display_error())) return result;
+  if (mcatch(docall2, &args, call_trace_mode())) return result;
   else return NULL;
 }
 
@@ -939,7 +940,7 @@ value mcatch_call3(value c, value arg1, value arg2, value arg3)
   struct val5 args;
 
   args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3;
-  if (mcatch(docall3, &args, display_error())) return result;
+  if (mcatch(docall3, &args, call_trace_mode())) return result;
   else return NULL;
 }
 
@@ -955,7 +956,7 @@ value mcatch_call4(value c, value arg1, value arg2, value arg3, value arg4)
   struct val5 args;
 
   args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3; args.v5 = arg4;
-  if (mcatch(docall4, &args, display_error())) return result;
+  if (mcatch(docall4, &args, call_trace_mode())) return result;
   else return NULL;
 }
 
@@ -971,6 +972,6 @@ value mcatch_call1plus(value c, value arg, struct vector *arguments)
   struct val5 args;
 
   args.v1 = c; args.v2 = arg; args.v3 = arguments;
-  if (mcatch(docall1plus, &args, display_error())) return result;
+  if (mcatch(docall1plus, &args, call_trace_mode())) return result;
   else return NULL;
 }

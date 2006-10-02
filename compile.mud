@@ -29,8 +29,12 @@ writes mc:verbose, mc:erred, mc:this_module
   mc:compile = fn (mod, protect)
     if (mod)
       [
+        | result |
+
 	mc:erred = false;
 	mc:this_module = mod;
+
+        mc:sort_messages(true);
 
 	if (mc:verbose >= 1)
 	  [
@@ -46,7 +50,7 @@ writes mc:verbose, mc:erred, mc:this_module
 	  ];
 	mc:phase2(mod);
 
-	if (!mc:erred)
+        result = if (!mc:erred)
 	  [
 	    | fns |
 
@@ -75,7 +79,11 @@ writes mc:verbose, mc:erred, mc:this_module
 	    mc:prelink(mod, protect)
 	  ]
 	else
-	  false
+	  false;
+        
+        mc:sort_messages(false);
+
+        result
       ]
     else
       false;

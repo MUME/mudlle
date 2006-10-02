@@ -37,10 +37,4 @@ typedef struct oport *Mio;
 #define mflush pflush
 #define mprint output_value
 
-#include "context.h"
-
-#define mudout session_context->_mudout
-#define muduser session_context->_muduser
-#define muderr session_context->_muderr
-
 #endif

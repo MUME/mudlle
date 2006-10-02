@@ -19,20 +19,19 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <alloca.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "mudlle.h"
-#include "interpret.h"
+
 #include "alloc.h"
-#include "types.h"
-#include "code.h"
-#include "stack.h"
-#include "global.h"
-#include "print.h"
-#include "error.h"
 #include "call.h"
+#include "code.h"
+#include "context.h"
+#include "error.h"
+#include "global.h"
+#include "interpret.h"
+#include "stack.h"
+
 #include "runtime/runtime.h"
 #include "runtime/stringops.h"
 #include "runtime/basic.h"
@@ -106,7 +105,7 @@ void do_interpret(struct closure *fn, int nargs)
   value arg1, arg2, result;
   struct obj *called;
   struct primitive *pop;
-  struct primitive_ext *op;
+  const struct primitive_ext *op;
   
 
 #ifdef i386

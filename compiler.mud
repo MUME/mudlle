@@ -20,7 +20,7 @@
  */
 
 library compiler
-requires system, vars
+requires vars, misc, sequences
 
 defines mc:c_class, mc:c_lineno, mc:c_assign, mc:c_asymbol, mc:c_avalue,
   mc:c_recall, mc:c_rsymbol, mc:c_constant, mc:c_cvalue, mc:c_closure,
@@ -36,21 +36,28 @@ defines mc:c_class, mc:c_lineno, mc:c_assign, mc:c_asymbol, mc:c_avalue,
   mc:b_bitand, mc:b_shift_left, mc:b_shift_right, mc:b_add, mc:b_subtract,
   mc:b_multiply, mc:b_divide, mc:b_remainder, mc:b_negate, mc:b_not,
   mc:b_bitnot, mc:b_ifelse, mc:b_if, mc:b_while, mc:b_loop, mc:b_ref, mc:b_set,
-  mc:b_cons, mc:b_assign, mc:b_car, mc:b_cdr, mc:m_class, mc:m_plain,
+  mc:b_cons, mc:b_assign, mc:b_car, mc:b_cdr, mc:builtins, mc:builtin_names,
+  mc:m_class, mc:m_plain,
   mc:m_module, mc:m_library, mc:m_name, mc:m_imports, mc:m_defines, mc:m_reads,
-  mc:m_writes, mc:m_body, mc:b_slength, mc:b_vlength, mc:b_iadd, mc:b_typeof,
+  mc:m_writes, mc:m_body, mc:m_filename, mc:b_slength, mc:b_vlength, mc:b_iadd,
+  mc:b_typeof, mc:b_loop_count, mc:b_max_loop_count, mc:b_symbol_name,
+  mc:b_symbol_get,
   mc:c_fm_globalsbase, mc:c_fm_regs_callee,
 
   mc:a_builtins, mc:a_constants, mc:a_subfns, mc:a_globals, mc:a_kglobals, 
   mc:a_primitives, mc:a_linenos, mc:a_rel_primitives,
 
-  mc:fname, mc:error, mc:warning
+  mc:fname, mc:error, mc:warning, mc:sort_messages
 
-reads mc:this_module, mc:this_function
+reads mc:this_module, mc:this_function, mc:lineno
 writes mc:erred
 
 [
-  | message, m_name, fname, c_flineno, c_ffilename, c_fvar, v_name |
+  | message, m_name, simple_fname, c_flineno, c_ffilename, c_fvar, v_name,
+    pending_messages, sort_messages?, message_count |
+
+  sort_messages? = false;
+  message_count = 0;
 
   // Structure of parse tree returned by mudlle_parse:
   //   7-element vector:
@@ -65,7 +72,8 @@ writes mc:erred
   mc:m_reads = 4;		// read variables (list of (string . type))
   mc:m_writes = 5;		// written variables (list of (string . type))
   mc:m_body = 6;		// module body (component)
-  
+  mc:m_filename = 7;            // module file name
+
   // Component structure:
   //   It is a vector whose first element is one of mc:c_assign, c_recall, etc
   //   The remaining elements depend on the value of the first, as follows:
@@ -169,6 +177,20 @@ writes mc:erred
   mc:b_vlength = 34;
   mc:b_iadd = 35; // integer addition
   mc:b_typeof = 36;
+  mc:b_loop_count = 37;
+  mc:b_max_loop_count = 38;
+  mc:b_symbol_name = 39;
+  mc:b_symbol_get = 40;
+  mc:builtins = 41;
+
+  mc:builtin_names = 
+    '[ "or" "and" 0 0 "==" "!=" "<" "<=" ">" ">="
+       "|" "^" "&" "<<" ">>" "+" "-" "*" "/" "%"
+       "-" "not" "~" 0 0 0 0 "ref" "set" "." ""
+       "car" "cdr" "slength" "vlength" "i+"
+       "typeof" "loop_count" "max_loop_count"
+       "symbol_name" "symbol_get" ];
+  assert(vlength(mc:builtin_names) == mc:builtins);
 
   // Format of information returned with assembled code
   mc:a_builtins = 0;
@@ -179,19 +201,24 @@ writes mc:erred
   mc:a_primitives = 5;
   mc:a_linenos = 6;
   mc:a_rel_primitives = 7;
-  
+
   m_name = mc:m_name; // strange unload effects (see comment before linkun in link.mud)
   c_flineno = mc:c_flineno;
   c_ffilename = mc:c_ffilename;
   c_fvar = mc:c_fvar;
   v_name = mc:v_name;
 
-  fname = mc:fname = fn (ifn)
+  simple_fname = fn (ifn)
+    if (c_fvar < vector_length(ifn) && ifn[c_fvar])
+      ifn[c_fvar][v_name]
+    else
+      "<fn>";
+
+  mc:fname = fn (ifn)
     // Types: ifn: intemediate function
     // Returns: A printable name for ifn
     format("%s[%s:%s]",
-	   if (c_fvar < vector_length(ifn) && ifn[c_fvar])
-	     ifn[c_fvar][v_name] else "<fn>",
+           simple_fname(ifn),
 	   ifn[c_ffilename], ifn[c_flineno]);
 
   mc:error = fn args
@@ -205,15 +232,69 @@ writes mc:erred
 
   message = fn (type, args)
     [
-      | msg |
+      | msg, prefix, filename, lineno |
 
       msg = apply(format, args);
-      display(format("%s:%s %s: %s",
-		     if (vector?(mc:this_module) && mc:this_module[m_name])
-		       mc:this_module[m_name] else "?",
-		     if (vector?(mc:this_function) && mc:this_function[c_flineno] >= 0)
-		       fname(mc:this_function) else "",
-		     type, msg));
-      newline();
+
+      if (!(vector?(mc:this_function)
+            && string?(filename = mc:this_function[c_ffilename]))
+          && !(vector?(mc:this_module)
+               && string?(filename = mc:this_module[m_name])))
+        filename = "?";
+
+      
+      if (vector?(mc:this_function)
+          && string?(mc:this_function[c_ffilename]))
+        [
+          lineno = if (integer?(mc:lineno))
+            mc:lineno
+          else
+            mc:this_function[c_flineno];
+          
+          if (lineno > 0)
+            prefix = format("%s:%s: %s: ",
+                            filename,
+                            lineno,
+                            simple_fname(mc:this_function))
+          else
+            prefix = format("%s: %s: ",
+                            filename,
+                            simple_fname(mc:this_function))
+        ]
+      else
+        [
+          prefix = format("%s: ", filename);
+          lineno = -1;
+        ];
+
+      msg = format("%s%s: %s%n",
+                   prefix,
+                   type,
+                   msg);
+
+      if (sort_messages?)
+        pending_messages = vector(filename, lineno, message_count++, msg) . pending_messages
+      else
+        display(msg);
     ];
+
+  mc:sort_messages = fn "`b -> . If `b, turn on message sorting. Flush messages when `b is set to false." (on?)
+    if (!(sort_messages? = on?))
+      [
+        lforeach(fn (v) display(v[3]),
+                 lqsort(fn (a, b) [
+                   | c |
+                   c = string_cmp(a[0], b[0]);
+                   if (c < 0)
+                     true
+                   else if (c > 0)
+                     false
+                   else if (a[1] == b[1])
+                     a[2] < b[2]
+                   else
+                     a[1] < b[1]
+                 ], pending_messages));
+        pending_messages = null;
+      ];
+
 ];

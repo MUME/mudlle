@@ -25,7 +25,8 @@
 #include "types.h"
 
 enum module_status { 
-  module_unloaded, module_error, module_loading, module_loaded, module_protected
+  module_unloaded, module_error, module_loading, module_loaded,
+  module_protected
 };
 
 extern struct table *module_data;

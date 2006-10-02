@@ -25,7 +25,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
   dihash_foreach, dihash_filter!, dihash_remove!, dihash_map!,
   dihash_entries, dihash_resize, dihash_list, dihash_size,
   dihash_map, ihash_to_dihash, dihash_vector, dihash?, dihash_empty!,
-  dihash_reduce
+  dihash_reduce, dihash_exists?
 [
   | div_used, div_data, vslot_next, vslot_key, vslot_data, next_size,
     good_size | 
@@ -57,19 +57,19 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
   good_size = fn (int used)
     used;
 
-  make_dihash = fn "[n] -> . Creates an empty dynamic-sized integer indxed hash table, optionally initialized to size n" v
+  make_dihash = fn "[`n] -> . Creates an empty dynamic-sized integer indxed hash table, optionally initialized to size `n" v
     [
       if (vlength(v) > 1)
 	error(error_wrong_parameters);
       vector(0, if (vlength(v) == 0) '[] else make_vector(v[0]))
     ];
 
-  dihash? = fn "x -> b. Returns true if x could be a dihash" (x)
+  dihash? = fn "`x -> `b. Returns true if `x could be a dihash" (x)
     (vector?(x) && vlength(x) == 2
      && integer?(x[div_used]) && x[div_used] >= 0
      && vector?(x[div_data]));
 
-  dihash_resize = fn "d n -> . Return a copy of dihash d with n slots, or a reasonable amount of slots if n < 0" (vector hash, int size)
+  dihash_resize = fn "`d `n -> . Return a copy of dihash `d with `n slots, or a reasonable amount of slots if `n < 0" (vector hash, int size)
     [
       | new |
       if (size < 0)
@@ -87,7 +87,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       vector(hash[div_used], new)
     ];
 
-  dihash_resize! = fn "d n -> . Resize dihash d to have n slots, or a reasonable amount of slots if n < 0" (vector hash, int size)
+  dihash_resize! = fn "`d `n -> . Resize dihash `d to have `n slots, or a reasonable amount of slots if `n < 0" (vector hash, int size)
     [
       | new |
       if (size < 0)
@@ -108,7 +108,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       hash[div_data] = new;
     ];
 
-  dihash_set! = fn "d n x -> . Set entry n to x in dihash d" (vector hash, int key, value)
+  dihash_set! = fn "`d `n `x -> . Set entry `n to `x in dihash `d" (vector hash, int key, value)
     [
       | slot, idx, size, v |
       size = vlength(hash[div_data]);
@@ -140,7 +140,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       ++hash[div_used]
     ];
 
-  dihash_ref = fn "d n -> x. Returns dihash data for index n or null" (vector hash, int key)
+  dihash_ref = fn "`d `n -> `x. Returns dihash data for index `n or null" (vector hash, int key)
     [
       | size |
       size = vlength(hash[div_data]);
@@ -161,7 +161,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 	];
     ];
 
-  dihash_foreach = fn "c d -> . Runs c(n, x) for each entry in the dihash, with key n and value x." (function func, vector hash)
+  dihash_foreach = fn "`c `d -> . Runs `c(`n, `x) for each entry in the dihash, with key `n and value `x." (function func, vector hash)
     vforeach(fn (v) [
       while (v != null)
 	[
@@ -170,7 +170,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 	];
     ], hash[div_data]);
 
-  dihash_reduce = fn "c x0 d -> x1. Returns the reduction c(k, e, x) -> x for each element e with key k in dihash d" (function func, x, vector hash)
+  dihash_reduce = fn "`c `x0 `d -> `x1. Returns the reduction `c(`k, `e, `x) -> `x for each element `e with key `k in dihash `d" (function func, x, vector hash)
     [
       | i, data, len |
       i = 0;
@@ -190,7 +190,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 	]
     ];
 
-  dihash_filter! = fn "c d -> . Filters data in dihash d with function c(n, x)" (function func, vector hash)
+  dihash_filter! = fn "`c `d -> . Filters data in dihash `d with function `c(`n, `x)" (function func, vector hash)
     [
       | used, vzero |
       vzero = vector(null);
@@ -213,7 +213,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       hash[div_used] = used;
     ];
 
-  dihash_remove! = fn "d n -> b. Removes entry n from dihash d. Returns true if the entry was found" (vector hash, int key)
+  dihash_remove! = fn "`d `n -> `b. Removes entry `n from dihash `d. Returns true if the entry was found" (vector hash, int key)
     [
       | slot, vzero, v, size |
       size = vlength(hash[div_data]);
@@ -241,24 +241,24 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 	false
     ];
 
-  dihash_empty! = fn "d -> . Remove all entries from dihash d" (vector hash)
+  dihash_empty! = fn "`d -> . Remove all entries from dihash `d" (vector hash)
     [
       hash[div_used] = 0;
       vector_fill!(hash[div_data], null);
     ];
 
-  dihash_map! = fn "c d -> . Maps all entries x with key i to c(i, x) in the dihash d" (function func, vector hash)
+  dihash_map! = fn "`c `d -> . Maps all entries `x with key `i to `c(`i, `x) in the dihash `d" (function func, vector hash)
     vforeach(fn (v) [
       loop
 	[
 	  if (v == null)
-	    exit 0;
+	    exit null;
 	  v[vslot_data] = func(v[vslot_key], v[vslot_data]);
 	  v = v[vslot_next]
 	];
     ], hash[div_data]);
   
-  dihash_map = fn "c d -> d. Return a new dihash as mapped by c(i, x) for each entry in the dihash" (function func, vector hash)
+  dihash_map = fn "`c `d -> `d. Return a new dihash as mapped by `c(`i, `x) for each entry in the dihash" (function func, vector hash)
     [
       | new |
       new = make_dihash(dihash_size(hash));
@@ -267,13 +267,13 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       new
     ];
 
-  dihash_entries = fn "d -> n. Returns the number of entries in the dihash d" (vector hash)
+  dihash_entries = fn "`d -> `n. Returns the number of entries in the dihash `d" (vector hash)
     hash[div_used];
 
-  dihash_size = fn "d -> n. Returns the current size of the dihash d" (vector hash)
+  dihash_size = fn "`d -> `n. Returns the current size of the dihash `d" (vector hash)
     vlength(hash[div_data]);
 
-  dihash_list = fn "d -> l. Returns a list of (key . value) of the entries in dihash d" (vector hash)
+  dihash_list = fn "`d -> `l. Returns a list of (`key . `value) of the entries in dihash `d" (vector hash)
     [
       | res |
       dihash_foreach(fn (key, value) res = (key . value) . res,
@@ -281,7 +281,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       res
     ];
 
-  dihash_vector = fn "d -> v. Returns a vector of (key . value) of the entries in dihash d" (vector hash)
+  dihash_vector = fn "`d -> `v. Returns a vector of (`key . `value) of the entries in dihash `d" (vector hash)
     [
       | res, i |
       res = make_vector(hash[div_used]);
@@ -292,7 +292,26 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       res
     ];
 
-  ihash_to_dihash = fn "i -> d. Returns a dihash of the data stored in the ihash i" (ihash)
+  dihash_exists? = fn "`c `d -> `x. Returns (`key . `value) for the first entry in dihash `d, for which `c(`key, `value) is true" (function func, vector hash)
+    [
+      | result, len |
+      result = false;
+      vexists?(fn (v) [
+        while (v != null)
+          [
+            if (func(v[vslot_key], v[vslot_data]))
+              [
+                result = v[vslot_key] . v[vslot_data];
+                exit<function> true;
+              ];
+            v = v[vslot_next];
+          ];
+        false
+      ], hash[div_data]);
+      result
+    ];
+
+  ihash_to_dihash = fn "`i -> `d. Returns a dihash of the data stored in the ihash `i" (ihash)
     [
       | res |
       res = make_dihash();

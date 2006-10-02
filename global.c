@@ -20,12 +20,9 @@
  */
 
 #include <string.h>
-#include "mudlle.h"
 #include "global.h"
-#include "objenv.h"
 #include "table.h"
 #include "alloc.h"
-#include "types.h"
 #include "error.h"
 #include "module.h"
 

@@ -21,8 +21,8 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include "mudlle.h"
-#include "calloc.h"
+
+#include "alloc.h"
 #include "utils.h"
 
 /* Module: calloc

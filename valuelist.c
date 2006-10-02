@@ -19,8 +19,6 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "mudlle.h"
-#include "valuelist.h"
 #include "alloc.h"
 
 struct local_value *addtail(block_t heap, valuelist *list, value lvalue)

@@ -29,15 +29,18 @@
 
 #include "runtime/runtime.h"
 #include "runtime/basic.h"
-#include "mudio.h"
 #include "global.h"
 #include "alloc.h"
 #include "interpret.h"
+#include "context.h"
 
 
 static void show_function(struct closure *c);
 
-OPERATION(help, "fn -> . Provides help on function fn", 1, (value v),
+#  define HELP_PREFIX ""
+
+OPERATION(help, HELP_PREFIX "help",
+          "`f -> . Provides help on function `f", 1, (value v),
 	  OP_LEAF)
 {
   if (TYPE(v, type_primitive) || TYPE(v, type_varargs))
@@ -58,7 +61,7 @@ OPERATION(help, "fn -> . Provides help on function fn", 1, (value v),
   undefined();
 }
 
-TYPEDOP(help_string, "fn -> s. Returns fn's help string, or null if none",
+TYPEDOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
 	1, (value v),
 	OP_LEAF | OP_NOESCAPE, "f.x")
 {
@@ -72,16 +75,18 @@ TYPEDOP(help_string, "fn -> s. Returns fn's help string, or null if none",
     {
       struct closure *c = v;
 
-      if (c->code->o.type == type_code) return c->code->help;
-      if (c->code->o.type == type_mcode) return ((struct mcode *)c->code)->help;
+      if (c->code->o.type == type_code)
+        return c->code->help;
+      if (c->code->o.type == type_mcode)
+        return ((struct mcode *)c->code)->help;
       return alloc_string(((struct primitive *)c->code)->op->help);
     }
   runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(defined_in, "fn -> v. Returns information on where fn is defined"
-          " (filename, lineno). Returns false for primitives",
+OPERATION(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
+          " [`filename, `lineno].",
           1, (value fn),
           OP_LEAF | OP_NOESCAPE)
 {
@@ -97,17 +102,21 @@ OPERATION(defined_in, "fn -> v. Returns information on where fn is defined"
     {
       struct code *code = fn;
       filename = code->filename;
-      lineno = code->lineno;
+      lineno   = code->lineno;
     }
   else if (TYPE(fn, type_mcode))
     {
       struct mcode *mcode = fn;
       filename = mcode->filename;
-      lineno = mcode->lineno;
+      lineno   = mcode->lineno;
     }
   else if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
 	   TYPE(fn, type_secure))
-    return makebool(FALSE);
+    {
+      struct primitive *prim = fn;
+      filename = alloc_string(prim->op->filename);
+      lineno   = prim->op->lineno;
+    }
   else
     runtime_error(error_bad_type);
 
@@ -120,8 +129,9 @@ OPERATION(defined_in, "fn -> v. Returns information on where fn is defined"
   return v;
 }
 
-UNSAFEOP(closure_variables,
-	 "fn -> v. Returns a vector of the closure variable values of function fn",
+UNSAFEOP(closure_variables, 0,
+	 "`f -> `v. Returns a vector of the closure variable values of"
+         " function `f",
 	 1, (struct closure *fn),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -142,7 +152,7 @@ UNSAFEOP(closure_variables,
   return res;
 }
 
-OPERATION(variable_value, "v -> x. Returns the value in variable v",
+OPERATION(variable_value, 0, "`v -> `x. Returns the value in variable `v",
 	  1, (struct variable *v),
 	  OP_LEAF)
 {
@@ -150,7 +160,8 @@ OPERATION(variable_value, "v -> x. Returns the value in variable v",
   return v->vvalue;
 }
 
-TYPEDOP(function_seclevel, "f -> n. Returns the security level of the function f",
+TYPEDOP(function_seclevel, 0, "`f -> `n. Returns the security level of the"
+        " function `f",
 	1, (value fn), OP_LEAF | OP_NOESCAPE, "f.n")
 {
   if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs))
@@ -172,7 +183,8 @@ TYPEDOP(function_seclevel, "f -> n. Returns the security level of the function f
   NOTREACHED;
 }
 
-TYPEDOP(function_name, "fn -> s. Returns name of fn if available, false otherwise",
+TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
+        " otherwise",
 	1, (value fn),
 	OP_LEAF | OP_NOESCAPE, "x.S")
 {
@@ -246,9 +258,9 @@ static void show_function(struct closure *c)
   else code_help(c->code);
 }
 
-OPERATION(profile, "fn -> x. Returns profiling information for function fn: \n\
-(#calls #instructions) for mudlle functions,\n\
-#calls for primitives",
+OPERATION(profile, 0, "`f -> `x. Returns profiling information for `f:"
+          " cons(#`calls, #`instructions) for mudlle functions, #`calls for"
+          " primitives",
 	  1, (value fn),
 	  OP_LEAF)
 {
@@ -268,13 +280,15 @@ OPERATION(profile, "fn -> x. Returns profiling information for function fn: \n\
 
       return tmp;
     }
-  else if (TYPE(fn, type_primitive) || TYPE(fn, type_secure) || TYPE(fn, type_varargs))
+  else if (TYPE(fn, type_primitive)
+           || TYPE(fn, type_secure)
+           || TYPE(fn, type_varargs))
     return makeint(((struct primitive *)fn)->call_count);
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-UNSAFEOP(dump_memory, " -> . Dumps GC memory (for use by profiler)",
+UNSAFEOP(dump_memory, 0, " -> . Dumps GC memory (for use by profiler)",
 	 0, (void),
 	 OP_LEAF)
 {
@@ -295,7 +309,9 @@ static int instr(char *s1, char *in)
   return FALSE;
 }
 
-OPERATION(apropos, "s -> . Finds all global variables whose name contains substring s and prints them (with help)",
+OPERATION(apropos, HELP_PREFIX "apropos",
+          "`s -> . Finds all global variables whose name contains"
+          " the substring `s and prints them (with help)",
 	  1, (struct string *s),
 	  OP_LEAF)
 {
@@ -319,7 +335,9 @@ OPERATION(apropos, "s -> . Finds all global variables whose name contains substr
 	  GCPRO(gcpro3, v);
 	  mprint(mudout, prt_display, sym->name);
 	  mputs(EOL "  ", mudout);
-	  if (TYPE(v, type_primitive) || TYPE(v, type_secure) || TYPE(v, type_varargs))
+	  if (TYPE(v, type_primitive)
+              || TYPE(v, type_secure)
+              || TYPE(v, type_varargs))
 	    {
 	      struct primitive *op = v;
 
@@ -343,7 +361,7 @@ OPERATION(apropos, "s -> . Finds all global variables whose name contains substr
   undefined();
 }
 
-OPERATION(debug, "n -> . Set debug level (0 = no debug)", 1, (value c),
+OPERATION(debug, 0, "`n -> . Set debug level (0 = no debug)", 1, (value c),
 	  OP_LEAF | OP_NOALLOC)
 {
   ISINT(c);
@@ -351,15 +369,17 @@ OPERATION(debug, "n -> . Set debug level (0 = no debug)", 1, (value c),
   undefined();
 }
 
-OPERATION(quit, " -> . Exit mudlle", 0, (void),
+OPERATION(quit, 0, " -> . Exit mudlle", 0, (void),
 	  0)
 {
   exit(0);
 }
 
 #ifdef GCSTATS
-TYPEDOP(gcstats, " -> v. Returns GC statistics", 0, (void),
-        OP_LEAF, ".v")
+TYPEDOP(gcstats, 0, " -> `v. Returns GC statistics: vector(`minor_count,"
+        " `major_count, `size, `usage_minor, `usage_major, last gc sizes,"
+        " gen0 gc sizes, gen1 gc sizes). The sizes vectors are as"
+        " that of `short_gcstats()", 0, (void), OP_LEAF, ".v")
 {
   struct gcstats stats;
   struct vector *gen0, *gen1 = NULL, *last = NULL, *v;
@@ -396,7 +416,8 @@ TYPEDOP(gcstats, " -> v. Returns GC statistics", 0, (void),
   return v;
 }
 
-OPERATION(reset_gcstats, " -> . Reset short GC statistics", 0, (void),
+OPERATION(reset_gcstats, "reset_gcstats!", " -> . Reset short GC statistics",
+          0, (void),
 	  OP_LEAF | OP_NOALLOC)
 {
   memset(gcstats.anb, 0, sizeof gcstats.anb);
@@ -404,7 +425,9 @@ OPERATION(reset_gcstats, " -> . Reset short GC statistics", 0, (void),
   undefined();
 }
 
-OPERATION(short_gcstats, " -> l. Returns short GC statistics", 0, (void),
+OPERATION(short_gcstats, 0, " -> `v. Returns short GC statistics. `v[2*`n] is"
+          " the number of allocations for type `n, and `v[2*`n+1] is total"
+          " bytes of allocation for type `n", 0, (void),
 	  OP_LEAF)
 {
   struct gcstats stats = gcstats;
@@ -420,25 +443,26 @@ OPERATION(short_gcstats, " -> l. Returns short GC statistics", 0, (void),
   return v;
 }
 
-TYPEDOP(gc_generation, "-> n. Returns the number of garbage collections"
-	" run so far (minor or major). Cf. gc_cmp().",
+TYPEDOP(gc_generation, 0, "-> `n. Returns the number of garbage collections"
+	" run so far (minor or major). Cf. `gc_cmp().",
 	0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return makeint(gcstats.minor_count + gcstats.major_count);
 }
 
-TYPEDOP(gc_cmp, "x0 x1 -> n. Compares x0 and x1 as == does, and returns"
-	" -1 if x0 is less than x1, 0 if they are equal, or 1 if x0"
-	" is greater than x1. The results are only stable within"
-	" one gc_generation().",
+TYPEDOP(gc_cmp, 0, "`x0 `x1 -> `n. Compares `x0 and `x1 as == does, and"
+        " returns -1 if `x0 is less than `x1, 0 if they are equal, or 1 if `x0"
+	" is greater than `x1. The results are only stable within"
+	" one `gc_generation().",
 	2, (value a, value b),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
   return makeint((long)a < (long)b ? -1 : (long)a != (long)b);
 }
 
-TYPEDOP(gc_hash, "x -> n. Returns a non-negative hash number for object x,"
-        " which is valid while gc_generation() is constant.",
+TYPEDOP(gc_hash, 0,
+        "`x -> `n. Returns a non-negative hash number for object `x,"
+        " which is valid while `gc_generation() is constant.",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
@@ -453,8 +477,8 @@ TYPEDOP(gc_hash, "x -> n. Returns a non-negative hash number for object x,"
 
 #endif
 
-UNSAFEOP(garbage_collect, "n -> . Does a forced garbage collection,"
-	 " asserting room for n bytes of allocations before another"
+UNSAFEOP(garbage_collect, 0, "`n -> . Does a forced garbage collection,"
+	 " asserting room for `n bytes of allocations before another"
 	 " garbage collection has to be done.",
 	 1, (value n),
 	 OP_LEAF)
@@ -467,25 +491,25 @@ UNSAFEOP(garbage_collect, "n -> . Does a forced garbage collection,"
 
 void debug_init(void)
 {
-  DEFINE("garbage_collect", garbage_collect);
-  DEFINE("help", help);
-  DEFINE("help_string", help_string);
-  DEFINE("defined_in", defined_in);
-  DEFINE("closure_variables", closure_variables);
-  DEFINE("variable_value", variable_value);
-  DEFINE("function_name", function_name);
-  DEFINE("function_seclevel", function_seclevel);
-  DEFINE("profile", profile);
-  DEFINE("dump_memory", dump_memory);
-  DEFINE("apropos", apropos);
-  DEFINE("debug", debug);
-  DEFINE("quit", quit);
+  DEFINE(garbage_collect);
+  DEFINE(help);
+  DEFINE(help_string);
+  DEFINE(defined_in);
+  DEFINE(closure_variables);
+  DEFINE(variable_value);
+  DEFINE(function_name);
+  DEFINE(function_seclevel);
+  DEFINE(profile);
+  DEFINE(dump_memory);
+  DEFINE(apropos);
+  DEFINE(debug);
+  DEFINE(quit);
 #ifdef GCSTATS
-  DEFINE("gcstats", gcstats);
-  DEFINE("short_gcstats", short_gcstats);
-  DEFINE("reset_gcstats!", reset_gcstats);
-  DEFINE("gc_generation", gc_generation);
-  DEFINE("gc_cmp", gc_cmp);
-  DEFINE("gc_hash", gc_hash);
+  DEFINE(gcstats);
+  DEFINE(short_gcstats);
+  DEFINE(reset_gcstats);
+  DEFINE(gc_generation);
+  DEFINE(gc_cmp);
+  DEFINE(gc_hash);
 #endif
 }

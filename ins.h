@@ -25,6 +25,7 @@
 typedef struct _label *label;
 typedef struct _fncode *fncode;
 
+#include "calloc.h"
 #include "code.h"
 
 fncode new_fncode(int toplevel);

@@ -20,27 +20,28 @@
  */
 
 #include <math.h>
+
 #include "runtime/runtime.h"
 #include "stringops.h"
 
-TYPEDOP(sqrt, "n1 -> n2. Returns square root of n1", 1, (value n),
+
+TYPEDOP(sqrt, 0, "`n1 -> `n2. Returns the truncated square root of the"
+        " non-negative integer `n1.", 1, (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
-  long x;
-
-  x = GETINT(n);
+  long x = GETINT(n);
   if (x < 0) runtime_error(error_bad_value);
 
   return makeint((long)sqrt((double)x));
 }
 
-TYPEDOP(isinteger, "x -> b. TRUE if x is an integer", 1, (value x),
+TYPEDOP(isinteger, "integer?", "`x -> `b. TRUE if `x is an integer", 1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(integerp(x));
 }
 
-OPERATION(plus, "n1 n2 -> n. n = n1 + n2", 2, (value v1, value v2),
+OPERATION(plus, "+", "`n1 `n2 -> `n. `n = `n1 + `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return ((value)((long)v1 + (long)v2 - 1));
@@ -50,7 +51,7 @@ OPERATION(plus, "n1 n2 -> n. n = n1 + n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(minus, "n1 n2 -> n. n = n1 - n2", 2, (value v1, value v2),
+OPERATION(minus, "-", "`n1 `n2 -> `n. `n = `n1 - `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return ((value)((long)v1 - (long)v2 + 1));
@@ -58,7 +59,7 @@ OPERATION(minus, "n1 n2 -> n. n = n1 - n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-TYPEDOP(negate, "n1 -> n2. n2 = -n1", 1, (value v),
+TYPEDOP(negate, 0, "`n1 -> `n2. `n2 = -`n1", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   if (integerp(v)) return ((value)(2 -(long)v));
@@ -66,7 +67,7 @@ TYPEDOP(negate, "n1 -> n2. n2 = -n1", 1, (value v),
   NOTREACHED;
 }
 
-OPERATION(times, "n1 n2 -> n. n = n1 * n2", 2, (value v1, value v2),
+OPERATION(times, "*", "`n1 `n2 -> `n. `n = `n1 * `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makeint(intval(v1) * intval(v2)));
@@ -74,7 +75,7 @@ OPERATION(times, "n1 n2 -> n. n = n1 * n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(divide, "n1 n2 -> n. n = n1 / n2", 2, (value v1, value v2),
+OPERATION(divide, "/", "`n1 `n2 -> `n. `n = `n1 / `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2))
@@ -86,7 +87,8 @@ OPERATION(divide, "n1 n2 -> n. n = n1 / n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(remainder, "n1 n2 -> n. n = remainder of division of n1 by n2",
+OPERATION(remainder, "%",
+          "`n1 `n2 -> `n. `n = remainder of division of `n1 by n2",
 	  2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
@@ -99,7 +101,7 @@ OPERATION(remainder, "n1 n2 -> n. n = remainder of division of n1 by n2",
   NOTREACHED;
 }
 
-TYPEDOP(modulo, "n1 n2 -> n. n = n1 mod n2", 2, (value v1, value v2),
+TYPEDOP(modulo, 0, "`n1 `n2 -> `n. `n = `n1 mod `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2))
@@ -116,7 +118,7 @@ TYPEDOP(modulo, "n1 n2 -> n. n = n1 mod n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(smaller, "n1 n2 -> b. TRUE if n1 < n2", 2, (value v1, value v2),
+OPERATION(smaller, "<", "`n1 `n2 -> `b. TRUE if `n1 < `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 < (long)v2));
@@ -124,7 +126,7 @@ OPERATION(smaller, "n1 n2 -> b. TRUE if n1 < n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(smaller_equal, "n1 n2 -> b. TRUE if n1 <= n2", 2, (value v1, value v2),
+OPERATION(smaller_equal, "<=", "`n1 `n2 -> `b. TRUE if `n1 <= `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 <= (long)v2));
@@ -132,7 +134,7 @@ OPERATION(smaller_equal, "n1 n2 -> b. TRUE if n1 <= n2", 2, (value v1, value v2)
   NOTREACHED;
 }
 
-OPERATION(greater, "n1 n2 -> b. TRUE if n1 > n2", 2, (value v1, value v2),
+OPERATION(greater, ">", "`n1 `n2 -> `b. TRUE if `n1 > `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 > (long)v2));
@@ -140,7 +142,7 @@ OPERATION(greater, "n1 n2 -> b. TRUE if n1 > n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(greater_equal, "n1 n2 -> b. TRUE if n1 >= n2", 2, (value v1, value v2),
+OPERATION(greater_equal, ">=", "`n1 `n2 -> `b. TRUE if `n1 >= `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 >= (long)v2));
@@ -148,7 +150,7 @@ OPERATION(greater_equal, "n1 n2 -> b. TRUE if n1 >= n2", 2, (value v1, value v2)
   NOTREACHED;
 }
 
-TYPEDOP(max, "n1 n2 -> n. n = max(n1, n2)", 2, (value v1, value v2),
+TYPEDOP(max, 0, "`n1 `n2 -> `n. `n = max(`n1, `n2)", 2, (value v1, value v2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   value max;
@@ -163,7 +165,7 @@ TYPEDOP(max, "n1 n2 -> n. n = max(n1, n2)", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-TYPEDOP(min, "n1 n2 -> n. n = min(n1, n2)", 2, (value v1, value v2),
+TYPEDOP(min, 0, "`n1 `n2 -> `n. `n = min(`n1, `n2)", 2, (value v1, value v2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   value min;
@@ -178,7 +180,7 @@ TYPEDOP(min, "n1 n2 -> n. n = min(n1, n2)", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-TYPEDOP(abs, "n1 -> n2. n2 = |n1|", 1, (value v),
+TYPEDOP(abs, 0, "`n1 -> `n2. `n2 = |`n1|", 1, (value v),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   ISINT(v);
@@ -186,7 +188,7 @@ TYPEDOP(abs, "n1 -> n2. n2 = |n1|", 1, (value v),
   return (v);
 }
 
-OPERATION(bitor, "n1 n2 -> n. n = n1 | n2", 2, (value v1, value v2),
+OPERATION(bitor, "|", "`n1 `n2 -> `n. `n = `n1 | `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return ((value)((long)v1 | (long)v2));
@@ -194,7 +196,7 @@ OPERATION(bitor, "n1 n2 -> n. n = n1 | n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(bitxor, "n1 n2 -> n. n = n1 ^ n2", 2, (value v1, value v2),
+OPERATION(bitxor, "^", "`n1 `n2 -> `n. `n = `n1 ^ `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return ((value)(((long)v1 ^ (long) v2) | 1));
@@ -202,7 +204,7 @@ OPERATION(bitxor, "n1 n2 -> n. n = n1 ^ n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(bitand, "n1 n2 -> n. n = n1 & n2", 2, (value v1, value v2),
+OPERATION(bitand, "&", "`n1 `n2 -> `n. `n = `n1 & `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return ((value)((long)v1 & (long)v2));
@@ -210,7 +212,7 @@ OPERATION(bitand, "n1 n2 -> n. n = n1 & n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(shift_left, "n1 n2 -> n. n = n1 << n2", 2, (value v1, value v2),
+OPERATION(shift_left, "<<", "`n1 `n2 -> `n. `n = `n1 << `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makeint(intval(v1) << intval(v2)));
@@ -218,7 +220,7 @@ OPERATION(shift_left, "n1 n2 -> n. n = n1 << n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(rotate_left, "n1 n2 -> n. n = n1 rotate left n2", 2,
+OPERATION(rotate_left, "rol", "`n1 `n2 -> `n. `n = `n1 rotate left `n2", 2,
 	  (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
@@ -235,7 +237,7 @@ OPERATION(rotate_left, "n1 n2 -> n. n = n1 rotate left n2", 2,
   return makeint((l1 << l2) | (l1 >> (31 - l2)));
 }
 
-OPERATION(rotate_right, "n1 n2 -> n. n = n1 rotate right n2", 2,
+OPERATION(rotate_right, "ror", "`n1 `n2 -> `n. `n = `n1 rotate right `n2", 2,
 	  (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
@@ -252,7 +254,7 @@ OPERATION(rotate_right, "n1 n2 -> n. n = n1 rotate right n2", 2,
   return makeint((l1 >> l2) | (l1 << (31 - l2)));
 }
 
-OPERATION(shift_right, "n1 n2 -> n. n = n1 >> n2", 2, (value v1, value v2),
+OPERATION(shift_right, ">>", "`n1 `n2 -> `n. `n = `n1 >> `n2", 2, (value v1, value v2),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v1) && integerp(v2)) return (makeint(intval(v1) >> intval(v2)));
@@ -260,7 +262,7 @@ OPERATION(shift_right, "n1 n2 -> n. n = n1 >> n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(bitnot, "n1 -> n2. n2 = ~n1", 1, (value v),
+OPERATION(bitnot, "~", "`n1 -> `n2. `n2 = ~`n1", 1, (value v),
 	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   if (integerp(v)) return ((value)(~(long)v | 1));
@@ -271,32 +273,32 @@ OPERATION(bitnot, "n1 -> n2. n2 = ~n1", 1, (value v),
 
 void arith_init(void)
 {
-  DEFINE("integer?", isinteger);
-  DEFINE("+", plus);
-  DEFINE("-", minus);
-  DEFINE("negate", negate);
-  DEFINE("*", times);
-  DEFINE("/", divide);
-  DEFINE("%", remainder);
-  DEFINE("modulo", modulo);
-  DEFINE("<", smaller);
-  DEFINE("<=", smaller_equal);
-  DEFINE(">", greater);
-  DEFINE(">=", greater_equal);
-  DEFINE("min", min);
-  DEFINE("max", max);
-  DEFINE("abs", abs);
-  DEFINE("|", bitor);
-  DEFINE("^", bitxor);
-  DEFINE("&", bitand);
-  DEFINE("<<", shift_left);
-  DEFINE(">>", shift_right);
-  DEFINE("~", bitnot);
+  DEFINE(isinteger);
+  DEFINE(plus);
+  DEFINE(minus);
+  DEFINE(negate);
+  DEFINE(times);
+  DEFINE(divide);
+  DEFINE(remainder);
+  DEFINE(modulo);
+  DEFINE(smaller);
+  DEFINE(smaller_equal);
+  DEFINE(greater);
+  DEFINE(greater_equal);
+  DEFINE(min);
+  DEFINE(max);
+  DEFINE(abs);
+  DEFINE(bitor);
+  DEFINE(bitxor);
+  DEFINE(bitand);
+  DEFINE(shift_left);
+  DEFINE(shift_right);
+  DEFINE(bitnot);
 
-  DEFINE("rol", rotate_left);
-  DEFINE("ror", rotate_right);
+  DEFINE(rotate_left);
+  DEFINE(rotate_right);
 
-  DEFINE("sqrt", sqrt);
+  DEFINE(sqrt);
 
   system_define("MAXINT", makeint(MAX_TAGGED_INT));
   system_define("MININT", makeint(MIN_TAGGED_INT));

@@ -22,11 +22,15 @@
 USE_XML       := yes
 USE_GMP       := yes
 USE_READLINE  := yes
-# USE_PCRE    := yes
-# PCRE_HEADER := PCRE_H		# for <pcre.h>
-# PCRE_HEADER := PCRE_PCRE_H	# for <pcre/pcre.h>
+# USE_PCRE    	:= yes
+# PCRE_HEADER 	:= PCRE_H	# for <pcre.h>
+# PCRE_HEADER 	:= PCRE_PCRE_H	# for <pcre/pcre.h>
+# USE_MINGW     := yes
+# USE_LPSOLVE   := yes
+# LPSOLVE_HEADER := LPKIT_LPKIT_H     # for <lpkit/lpkit.h>
+# LPSOLVE_HEADER := LP_SOLVE_LPKIT_H  # for <lp_solve/lpkit.h>
 
-export USE_XML USE_GMP USE_READLINE USE_PCRE
+export USE_XML USE_GMP USE_READLINE USE_PCRE USE_MINGW USE_LPSOLVE
 
 ifeq ($(shell uname -m),sun4u)
 BUILTINS=builtins.o
@@ -38,13 +42,13 @@ OBJS= compile.o env.o interpret.o objenv.o print.o table.o	\
 	tree.o types.o stack.o utils.o valuelist.o parser.o	\
 	lexer.o alloc.o global.o calloc.o mudlle.o ports.o	\
 	ins.o error.o mcompile.o module.o call.o context.o	\
-	$(BUILTINS) utils.charset.o
+	$(BUILTINS) charset.o
 
 SRC = $(filter-out x86builtins.c, $(OBJS:%.o=%.c))
 
 CC=gcc 
-CFLAGS := -g -O0 -Wall -Wshadow -Wwrite-strings -Wnested-externs	\
-	-Wunused -I.
+CFLAGS := -g -std=gnu99 -O0 -Wall -Wshadow -Wwrite-strings	\
+	-Wnested-externs -Wunused
 export CC
 export CFLAGS
 LDFLAGS := -lm
@@ -69,6 +73,17 @@ ifneq ($(USE_PCRE),)
 CFLAGS += -DUSE_PCRE -DHAVE_$(PCRE_HEADER)
 LDFLAGS += -lpcre
 endif
+
+ifneq ($(USE_LPSOLVE),)
+CFLAGS += -DHAVE_LIB_LPK -DHAVE_$(LPSOLVE_HEADER)
+LDFLAGS += -llpk -lfl -lm
+endif
+
+ifneq ($(USE_MINGW),)
+LDFLAGS += -lwsock32
+endif
+
+all: mudlle
 
 mudlle: $(OBJS) runlib
 	$(CC) -g -Wall -o mudlle $(OBJS) runtime/librun.a $(LDFLAGS)
@@ -113,15 +128,28 @@ parser.c: parser.y
 builtins.o: builtins.S
 	$(CC) -o builtins.o -c builtins.S
 
-x86builtins.o: x86builtins.S
+x86builtins.o: x86builtins.S x86consts.h
 	$(CC) -g -c x86builtins.S -o x86builtins.o
+
+x86consts.h: genconst
+	./genconst > $@
+
+genconst: genconst.o Makefile
+	$(CC) -g -Wall -o $@ $<
+
+genconst.o: genconstdefs.h
+
+CONSTH := types.h mvalues.h context.h error.h
+
+genconstdefs.h: $(CONSTH) runtime/consts.pl Makefile
+	perl runtime/consts.pl $(CONSTH) | grep '^ *\(/\*\|DEF\)' | sed 's/,$$/;/g' > $@
 
 .PHONY: dep depend
 dep depend: .depend
 	$(MAKE) -C runtime -f Makefile depend
 
-.depend: $(SRC)
-	$(MAKEDEPEND) $(CFLAGS) $(SRC) > .depend
+.depend: $(SRC) genconst.c genconstdefs.h
+	$(MAKEDEPEND) $(CFLAGS) $(SRC) genconst.c > .depend
 
 compiler:
 	/bin/sh install-compiler

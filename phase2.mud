@@ -21,7 +21,7 @@
 
 library phase2 // Phase 2: 3-address (not really) generation
 requires system, sequences, misc, compiler, vars, ins3
-defines mc:phase2
+defines mc:phase2, mc:inline_builtin_call
 reads mc:this_module
 writes mc:this_function, mc:lineno
 // See ins3.mud for details on these instructions
@@ -45,7 +45,7 @@ writes mc:this_function, mc:lineno
     builtin_branch_not, comp_undefined, comp_true, comp_false, vset, phase2,
     gen_clist, gen_component, gen_if, gen_while, gen_condition, make_bf,
     builtin_functions, builtin_branches, make_bb, make_btype, gen_abs_comp,
-    gen_list, gen_set_cxr!, vlist |
+    gen_list, gen_set_mem!, vlist, gen_const |
 
   vlist = mc:var_make_kglobal("list", global_lookup("list"));
 
@@ -79,7 +79,6 @@ writes mc:this_function, mc:lineno
       mc:ins_branch(fcode, mc:branch_ge, plab,
                     list(result, mc:var_make_constant(0)));
       mc:ins_compute(fcode, mc:b_negate, result, list(result));
-      mc:ins_branch(fcode, mc:branch_always, plab, null);
       mc:ins_label(fcode, plab);
       result
     ];
@@ -96,27 +95,36 @@ writes mc:this_function, mc:lineno
       result
     ];
 
-  gen_set_cxr! = fn (offset) fn (fcode, result, args)
+  gen_set_mem! = fn (offset, type) fn (fcode, result, args)
     [
       mc:ins_trap(fcode, mc:trap_type, error_bad_type,
-                  list(car(args), mc:var_make_constant(type_pair)));
+                  list(car(args), mc:var_make_constant(type)));
       mc:ins_memory(fcode, mc:memory_write_safe, car(args), offset,
                     cadr(args));
       mc:ins_assign(fcode, result, cundefined);
     ];
 
+  gen_const = fn (val) fn (fcode, result, args)
+    mc:ins_assign(fcode, result, mc:var_make_constant(val));
+
   builtin_functions = sequence
-    (make_bf("car",           mc:b_car,        1), 
-     make_bf("cdr",           mc:b_cdr,        1), 
-     make_bf("string_length", mc:b_slength,    1), 
-     make_bf("slength",       mc:b_slength,    1), 
-     make_bf("vector_length", mc:b_vlength,    1), 
-     make_bf("vlength",       mc:b_vlength,    1),
-     make_bf("typeof",        mc:b_typeof,     1),
-     make_bf("list",          gen_list,        -1),
-     make_bf("abs",           gen_abs_comp,    1),
-     make_bf("set_car!",      gen_set_cxr!(0), 2),
-     make_bf("set_cdr!",      gen_set_cxr!(1), 2));
+    (make_bf("car",            mc:b_car,                     1),  
+     make_bf("cdr",            mc:b_cdr,                     1),  
+     make_bf("string_length",  mc:b_slength,                 1),  
+     make_bf("slength",        mc:b_slength,                 1),  
+     make_bf("vector_length",  mc:b_vlength,                 1),  
+     make_bf("vlength",        mc:b_vlength,                 1),  
+     make_bf("typeof",         mc:b_typeof,                  1),  
+     make_bf("list",           gen_list,                     -1), 
+     make_bf("abs",            gen_abs_comp,                 1),      
+     make_bf("set_car!",       gen_set_mem!(0, type_pair),   2),  
+     make_bf("set_cdr!",       gen_set_mem!(1, type_pair),   2),  
+     make_bf("symbol_name",    mc:b_symbol_name,             1),
+     make_bf("symbol_get",     mc:b_symbol_get,              1),      
+     make_bf("symbol_set!",    gen_set_mem!(1, type_symbol), 2),
+     make_bf("compiled?",      gen_const(true),              0),  
+     make_bf("loop_count",     mc:b_loop_count,              0),  
+     make_bf("max_loop_count", mc:b_max_loop_count,          0));     
 
   make_bb = fn (name, op, notop, nargs)
     sequence(mc:var_make_kglobal(name, global_lookup(name)), nargs, op, notop);
@@ -173,6 +181,22 @@ writes mc:this_function, mc:lineno
 
   mc:phase2 = fn (mod)
     mod[mc:m_body] = phase2(mod[mc:m_body]);
+
+  mc:inline_builtin_call = fn (il)
+    [
+      | ins, args, result, function, bf |
+
+      ins = il[mc:il_ins];
+      assert(ins[mc:i_class] == mc:i_call);
+      args = ins[mc:i_cargs];
+      result = ins[mc:i_cdest];
+      function = car(args);
+
+      if ((bf = builtin_call?(function, args, builtin_functions)) &&
+          !function?(bf[2]))
+        il[mc:il_ins] = vector(mc:i_compute, bf[2], result, cdr(args),
+                               false);
+    ];
 
   phase2 = fn (top)
     // Returns: intermediate rep of function top
@@ -299,8 +323,8 @@ writes mc:this_function, mc:lineno
       else if (class == mc:c_exit)
 	[
 	  if (!mc:exit_block(fcode, c[mc:c_ename], gen_clist(fcode, c[mc:c_eexpression])))
-	    if (c[mc:c_ename] == null) mc:error("No loop to exit from")
-	    else mc:error("No block labeled %s", c[mc:c_ename]);
+	    if (c[mc:c_ename] == null) mc:error("no loop to exit from")
+	    else mc:error("no block labeled %s", c[mc:c_ename]);
 	  cundefined // but an exit never returns ...
 	]
       else if (class == mc:c_builtin)

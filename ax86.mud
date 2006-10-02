@@ -291,7 +291,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
       m = car(arg);
       m == x86:limm || m == x86:lglobal_constant || m == x86:lfunction ||
-      m == x86:lcst
+      m == x86:lcst || m == x86:lclosure
     ];
   immediate8? = fn (arg) car(arg) == x86:limm && byte?(immval8(arg));
 
@@ -304,11 +304,11 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
   byte_reg? = fn (arg) !register?(arg) || regval(arg) <= x86:reg_ebx;
 
+  // Returns: The size of the encoding of effective address 'arg'
   easize = fn (arg)
-    // Returns: The size of the encoding of effective address 'arg'
     [
       | m, a |
-
+      
       m = car(arg); a = cdr(arg);
       if (m == x86:lreg) 1
       else if (m == x86:lidx)
@@ -338,7 +338,9 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	]
       else if (m == x86:lqidx)
 	6
-      else if (m == x86:lprimitive || m == x86:lspecial || m == x86:lglobal) 5
+      else if (m == x86:lprimitive || m == x86:lspecial || m == x86:lglobal
+               || m == x86:lclosure)
+        5
       else fail();
     ];
 
@@ -359,7 +361,11 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   isize[x86:op_jmp32] = fn (a1, a2) 5;
   isize[x86:op_jcc] = fn (a1, a2) 2;
   isize[x86:op_jcc32] = fn (a1, a2) 6;
-  isize[x86:op_lea] = fn (a1, a2) 1 + easize(a1);
+  isize[x86:op_lea] = fn (a1, a2)
+    if (car(a1) == x86:lspecial)
+      5
+    else
+      1 + easize(a1);
 
   isize[x86:op_mov] = fn (a1, a2)
     if (imm_zero?(a1) && register?(a2))
@@ -532,10 +538,17 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
     ];
 
   igen[x86:op_lea] = fn (code, a1, a2, o, info)
-    [
-      code[o] = 0x8d;
-      setea1(code, o + 1, regval(a2), a1, info);
-    ];
+    if (car(a1) == x86:lspecial)
+      [
+        assert(register?(a2));
+        code[o] = 0xb8 | regval(a2);
+        setimm(code, o + 1, a1, info);
+      ]
+    else
+      [
+        code[o] = 0x8d;
+        setea1(code, o + 1, regval(a2), a1, info);
+      ];
 
   igen[x86:op_mov] = fn (code, a1, a2, o, info)
     if (imm_zero?(a1) && register?(a2))
@@ -901,6 +914,11 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	info[mc:a_constants] = (a . o) . info[mc:a_constants]
       else if (m == x86:lfunction)
 	info[mc:a_subfns] = (a . o) . info[mc:a_subfns]
+      else if (m == x86:lclosure)
+        // negative offset is parsed by link() and converted into a closure
+	info[mc:a_subfns] = (a . -o) . info[mc:a_subfns]
+      else if (m == x86:lspecial)
+        info[mc:a_builtins] = (a . o) . info[mc:a_builtins]
       else if (m == x86:limm)
 	[
 	  if (pair?(a)) // 2*n or 2*n+1

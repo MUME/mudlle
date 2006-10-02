@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef XML_H
-#define XML_H
+#ifndef MXML_H
+#define MXML_H
 
 #ifdef USE_XML
 enum xml_node {

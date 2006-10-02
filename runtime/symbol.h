@@ -22,6 +22,8 @@
 #ifndef SYMBOL_H
 #define SYMBOL_H
 
+#include "../types.h"
+
 
 value code_table_ref(struct table *tab, struct string *s);
 value code_table_set(struct table *tab, struct string *s, value c);

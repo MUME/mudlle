@@ -19,9 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "mudlle.h"
 #include "ins.h"
-#include "code.h"
 #include "alloc.h"
 #include "runtime/runtime.h"
 #include "builtins.h"
@@ -92,10 +90,12 @@ static void add_ins(instruction ins, fncode fn)
   fn->next_label = NULL;
 }
 
+extern int lineno;
+
 void set_lineno(int line, fncode fn)
 {
   if (line)
-    fn->lineno = line;
+    lineno = fn->lineno = line;
 }
 
 void adjust_depth(int by, fncode fn)

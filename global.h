@@ -22,7 +22,6 @@
 #ifndef GLOBAL_H
 #define GLOBAL_H
 
-#include "mvalues.h"
 #include "objenv.h"
 
 extern struct env *environment;

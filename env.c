@@ -20,10 +20,7 @@
  */
 
 #include <string.h>
-#include "mudlle.h"
-#include "tree.h"
 #include "env.h"
-#include "ins.h"
 #include "global.h"
 
 struct locals_list

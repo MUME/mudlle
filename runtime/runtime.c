@@ -40,6 +40,7 @@
 #include "bitset.h"
 #include "debug.h"
 #include "xml.h"
+#include "context.h"
 
 #ifdef AMIGA
 #include <dos.h>
@@ -116,14 +117,12 @@ void define_int_vector(const char *name, const int *vec, int count)
   system_define(name, v);
 }
 
-void runtime_define(const char *name, struct primitive_ext *op)
+void runtime_define(const struct primitive_ext *op)
 {
   const char *const *type;
 
   struct primitive *prim;
   char bname[MAXNAME];
-
-  op->name = name;
 
   assert(op->nargs <= MAX_PRIMITIVE_ARGS);
 
@@ -135,10 +134,12 @@ void runtime_define(const char *name, struct primitive_ext *op)
       char *period = strchr(*type, '.');
       char *star = strchr(*type, '*');
       int args;
+
       /* all type specifications have to have a period in them, with 0
          or 1 characters after it! */
       assert(period);
       assert(period[1] == 0 || period[2] == 0);
+
       if (op->nargs >= 0)
         {
           args = period - *type;
@@ -152,6 +153,13 @@ void runtime_define(const char *name, struct primitive_ext *op)
           assert(star + 1 == period);
           assert(op->nargs < 0);
         }
+
+      static const char allowed[] = "fnsvlktyxo123456789S";
+      for (const char *p = *type; p < (star ? star : period); ++p)
+        assert(strchr(allowed, *p));
+
+      if (period[1])
+        assert(strchr(allowed, period[1]));
     }
 
  no_types:
@@ -159,14 +167,15 @@ void runtime_define(const char *name, struct primitive_ext *op)
   if (binops)
     {
       bname[MAXNAME - 1] = '\0';
-      strncpy(bname, name, MAXNAME - 1);
+      strncpy(bname, op->name, MAXNAME - 1);
       fwrite(bname, MAXNAME, 1, binops);
     }
 
   if (op->seclevel > 0)
     {
       prim = alloc_secure(op_count++, op);
-      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", name, op->help, op->seclevel);
+      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", op->name, op->help, 
+                       op->seclevel);
     }
   else
     {
@@ -177,9 +186,9 @@ void runtime_define(const char *name, struct primitive_ext *op)
           prim->o.type = type_varargs;
           assert(~op->flags & OP_NOALLOC);
         }
-      if (ops) fprintf(ops, "%-20s %s\n", name, op->help);
+      if (ops) fprintf(ops, "%-20s %s\n", op->name, op->help);
     }
-  system_define(name, prim);
+  system_define(op->name, prim);
 }
 
 #ifdef MUDLLE_INTERRUPT
@@ -269,12 +278,15 @@ void got_real_segv(int sig)
 
 static INLINE void check_segv(int sig, struct sigcontext *scp)
 {
-  ubyte *eip = (ubyte *)scp->eip;
+  const ubyte *eip = (const ubyte *)scp->eip;
 
-  /* Check if it was a cmpb $imm,object_type(reg) */
-  if (eip[0] == 0x80 &&
-      (eip[1] & 0xf8) == 0x78 &&
-      eip[2] == 5)		/* offsetof(struct obj, type) */
+  if ((eip[0] == 0x80           /* cmpb $imm,object_type(reg) */
+       && (eip[1] & 0xf8) == 0x78
+       && eip[2] == 5)          /* offsetof(struct obj, type) */
+      || (eip[0] == 0x0f        /* movzbl object_type(%ecx),%eax */
+          && eip[1] == 0xb6
+          && (eip[2] & 0xc0) == 0x40
+          && eip[3] == 5))      /* offsetof(struct obj, type) */
     {
       /* mudlle code */
       if (eip  >= gcblock && eip < gcblock + gcblocksize)
@@ -481,11 +493,15 @@ void runtime_init(void)
     act.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
     sigemptyset(&act.sa_mask);
     sigaction(SIGINT, &act, NULL);
+#ifdef SIGQUIT
     sigaction(SIGQUIT, &act, NULL);
+#endif
   }    
 #else
   signal(SIGINT, catchint);
+#ifdef SIGQUIT
   signal(SIGQUIT, catchint);
+#endif
 #endif
 #endif
 
@@ -550,6 +566,8 @@ void runtime_init(void)
   pattern_init();
   mudlle_consts_init();
   xml_init();
+#if 0
+#endif
   module_set("system", module_protected, 0);
   if (ops) fclose(ops);
   if (binops) fclose(binops);

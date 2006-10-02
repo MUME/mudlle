@@ -58,6 +58,10 @@
 #  define GCDEBUG_CHECK
 #endif
 
+#ifdef linux
+#  define HAVE_ALLOCA_H
+#endif
+
 #ifdef AMIGA
 #  define HAVE_MEMMOVE
 #endif
@@ -137,10 +141,22 @@
 #endif /* linux */
 
 #ifdef __CYGWIN__
+#  define HAVE_ALLOCA_H
 #  define NOCOMPILER
 #  define nosigsetjmp setjmp
 #  define nosiglongjmp longjmp
 #endif /* __CYGWIN__ */
+
+#ifdef WIN32
+#  define NOCOMPILER
+#  define HAVE_MALLOC_H
+#  define nosigsetjmp setjmp
+#  define nosiglongjmp longjmp
+#  define htonl __ntohl
+#  define ntohl __ntohl
+#  define ntohs __ntohs
+#  define htons __ntohs
+#endif /* WIN32 */
 
 #ifdef AMIGA
 #  define HAVE_ALLOCA_H
@@ -154,6 +170,7 @@
 #define MAX_CALLS 100000       /* Max # of calls executed / interpret */
 #define MAX_RECURSION 10000    /* Max # recursion depth / interpret */
 
-#define MAX_FAST_CALLS 1000000 /* Max # of faster calls (machine code) */
+/* max # of faster calls (machine code) */
+#  define MAX_FAST_CALLS 0
 
-#endif
+#endif /* OPTIONS_H */

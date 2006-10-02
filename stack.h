@@ -23,7 +23,6 @@
 #define STACK_H
 
 #include "mudio.h"
-#include "mvalues.h"
 
 extern struct env *stack;
 

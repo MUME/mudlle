@@ -22,18 +22,16 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "mudlle.h"
 #include "alloc.h"
-#include "types.h"
 #include "code.h"
 #include "stack.h"
 #include "global.h"
-#include "print.h"
 #include "error.h"
 #include "runtime/runtime.h"
 #include "runtime/stringops.h"
 #include "runtime/basic.h"
 #include "builtins.h"
+#include "context.h"
 
 /* Function contexts */
 /* ----------------- */
@@ -54,7 +52,7 @@ long exception_signal;
 value exception_value;
 struct catch_context *exception_context;
 
-int mcatch(void (*fn)(void *x), void *x, int display_error)
+int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
 {
   struct catch_context context;
   int ok;
@@ -67,7 +65,7 @@ int mcatch(void (*fn)(void *x), void *x, int display_error)
   GCPRO1(context.old_activation_stack);
 #endif
 
-  context.display_error = display_error;
+  context.call_trace_mode = call_trace_mode;
 
   context.occontext = ccontext;
   context.old_gcpro = gcpro;
@@ -196,7 +194,7 @@ void session_start(struct session_context *context,
   context->old_minlevel = minlevel;
   minlevel = new_minlevel;
   context->old_xcount = xcount;
-  xcount = 0;			/* High limit with standalone version */
+  xcount = MAX_FAST_CALLS;	/* counter for machine code */
 
 #ifdef i386
   context->old_stack_limit = mudlle_stack_limit;
@@ -249,45 +247,22 @@ void add_call_trace(value v, int unhandled_only)
 
 void remove_call_trace(value v)
 {
-  struct list *prev, *this;
-  struct gcpro gcpro1, gcpro2, gcpro3;
-
-  prev = NULL;
-  this = mudcalltrace;
-
-  GCPRO2(prev, this);
-  GCPRO(gcpro3, v);
-
-  while (this)
+  for (struct list **this = &mudcalltrace;
+       *this;
+       this = (struct list **)&(*this)->cdr)
     {
-      struct list *elem = this->car;
+      struct list *elem = (*this)->car;
       assert(TYPE(elem, type_pair));
-
       if (elem->car == v)
-	{
-	  if (prev == NULL)
-	    mudcalltrace = this->cdr;
-	  else
-	    prev->cdr = this->cdr;
-	  break;
-	}
-
-      prev = this;
-      this = this->cdr;
+        {
+          *this = (*this)->cdr;
+          break;
+        }
     }
-
-  UNGCPRO();
 }
 
 void context_init(void)
 {
-#if 0
-  FILE *ctfile = fopen("mudlle-calltraces.txt", "w");
-  mudcalltrace = alloc_list(alloc_list(make_file_outputport(ctfile), 0), NULL);
-#else
-  mudcalltrace = NULL;
-#endif
-
   staticpro(&exception_value);
   staticpro((value *)&mudcalltrace);
   reset_context();

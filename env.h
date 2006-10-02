@@ -23,7 +23,6 @@
 #define ENV_H
 
 #include "tree.h"
-#include "code.h"
 #include "ins.h"
 
 /* if you change this, make sure to fix the lexer too */

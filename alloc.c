@@ -19,7 +19,6 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "mudlle.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -27,10 +26,11 @@
 #include <unistd.h>
 #include <setjmp.h>
 #include <stddef.h>
-#include <netinet/in.h>
+#ifndef WIN32
+#  include <netinet/in.h>
+#endif
 #include "alloc.h"
 #include "utils.h"
-#include "types.h"
 #include "runtime/basic.h"
 #include "builtins.h"
 #include "context.h"
@@ -332,6 +332,7 @@ INLINE static ubyte *scan(ubyte *ptr)
       if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
       if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
       if (pointerp(code->lineno_data)) special_forward((struct obj **)&code->lineno_data);
+      if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
       c = code->constants;
       cend = code->constants + code->nb_constants;
       while (c < cend)
@@ -1392,6 +1393,7 @@ void save_restore(struct obj *obj)
 	  save_restore((struct obj *)code->filename);
 	  save_restore((struct obj *)code->varname);
 	  save_restore((struct obj *)code->lineno_data);
+	  save_restore((struct obj *)code->arg_types);
 	  i = code->nb_constants;
 	  c = (value *)&code->constants;
 	  while (i) { --i; save_restore(*c++); }
@@ -1968,6 +1970,7 @@ static INLINE void scan_mcode(struct mcode *code)
   if (pointerp(code->help)) special_forward((struct obj **)&code->help);
   if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
   if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
+  if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
 
@@ -2020,6 +2023,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
   save_restore((struct obj *)code->help);
   save_restore((struct obj *)code->varname);
   save_restore((struct obj *)code->filename);
+  save_restore((struct obj *)code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)((char *)mcode + code->code_length);
@@ -2175,6 +2179,7 @@ static INLINE void scan_mcode(struct mcode *code)
   if (pointerp(code->help)) special_forward((struct obj **)&code->help);
   if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
   if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
+  if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2196,6 +2201,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
   save_restore((struct obj *)code->help);
   save_restore((struct obj *)code->varname);
   save_restore((struct obj *)code->filename);
+  save_restore((struct obj *)code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2341,6 +2347,7 @@ static INLINE void scan_mcode(struct mcode *code)
   if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
   if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
   if (pointerp(code->linenos)) special_forward((struct obj **)&code->linenos);
+  if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2374,6 +2381,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
   save_restore((struct obj *)code->varname);
   save_restore((struct obj *)code->filename);
   save_restore((struct obj *)code->linenos);
+  save_restore((struct obj *)code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));

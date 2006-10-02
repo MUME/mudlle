@@ -24,6 +24,7 @@
 
 #include <stdio.h>
 #include "calloc.h"
+#include "types.h"
 
 extern block_t parser_memory;
 
@@ -178,11 +179,12 @@ typedef struct {
   vlist reads;
   vlist writes;
   block body;
+  int lineno;
 } *mfile;
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
-	       block body);
+	       block body, int lineno);
 function new_function(block_t heap, mtype type, str_and_len_t help,
                       vlist args, component val, int lineno,
                       const char *filename);
@@ -223,7 +225,7 @@ component new_xor_component(block_t heap, component e0, component e1);
 component new_postfix_inc_component(block_t heap, const char *var, int op);
 
 #ifdef PRINT_CODE
-void print_file(FILE *out, mfile f);
+void print_mudlle_file(FILE *out, mfile f);
 #endif
 
 clist append_clist(clist l1, clist l2);

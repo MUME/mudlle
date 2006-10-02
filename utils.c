@@ -19,58 +19,67 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "mudlle.h"
-#include "mudio.h"
-#include "utils.h"
-#  include "options.h"
+
+#include "compile.h"
+#include "context.h"
 
 extern int lineno;
 extern const char *filename;
 
 int erred;
 
-void log_error(const char *msg, ...)
+static void vlog_error(const char *fname, int line, 
+                       const char *msg, va_list va)
 {
-  va_list args;
-  char err[4096];
+  char err[4096], *p = err;
 
-  va_start(args, msg);
-  vsprintf(err, msg, args);
-  va_end(args);
+  if (fname == NULL)
+    ;
+  else if (line > 0)
+    p += sprintf(p, "%s:%d: ", fname, line);
+  else
+    p += sprintf(p, "%s: ", fname);
+  vsprintf(p, msg, va);
   if (mudout) mflush(mudout);
   mprintf(muderr, "%s" EOL, err);
   if (muderr) mflush(muderr);
   erred = 1;
 }
 
+void log_error(const char *msg, ...)
+{
+  va_list args;
+  va_start(args, msg);
+  vlog_error(this_mfile && this_mfile->body ? this_mfile->body->filename : NULL,
+             lineno, msg, args);
+  va_end(args);
+}
+
 void compile_error(const char *msg, ...)
 {
   va_list args;
-  char err[4096];
-
   va_start(args, msg);
-  vsprintf(err, msg, args);
+  vlog_error(filename, lineno, msg, args);
   va_end(args);
-  if (mudout) mflush(mudout);
-  mprintf(muderr, "%s:%d: %s" EOL, filename, lineno, err);
-  if (muderr) mflush(muderr);
-  erred = 1;
 }
 
 static void vwarning(const char *fname, int line, const char *msg, va_list args)
 {
   char err[4096];
 
-  vsprintf(err, msg, args);
+  vsnprintf(err, sizeof err, msg, args);
   if (mudout) mflush(mudout);
-  if (fname && line >= 0)
+
+  if (fname == NULL)
+    mprintf(muderr, "warning: %s" EOL, err);
+  else if (line > 0)
     mprintf(muderr, "%s:%d: warning: %s" EOL, fname, line, err);
   else
-    mprintf(muderr, "warning: %s" EOL, err);
+    mprintf(muderr, "%s: warning: %s" EOL, fname, err);
+
   if (muderr) mflush(muderr);
 }
 

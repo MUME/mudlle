@@ -36,4 +36,4 @@ enum {
 
 void io_init(void);
 
-#endif
+#endif /* IO_H */

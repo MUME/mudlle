@@ -21,17 +21,19 @@
 
 #include <time.h>
 #ifndef AMIGA
-#include <sys/time.h>
-#include <sys/resource.h>
+#  include <sys/time.h>
+#  ifndef WIN32
+#    include <sys/resource.h>
+#  endif
 #endif
 
 #include "runtime/runtime.h"
-#include "print.h"
 #include "utils.h"
 #include "mparser.h"
 #include "interpret.h"
 #include "call.h"
 #include "io.h"
+#include "context.h"
 
 
 static struct oport *get_oport(struct oport *oport)
@@ -41,14 +43,14 @@ static struct oport *get_oport(struct oport *oport)
   return NULL;
 }
 
-TYPEDOP(print, "x -> . Print a representation of x", 1, (value v),
+TYPEDOP(print, "write", "`x -> . Print a representation of `x", 1, (value v),
         OP_LEAF | OP_NOESCAPE, "x.")
 {
   mprint(mudout, prt_print, v);
   undefined();
 }
 
-TYPEDOP(newline, " -> . Print a newline", 0, (void),
+TYPEDOP(newline, 0, " -> . Print a newline", 0, (void),
         OP_LEAF | OP_NOESCAPE, ".")
 {
   mputs(EOL, mudout);
@@ -56,22 +58,29 @@ TYPEDOP(newline, " -> . Print a newline", 0, (void),
   undefined();
 }
 
-TYPEDOP(display, "x -> . Display a representation of x", 1, (value v),
+TYPEDOP(stdout, 0, " -> `port. Returns the standard output port.",
+        0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".o")
+{
+  return mudout;
+}
+
+TYPEDOP(display, 0, "`x -> . Display a representation of `x", 1, (value v),
         OP_LEAF | OP_NOESCAPE, "x.")
 {
   mprint(mudout, prt_display, v);
   undefined();
 }
 
-TYPEDOP(examine, "x -> . Examine a representation of x", 1, (value v),
+TYPEDOP(examine, 0, "`x -> . Examine a representation of `x", 1, (value v),
         OP_LEAF | OP_NOESCAPE, "x.")
 {
   mprint(mudout, prt_examine, v);
   undefined();
 }
 
-TYPEDOP(ctime,
-	" -> n. Returns the number of milliseconds of cpu time (use difference only)",
+#ifndef WIN32
+TYPEDOP(ctime, 0, " -> `n. Returns the number of milliseconds of CPU"
+        " time (use difference only)",
 	0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
@@ -90,18 +99,20 @@ TYPEDOP(ctime,
   return (makeint(1000 * usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000));
 #endif
 }
+#endif
 
 
-TYPEDOP(time,
-	" -> n. Returns the number of seconds since the 1st of January 1970 GMT",
+TYPEDOP(time, 0,
+	" -> `n. Returns the number of seconds since the 1st of January"
+        " 1970 GMT",
 	0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return makeint(time(NULL));
 }
 
-TYPEDOP(time_afterp,
-	"n0 n1 -> b. Returns true if time n0 is after time n1",
+TYPEDOP(time_afterp, "time_after?",
+	"`n0 `n1 -> `b. Returns true if time `n0 is after time `n1",
 	2, (value t0, value t1),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
@@ -119,22 +130,23 @@ static value _mktime(value t, struct tm *(*convert)(const time_t *time))
   timeval = uintval(t);
 
   tm = convert(&timeval);
-  vtm = alloc_vector(8);
-  vtm->data[0] = makeint(tm->tm_sec);
-  vtm->data[1] = makeint(tm->tm_min);
-  vtm->data[2] = makeint(tm->tm_hour);
-  vtm->data[3] = makeint(tm->tm_mday);
-  vtm->data[4] = makeint(tm->tm_mon);
-  vtm->data[5] = makeint(tm->tm_year);
-  vtm->data[6] = makeint(tm->tm_wday);
-  vtm->data[7] = makeint(tm->tm_yday);
+  vtm = alloc_vector(time_fields);
+  vtm->data[tm_sec]  = makeint(tm->tm_sec);
+  vtm->data[tm_min]  = makeint(tm->tm_min);
+  vtm->data[tm_hour] = makeint(tm->tm_hour);
+  vtm->data[tm_mday] = makeint(tm->tm_mday);
+  vtm->data[tm_mon]  = makeint(tm->tm_mon);
+  vtm->data[tm_year] = makeint(tm->tm_year);
+  vtm->data[tm_wday] = makeint(tm->tm_wday);
+  vtm->data[tm_yday] = makeint(tm->tm_yday);
 
   return vtm;
 }
 
-TYPEDOP(gmtime,
-	"n -> v. Converts time in seconds to a vector of GMT time information"
-        " [ sec, min, hour, mday, mon, year, wday, yday]",
+TYPEDOP(gmtime, 0,
+	"`n -> `v. Converts time in seconds `n, as returned by `time(),"
+        " to a vector of GMT time information, indexed by the `tm_xxx"
+        " constants: [ `sec `min `hour `mday `mon `year `wday `yday ]",
 	1, (value t),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
@@ -142,8 +154,8 @@ TYPEDOP(gmtime,
   return _mktime(t, gmtime);
 }
 
-TYPEDOP(localtime,
-	"n -> v. Converts time in seconds to a vector of local time"
+TYPEDOP(localtime, 0,
+	"`n -> `v. Converts time in seconds to a vector of local time"
 	" information",
 	1, (value t),
 	OP_LEAF | OP_NOESCAPE, "n.v")
@@ -175,9 +187,9 @@ static void get_tm_struct(struct tm *tm, struct vector *v)
 #endif
 }
 
-TYPEDOP(asctime,
-       "v -> s. Makes a string representing a particular date, as returned"
-	" by gmtime(). Cf. the tm_xxx constants.",
+TYPEDOP(asctime, 0,
+       "`v -> `s. Makes a string representing a particular date, as returned"
+	" by `gmtime(3). Cf. the `tm_xxx constants.",
 	1, (struct vector *vgmt),
 	OP_LEAF | OP_NOESCAPE, "v.s")
 {
@@ -186,9 +198,9 @@ TYPEDOP(asctime,
   return alloc_string(asctime(&gmt));
 }
 
-TYPEDOP(strftime,
-	"s v -> s. Convert a gmtime vector into text, as specified by a"
-	" strftime format string. Returns false on error.",
+TYPEDOP(strftime, 0,
+	"`s `v -> `s. Convert a gmtime vector into text, as specified by a"
+	" `strftime(3) format string. Returns false on error.",
 	2, (struct string *fmt, struct vector *vgmt),
 	OP_LEAF | OP_NOESCAPE, "sv.S")
 {
@@ -209,10 +221,10 @@ TYPEDOP(strftime,
   return makeint(0);
 }
 
-TYPEDOP(with_output, "oport fn -> x. Evaluates fn() with output sent"
-        " to port.\n"
-        "If p is not a port, just evaluates fn() (no error).\n"
-        "Output is restored when done. Returns the result of fn()",
+TYPEDOP(with_output, 0, "`oport `f -> `x. Evaluates `f() with output sent"
+        " to port."
+        " If `p is not a port, just evaluates `f() (no error)."
+        " Output is restored when done. Returns the result of `f()",
         2, (value out, value code),
         0, "xf.x")
 {
@@ -236,10 +248,10 @@ TYPEDOP(with_output, "oport fn -> x. Evaluates fn() with output sent"
   return result;
 }
 
-UNSAFEOP(with_output_file,
-	 "s b f -> . Evaluates fn() with output appended to file s. "
-	 "If b is false, send all call traces to the file; otherwise, "
-	 "only send unhandled ones",
+UNSAFEOP(with_output_file, 0,
+	 "`s `b `f -> `x. Evaluates `f() with output appended to file `s. "
+	 "If `b is false, send all call traces to the file; otherwise, "
+	 "only send unhandled ones. Returns the result of `f().",
 	 3, (struct string *file, value unhandled_only, value code),
 	 0)
 {
@@ -282,55 +294,58 @@ UNSAFEOP(with_output_file,
 static void pformat(struct oport *p, struct string *str,
 		    struct vector *args, int i, int nargs)
 {
-  ulong l, spos;
   struct gcpro gcpro1, gcpro2, gcpro3;
+  ulong l, spos;
 
   GCPRO3(args, str, p);
 
   l = string_len(str);
   spos = 0;
   while (spos < l)
-    if (str->str[spos] == '%')
-      {
-	spos++;
-	if (spos == l) runtime_error(error_bad_value);
-	switch (str->str[spos])
-	  {
-	  default: runtime_error(error_bad_value);
-	  case '%': pputc('%', p); break;
-	  case 'c':
-	    if (i >= nargs) runtime_error(error_wrong_parameters);
-	    ISINT(args->data[i]);
-	    pputc(intval(args->data[i++]), p);
-	    break;
-	  case 'n': pputs(EOL, p); break;
-	  case 'p':
-	    if (i >= nargs) runtime_error(error_wrong_parameters);
-	    ISINT(args->data[i]);
-	    if (intval(args->data[i++]) != 1) pputc('s', p);
-	    break;
-	  case 'P':
-	    if (i >= nargs) runtime_error(error_wrong_parameters);
-	    ISINT(args->data[i]);
-	    if (intval(args->data[i++]) != 1) pputs("ies", p);
-	    else pputc('y', p);
-	    break;
-	  case 's':
-	    if (i >= nargs) runtime_error(error_wrong_parameters);
-	    output_value(p, prt_display, args->data[i++]);
-	    break;
-	  case 'w':
-	    if (i >= nargs) runtime_error(error_wrong_parameters);
-	    output_value(p, prt_print, args->data[i++]);
-	    break;
-	  }
-	spos++;
-      }
-    else
-      {
-	pputc(str->str[spos], p);
-	spos++;
-      }
+    {
+      char *percent = memchr(str->str + spos, '%', l - spos);
+
+      if (percent == NULL)
+        {
+          pswrite(p, str, spos, l - spos);
+          break;
+        }
+
+      pswrite(p, str, spos, percent - str->str - spos);
+
+      spos = percent - str->str + 1;
+      switch (str->str[spos])
+        {
+        default: runtime_error(error_bad_value);
+        case '%': pputc('%', p); break;
+        case 'c':
+          if (i >= nargs) runtime_error(error_wrong_parameters);
+          ISINT(args->data[i]);
+          pputc(intval(args->data[i++]), p);
+          break;
+        case 'n': pputs(EOL, p); break;
+        case 'p':
+          if (i >= nargs) runtime_error(error_wrong_parameters);
+          ISINT(args->data[i]);
+          if (intval(args->data[i++]) != 1) pputc('s', p);
+          break;
+        case 'P':
+          if (i >= nargs) runtime_error(error_wrong_parameters);
+          ISINT(args->data[i]);
+          if (intval(args->data[i++]) != 1) pputs("ies", p);
+          else pputc('y', p);
+          break;
+        case 's':
+          if (i >= nargs) runtime_error(error_wrong_parameters);
+          output_value(p, prt_display, args->data[i++]);
+          break;
+        case 'w':
+          if (i >= nargs) runtime_error(error_wrong_parameters);
+          output_value(p, prt_print, args->data[i++]);
+          break;
+        }
+      spos++;
+    }
 
   if (i != nargs) runtime_error(error_wrong_parameters);
 
@@ -339,10 +354,10 @@ static void pformat(struct oport *p, struct string *str,
 
 static const typing pformat_tset = { "osx*.", NULL };
 
-FULLOP(pformat, 
-       "oport s x1 x2 ... -> . Outputs formatted string s to port,"
-       " with parameters x1, ... See format() for syntax. Does nothing if"
-       " oport is not an outout port.",
+FULLOP(pformat, 0, 
+       "`oport `s `x1 `x2 ... -> . Outputs formatted string `s to `oport,"
+       " with parameters `x1, ... See `format() for syntax. Does nothing if"
+       " `oport is not an output port.",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
        pformat_tset, /* extern */)
 {
@@ -368,16 +383,16 @@ FULLOP(pformat,
 
 static const typing format_tset = { "sx*.s", NULL };
 
-FULLOP(format, 
-      "s x1 x2 ... -> s. Formats string s with parameters x1, ..." EOL
+FULLOP(format, 0, 
+      "`s `x1 `x2 ... -> `s. Formats string `s with parameters `x1, ..." EOL
       "Special entries are %x, where x can be:" EOL
-      "  %   a % sign" EOL
-      "  c   the character in the next parameter (an int)" EOL
-      "  n   end of line" EOL
-      "  p   if the next param is 1 \"\", else \"s\"" EOL
-      "  P   if the next param is 1 \"y\", else \"ies\"" EOL
-      "  s   a string repr. of the next param (like display)" EOL
-      "  w   a string repr. of the next param (like write)",
+      "  %   \ta % sign" EOL
+      "  c   \tthe character in the next parameter (an int)" EOL
+      "  n   \tend of line" EOL
+      "  p   \tif the next param is 1 \"\", else \"s\"" EOL
+      "  P   \tif the next param is 1 \"y\", else \"ies\"" EOL
+      "  s   \ta string repr. of the next param (like display)" EOL
+      "  w   \ta string repr. of the next param (like write)",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
        format_tset, /* extern */)
 {
@@ -400,8 +415,8 @@ FULLOP(format,
   return str;
 }
 
-OPERATION(pputc, "oport n -> . Print character n to output port oport."
-          " Does nothing if oport is not an output port.",
+OPERATION(pputc, 0, "`oport `n -> . Print character `n to output port `oport."
+          " Does nothing if `oport is not an output port.",
           2, (struct oport *p, value mchar), OP_LEAF)
 {
   p = get_oport(p);
@@ -412,8 +427,8 @@ OPERATION(pputc, "oport n -> . Print character n to output port oport."
   undefined();
 }
 
-TYPEDOP(pprint, "oport s -> . Print s to output port oport. Does nothing"
-        " if oport is not an output port.",
+TYPEDOP(pprint, 0, "`oport `s -> . Print `s to output port `oport. Does nothing"
+        " if `oport is not an output port.",
         2, (struct oport *p, struct string *s), OP_LEAF, "os.")
 {
   struct gcpro gcpro1;
@@ -429,9 +444,9 @@ TYPEDOP(pprint, "oport s -> . Print s to output port oport. Does nothing"
   undefined();
 }
 
-TYPEDOP(pprint_substring,
-        "oport s n0 n1 -> . Print n1 characters of s, starting with n0,"
-        " to output port oport. Does nothing if oport is not an output"
+TYPEDOP(pprint_substring, 0,
+        "`oport `s `n0 `n1 -> . Print `n1 characters of `s, starting with `n0,"
+        " to output port `oport. Does nothing if `oport is not an output"
         " port.",
         4, (struct oport *p, struct string *s, value mstart, value mlength),
         OP_LEAF, "osnn.")
@@ -454,41 +469,53 @@ TYPEDOP(pprint_substring,
   undefined();
 }
 
-TYPEDOP(make_string_oport,
-       " -> oport. Returns a new string output port.",
+TYPEDOP(make_string_oport, 0,
+       " -> `oport. Returns a new string output port.",
 	0, (void),
 	OP_LEAF, ".o")
 {
   return make_string_outputport();
 }
 
-TYPEDOP(port_string,
-       "oport -> s. Returns the contents of string port oport.",
-	1, (struct oport *p),
-	OP_LEAF, "o.s")
-{
-  TYPEIS(p, type_outputport);
-  /* Warning: need to check that this is a string output port!
-     But: the only externally visible output ports are of that kind,
-     so not a problem so far. */
-
-  return port_string(p);
-}
-
-OPERATION(port_empty,
-          "oport -> . Empties the contents of string port oport.",
-          1, (struct oport *p),
-          OP_LEAF)
+static void check_string_port(struct oport *p)
 {
   TYPEIS(p, type_outputport);
   if (!is_string_port(p))
     runtime_error(error_bad_type);
+}
+
+TYPEDOP(port_string, 0,
+       "`oport -> `s. Returns the contents of string port `oport.",
+	1, (struct oport *p),
+	OP_LEAF, "o.s")
+{
+  check_string_port(p);
+  return port_string(p);
+}
+
+TYPEDOP(string_oport_length, 0,
+       "`oport -> `n. Returns the number of characters in the string"
+        " port `oport.",
+	1, (struct oport *p),
+	OP_LEAF, "o.n")
+{
+  check_string_port(p);
+  return makeint(string_port_length(p));
+}
+
+OPERATION(port_empty, "port_empty!",
+          "`oport -> . Empties the contents of string port `oport.",
+          1, (struct oport *p),
+          OP_LEAF)
+{
+  check_string_port(p);
   empty_string_oport(p);
   undefined();
 }
 
-OPERATION(add_call_trace_oport, "x b -> . Also send call traces to x (an oport"
-          " or a character). If b is TRUE, only send those not handled"
+OPERATION(add_call_trace_oport, "add_call_trace_oport!",
+          "`x `b -> . Also send call traces to `x (an oport"
+          " or a character). If `b is TRUE, only send those not handled"
           " otherwise.",
 	  2, (value oport, value only_unhandled), OP_LEAF)
 {
@@ -505,7 +532,8 @@ OPERATION(add_call_trace_oport, "x b -> . Also send call traces to x (an oport"
   undefined();
 }
 
-OPERATION(remove_call_trace_oport, "x -> . Stop sending call traces to x",
+OPERATION(remove_call_trace_oport, "remove_call_trace_oport!",
+          "`x -> . Stop sending call traces to `x",
 	  1, (value oport), OP_LEAF)
 {
   if (!TYPE(oport, type_outputport) && !TYPE(oport, type_character))
@@ -518,29 +546,33 @@ OPERATION(remove_call_trace_oport, "x -> . Stop sending call traces to x",
 
 void io_init(void)
 {
-  DEFINE("write", print);
-  DEFINE("display", display);
-  DEFINE("examine", examine);
-  DEFINE("newline", newline);
-  DEFINE("ctime", ctime);
-  DEFINE("time", time);
-  DEFINE("time_after?", time_afterp);
-  DEFINE("asctime", asctime);
-  DEFINE("strftime", strftime);
-  DEFINE("gmtime", gmtime);
-  DEFINE("localtime", localtime);
-  DEFINE("with_output", with_output);
-  DEFINE("with_output_file", with_output_file);
-  DEFINE("pputc", pputc);
-  DEFINE("pprint", pprint);
-  DEFINE("pprint_substring", pprint_substring);
-  DEFINE("make_string_oport", make_string_oport);
-  DEFINE("port_empty!", port_empty);
-  DEFINE("port_string", port_string);
-  DEFINE("pformat", pformat);
-  DEFINE("format", format);
+  DEFINE(stdout);
+  DEFINE(print);
+  DEFINE(display);
+  DEFINE(examine);
+  DEFINE(newline);
+#ifndef WIN32
+  DEFINE(ctime);
+#endif
+  DEFINE(time);
+  DEFINE(time_afterp);
+  DEFINE(asctime);
+  DEFINE(strftime);
+  DEFINE(gmtime);
+  DEFINE(localtime);
+  DEFINE(with_output);
+  DEFINE(with_output_file);
+  DEFINE(pputc);
+  DEFINE(pprint);
+  DEFINE(pprint_substring);
+  DEFINE(make_string_oport);
+  DEFINE(port_empty);
+  DEFINE(port_string);
+  DEFINE(string_oport_length);
+  DEFINE(pformat);
+  DEFINE(format);
 
-  DEFINE("add_call_trace_oport!", add_call_trace_oport);
-  DEFINE("remove_call_trace_oport!", remove_call_trace_oport);
+  DEFINE(add_call_trace_oport);
+  DEFINE(remove_call_trace_oport);
 
 }

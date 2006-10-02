@@ -42,6 +42,7 @@ defines
   mc:itypemap, mc:itypemap_inverse,
   itype_none, itype_function, itype_integer, itype_string, itype_vector,
   itype_null, itype_symbol, itype_table, itype_pair, itype_other, itype_any,
+  itype_names,
 
   mc:new_fncode, mc:set_instruction, mc:get_instructions, mc:remove_branches,
   mc:remove_aliases, mc:remove_labels, mc:remove_var_aliases, mc:new_local,
@@ -177,6 +178,9 @@ itype_other = 256;
 
 itype_any = 511;		// "any" type
 
+itype_names = '[ "function" "integer" "string" "vector" "null" "symbol" "table"
+                 "pair" "\"other\"" ];
+
 mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
   (itype_other,	// type_code
    itype_function,	// type_closure
@@ -241,6 +245,7 @@ assert(vlength(mc:itypemap) == last_synthetic_type);
   mc:new_fncode = fn "component -> fncode. Returns a structure to use for\n\
 generating instructions for function component" (top)
     [
+      // ilpos, nextlabel, top, blockstack
       vector(null, false, top, null)
     ];
 
@@ -732,11 +737,7 @@ be generated in fncode" (fcode, label)
       if (class == mc:i_compute)
 	[
 	  display(format("%s := ", mc:svar(ins[mc:i_adest])));
-	  print_op('["or" "and" 0 0 "==" "!=" "<" "<=" ">" ">="
-		     "|" "^" "&" "<<" ">>" "+" "-" "*" "/" "%"
-		     "-" "not" "~" 0 0 0 0 "ref" "set" "." ""
-		     "car" "cdr" "slength" "vlength" "i+"
-                     "typeof"][ins[mc:i_aop]],
+	  print_op(mc:builtin_names[ins[mc:i_aop]],
 		   ins[mc:i_aargs]);
 	]
       else if (class == mc:i_branch)

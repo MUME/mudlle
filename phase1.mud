@@ -23,7 +23,7 @@ library phase1 // Phase 1: name resolution
 requires system, sequences, dlist, misc, compiler, vars
 defines mc:phase1
 reads mc:this_module
-writes mc:this_function
+writes mc:this_function, mc:lineno
 
 // Takes a parse tree as returned by mudlle_parse, and makes the following
 // changes:
@@ -418,9 +418,13 @@ writes mc:this_function
   
   resolve_component = fn (c)
     [
-      | class |
+      | class, prevline, result |
+      prevline = mc:lineno;
+      if (c[mc:c_lineno] > 0)
+	mc:lineno = c[mc:c_lineno];
+
       class = c[mc:c_class];
-      if (class == mc:c_assign)
+      result = if (class == mc:c_assign)
 	[
 	  | val, var, function |
 	  
@@ -501,30 +505,33 @@ writes mc:this_function
 	  c[mc:c_eexpression] = resolve_component(c[mc:c_eexpression]);
 	  list(c)
 	]
-      else 1/0;
+      else
+        fail();
+
+      mc:lineno = prevline;
+      result
     ];
   
   mc:phase1 = fn (m)
     [
-      | components, name |
+      | components, fname, top_var |
 
-      if (!(name = m[mc:m_name]))
-	name = "top-level"
-      else
-	name = "top-level of " + name;
+      top_var = vector(mc:v_global, "top-level");
+
+      fname = m[mc:m_filename];
 
       mstart(m);
       env_init();
       env_enter_function(vector(mc:c_closure, -1,
-				stype_any,
-				null,
-				null, // no arguments
-				false,
-				null,
-				-1,
-				name,
-				null,
-				false));
+				stype_any,      // return type
+				null,           // help
+				null,           // arguments
+				false,          // vararg?
+				null,           // value
+                                m[mc:m_body][mc:c_lineno], // lineno
+				fname,          // filename
+				null,           // argtypes
+				top_var));      // variable name
       components = resolve_component(m[mc:m_body]);
       env_leave_function();
       mcleanup();
@@ -532,18 +539,18 @@ writes mc:this_function
       // make a top-level function
       m[mc:m_body] = 
 	vector(mc:c_closure, -1,
-	       stype_any,
-	       null,
-	       null,		// No arguments
-	       false,
-	       components,
-	       -1,
-	       name,
-	       null,
-	       false,
+	       stype_any,                       // return type
+	       null,                            // help
+	       null,                            // arguments
+	       false,                           // vararg?
+	       components,                      // value
+	       -1,                              // lineno
+	       fname,                           // filename
+	       null,                            // argtypes
+	       top_var,                         // variable name
 	       null, null, null, null, null, null, // var lists
-	       null,
-	       0,
-	       null);
+	       null,                            // misc
+	       0,                               // # fnvars
+	       null);                           // # allvars
     ];
 ];

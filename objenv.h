@@ -23,7 +23,6 @@
 #define OBJENV_H
 
 #include "mudio.h"
-#include "mvalues.h"
 
 struct env			/* Is a record */
 {

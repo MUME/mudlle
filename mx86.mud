@@ -26,28 +26,28 @@ requires system, dlist, misc, sequences, vars, compiler
 defines x86:l_ins, x86:l_alias, x86:l_number, x86:il_label, x86:il_ins,
   x86:il_node, x86:il_number, x86:il_offset, x86:il_lineno, x86:i_op,
   x86:i_arg1, x86:i_arg2, x86:lvar, x86:lreg, x86:lidx, x86:lridx, x86:limm,
-  x86:lcst, x86:lfunction, x86:lglobal, x86:lglobal_constant, x86:lprimitive,
-  x86:lspecial, x86:nregs, x86:reg_eax, x86:reg_ebx, x86:reg_ecx, x86:reg_edx,
-  x86:reg_esp, x86:reg_ebp, x86:reg_esi, x86:reg_edi, x86:reg_al, x86:reg_bl,
-  x86:reg_cl, x86:reg_dl, x86:reg_ah, x86:reg_bh, x86:reg_ch, x86:reg_dh,
-  x86:reg8, x86:bne, x86:be, x86:bg, x86:ble, x86:bge, x86:bl, x86:ba, x86:bbe,
-  x86:bae, x86:bb, x86:bno, x86:bo, x86:bns, x86:bs, x86:bnp, x86:bp,
-  x86:balways, x86:op_push, x86:op_pop, x86:op_call, x86:op_ret, x86:op_jmp,
-  x86:op_jcc, x86:op_lea, x86:op_mov, x86:op_add, x86:op_sub, x86:op_cmp,
-  x86:op_cmpbyte, x86:op_or, x86:op_xor, x86:op_and, x86:op_andbyte,
-  x86:op_test, x86:op_inc, x86:op_dec, x86:op_neg, x86:op_not, x86:op_bt,
-  x86:op_bts, x86:op_btr, x86:op_btc, x86:op_shl, x86:op_shr, x86:op_setcc,
-  x86:op_movzxbyte, x86:op_xchg, x86:new_code, x86:set_instruction,
-  x86:get_instructions, x86:rem_instruction, x86:copy_instruction,
-  x86:mudlleint, x86:doubleint, x86:push, x86:pop, x86:call, x86:ret, x86:jmp,
-  x86:jcc, x86:lea, x86:mov, x86:add, x86:sub, x86:cmp, x86:cmpbyte, x86:or,
-  x86:xor, x86:and, x86:andbyte, x86:test, x86:inc, x86:dec, x86:neg, x86:not,
-  x86:bt, x86:btr, x86:bts, x86:btc, x86:shl, x86:shr, x86:setcc,
-  x86:movzxbyte, x86:xchg, x86:new_label, x86:label, x86:set_label,
-  x86:ins_list, x86:print_ins, x86:resolve, x86:trap, x86:op_jmp32,
-  x86:op_jcc32, x86:callrel, x86:op_callrel, x86:sar, x86:op_sar, x86:op_op16,
-  x86:op16, x86:leave, x86:op_leave, x86:lqidx, x86:adc, x86:op_adc,
-  x86:callrel_prim, x86:op_callrel_prim
+  x86:lcst, x86:lfunction, x86:lclosure, x86:lglobal, x86:lglobal_constant,
+  x86:lprimitive, x86:lspecial, x86:nregs, x86:reg_eax, x86:reg_ebx,
+  x86:reg_ecx, x86:reg_edx, x86:reg_esp, x86:reg_ebp, x86:reg_esi, x86:reg_edi,
+  x86:reg_al, x86:reg_bl, x86:reg_cl, x86:reg_dl, x86:reg_ah, x86:reg_bh,
+  x86:reg_ch, x86:reg_dh, x86:reg8, x86:bne, x86:be, x86:bg, x86:ble, x86:bge,
+  x86:bl, x86:ba, x86:bbe, x86:bae, x86:bb, x86:bno, x86:bo, x86:bns, x86:bs,
+  x86:bnp, x86:bp, x86:balways, x86:op_push, x86:op_pop, x86:op_call,
+  x86:op_ret, x86:op_jmp, x86:op_jcc, x86:op_lea, x86:op_mov, x86:op_add,
+  x86:op_sub, x86:op_cmp, x86:op_cmpbyte, x86:op_or, x86:op_xor, x86:op_and,
+  x86:op_andbyte, x86:op_test, x86:op_inc, x86:op_dec, x86:op_neg, x86:op_not,
+  x86:op_bt, x86:op_bts, x86:op_btr, x86:op_btc, x86:op_shl, x86:op_shr,
+  x86:op_setcc, x86:op_movzxbyte, x86:op_xchg, x86:new_code,
+  x86:set_instruction, x86:get_instructions, x86:rem_instruction,
+  x86:copy_instruction, x86:mudlleint, x86:doubleint, x86:push, x86:pop,
+  x86:call, x86:ret, x86:jmp, x86:jcc, x86:lea, x86:mov, x86:add, x86:sub,
+  x86:cmp, x86:cmpbyte, x86:or, x86:xor, x86:and, x86:andbyte, x86:test,
+  x86:inc, x86:dec, x86:neg, x86:not, x86:bt, x86:btr, x86:bts, x86:btc,
+  x86:shl, x86:shr, x86:setcc, x86:movzxbyte, x86:xchg, x86:new_label,
+  x86:label, x86:set_label, x86:ins_list, x86:print_ins, x86:resolve, x86:trap,
+  x86:op_jmp32, x86:op_jcc32, x86:callrel, x86:op_callrel, x86:sar, x86:op_sar,
+  x86:op_op16, x86:op16, x86:leave, x86:op_leave, x86:lqidx, x86:adc,
+  x86:op_adc, x86:callrel_prim, x86:op_callrel_prim
 
 reads x86:spillreg, mc:lineno
 
@@ -85,6 +85,7 @@ x86:i_arg2 = 2;
 //   x86:limm: immediate
 //   x86:lcst: mudlle constant
 //   x86:lfunction: magic
+//   x86:lclosure: for functions without closure variables
 //   x86:lglobal: global name
 //   x86:lglobal_constant: global name
 //   x86:lprimitive: primitive name
@@ -105,6 +106,7 @@ x86:lglobal = 7;
 x86:lglobal_constant = 8;
 x86:lprimitive = 9;
 x86:lspecial = 10;
+x86:lclosure = 12;
 
 x86:nregs = 8;
 
@@ -475,6 +477,8 @@ be generated in x86code" (fcode, label)
 	else format("2*%s", car(a))
       else if (m == x86:lfunction)
 	format("fn[%s]", mc:fname(a))
+      else if (m == x86:lclosure)
+	format("closure[%s]", mc:fname(a))
       else if (m == x86:lcst)
 	format("%s[%w]", mode[m], a)
       else

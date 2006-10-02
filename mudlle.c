@@ -21,20 +21,18 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "mudlle.h"
 #include "mparser.h"
 #include "lexer.h"
 #include "compile.h"
-#include "mvalues.h"
 #include "alloc.h"
 #include "global.h"
-#include "print.h"
 #include "utils.h"
 #include "module.h"
 #include "mcompile.h"
 #include "call.h"
 #include "interpret.h"
 #include "runtime/runtime.h"
+#include "context.h"
 
 #ifdef USE_READLINE
 #  include <readline/history.h>
@@ -62,36 +60,11 @@ int load_file(const char *name, const char *nicename, int seclev, int reload)
   return ok;
 }
 
-struct pload
-{
-  const char *name;
-  const char *nicename;
-  int seclev, reload;
-  int result;
-};
-
-static void pload(void *_data)
-{
-  struct pload *data = _data;
-
-  data->result = load_file(data->name, data->nicename, data->seclev, data->reload);
-}
-
-int catch_load_file(const char *name, const char *nicename, int seclev, int reload)
-{
-  struct pload data;
-
-  data.name = name; data.nicename = nicename; data.seclev = seclev;
-  data.reload = reload;
-  if (mcatch(pload, &data, TRUE)) return data.result;
-  else return FALSE;
-}
-
 static void execute(char *line)
 {
   value result;
 
-  read_from_string(line);
+  read_from_string(line, NULL);
   if (interpret(&result, 1, TRUE))
     {
       printf("Result: ");
@@ -133,6 +106,8 @@ int main(int argc, char **argv)
   ports_init();
   context_init();
 
+  define_string_vector("argv", (const char *const *)argv, argc);
+  
 #ifdef USE_READLINE
   if (atexit(history_exit))
     perror("atexit(history_exit)");
@@ -157,6 +132,7 @@ int main(int argc, char **argv)
       char line[512];
 
       fputs("mudlle> ", stdout);
+      fflush(stdout);
       if (!fgets(line, sizeof line, stdin))
 	break;
       if (*line)

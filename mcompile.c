@@ -19,18 +19,15 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "mudlle.h"
-#include "tree.h"
-#include "types.h"
-#include "code.h"
-#include "ins.h"
-#include "global.h"
-#include "calloc.h"
-#include "utils.h"
-#include "module.h"
-
 #include <string.h>
 #include <stdlib.h>
+
+#include "alloc.h"
+#include "global.h"
+#include "ins.h"
+#include "module.h"
+#include "tree.h"
+#include "utils.h"
 
 /* A list of global variable indexes */
 typedef struct _glist {
@@ -109,6 +106,8 @@ static int imported(const char *name, int do_mark)
   return module_unloaded;
 }
 
+extern int lineno;
+
 int mstart(block_t heap, mfile f, int seclev)
 /* Effects: Start processing module f:
      - unload f
@@ -122,7 +121,8 @@ int mstart(block_t heap, mfile f, int seclev)
 {
   vlist mods, reads, writes, defines;
   mlist lmodules = NULL;
-
+  
+  lineno = 0;
   if (f->name)
     {
       if (module_status(f->name) == module_loaded &&
@@ -330,27 +330,29 @@ void massign(ulong n, const char *name, fncode fn)
     log_error("write of global %s", name);
 }
 
-void mwarn_module(void)
+void mwarn_module(const char *name)
 {
   glist gl;
-  mlist ml;
 
-  for (ml = imported_modules; ml; ml = ml->next)
+  for (mlist ml = imported_modules; ml; ml = ml->next)
     if (!ml->used)
-      warning("symbols from required module %s were never used",
-	      ml->name);
+      warning_line(name, 0, "symbols from required module %s were never used",
+                   ml->name);
 
   for (gl = readable; gl; gl = gl->next)
     if (!gl->used)
-      warning("readable variable %s was never read", GNAME(gl->n)->str);
+      warning_line(name, 0, "readable variable %s was never read",
+                   GNAME(gl->n)->str);
 
   for (gl = writable; gl; gl = gl->next)
     if (!gl->used)
-      warning("writable variable %s was never written", GNAME(gl->n)->str);
+      warning_line(name, 0, "writable variable %s was never written",
+                   GNAME(gl->n)->str);
 
   for (gl = definable; gl; gl = gl->next)
     if (!gl->used)
-      warning("definable variable %s was never defined", GNAME(gl->n)->str);
+      warning_line(name, 0, "definable variable %s was never defined",
+                   GNAME(gl->n)->str);
 }
 
 void mcompile_init(void)

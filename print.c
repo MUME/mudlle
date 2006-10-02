@@ -19,21 +19,16 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <alloca.h>
 #include <string.h>
 #include <stddef.h>
 #include <string.h>
 #include <setjmp.h>
 #include <stdlib.h>
 
-#include "mudlle.h"
-#include "print.h"
-#include "types.h"
-#include "table.h"
-#include "objenv.h"
-#include "code.h"
-#include "ins.h"
+#include "alloc.h"
 #include "global.h"
+#include "ins.h"
+#include "table.h"
 
 
 #define MAX_PRINT_COUNT   400
@@ -53,15 +48,6 @@ static unsigned char writable_chars[256 / 8];
 } while(0)
 #define writable(c) (writable_chars[(unsigned char)(c) >> 3]	\
 		     & (1 << ((unsigned char)(c) & 7)))
-
-static const char *const mtypenames[] = {
-  "code",   "closure", "variable", "internal",  "primitive", "varargs",     
-  "secure", "integer", "string",   "vector",    "list",      "symbol",      
-  "table",  "private", "object",   "character", "gone",      "output-port", 
-  "mcode",  "float",   "bigint",   "null",      
-  "none",   "any",     "function", "list"
-};
-CASSERT_VLEN(mtypenames, last_synthetic_type);
 
 static void _print_value(struct oport *f, prt_level level, value v,
                          int toplev);

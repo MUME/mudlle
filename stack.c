@@ -22,7 +22,6 @@
 #include <string.h>
 #include "runtime/runtime.h"
 #include "objenv.h"
-#include "print.h"
 
 #define STACK_SIZE 256
 #define LARGE_STACK 1024

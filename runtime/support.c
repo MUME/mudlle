@@ -19,29 +19,27 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <alloca.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "mudlle.h"
-#include "tree.h"
 #include "runtime/runtime.h"
 #include "alloc.h"
 #include "global.h"
 #include "utils.h"
 #include "mparser.h"
 #include "lexer.h"
-#include "calloc.h"
 #include "builtins.h"
 #include "module.h"
+#include "context.h"
 
 #if defined(i386) && !defined(NOCOMPILER)
 static int cc_length = 0;	/* statistics */
 #endif
 
-OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
-	  "parse tree", 1, (struct string *code), OP_LEAF | OP_NOESCAPE)
+OPERATION(mudlle_parse, 0, "`s -> `v. Parses mudlle expression `s and"
+          " returns a parse tree",
+          1, (struct string *code), OP_LEAF | OP_NOESCAPE)
 {
   mfile f;
   value parsed;
@@ -49,7 +47,7 @@ OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
 
   TYPEIS(code, type_string);
 
-  read_from_string(code->str);
+  read_from_string(code->str, NULL);
   memory = new_block();
   if ((f = parse(memory)))
     parsed = mudlle_parse(memory, f);
@@ -61,7 +59,8 @@ OPERATION(mudlle_parse, "s -> v. Parses a mudlle expression and returns a "
   return parsed;
 }
 
-UNSAFEOP(mudlle_parse_file, "s1 s2 -> v. Parses a file s (nice name s2) and returns its parse tree",
+UNSAFEOP(mudlle_parse_file, 0, "`s1 `s2 -> `v. Parses a file s (nice name `s2)"
+         " and returns its parse tree",
 	 2, (struct string *name, struct string *nicename),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -141,7 +140,7 @@ static const struct builtin_table {
   {"bcons", bcons},
   {"berror", berror},
   {"bvarargs", bvarargs},
-#endif
+#endif /* AMIGA */
 #ifdef sparc
   {"bsubtract", bsubtract},
   {"bor", bor},
@@ -180,14 +179,15 @@ static const struct builtin_table {
   {"bcall_primitive_leaf_noalloc", bcall_primitive_leaf_noalloc},
   {"bcall_secure", bcall_secure},
   {"bcall_varargs", bcall_varargs}
-#endif
+#endif /* sparc */
 #ifdef i386
   {"xcount", (void (*)())&xcount},
   {"seclevel", (void (*)())&seclevel},
   {"ccontext", (void (*)())&ccontext},
   {"env_values", (void (*)())&env_values},
+  {"max_loop_count", (void (*)())makeint(MAX_FAST_CALLS)},
 
-#define FIRST_RELBUILTIN 4
+#define FIRST_RELBUILTIN 5
 
   {"bshift_left", bshift_left},
   {"bshift_right", bshift_right},
@@ -231,9 +231,9 @@ static const struct builtin_table {
   {"berror_user_interrupt", berror_user_interrupt},
   {"berror_no_match", berror_no_match},
   {"berror_compile", berror_compile}
-#endif
+#endif /* i386 */
   };
-#endif /* NOCOMPILER */
+#endif /* ! NOCOMPILER */
 
 #ifndef NOCOMPILER
 static ulong builtin_find(struct string *name, int *k)
@@ -250,7 +250,7 @@ static ulong builtin_find(struct string *name, int *k)
 
   return 0;
 }
-#endif
+#endif /* ! NOCOMPILER */
 
 #ifndef NOCOMPILER
 static ulong primitive_find(struct string *name)
@@ -264,7 +264,7 @@ static ulong primitive_find(struct string *name)
 
   return (ulong)p->op->op;
 }
-#endif
+#endif /* ! NOCOMPILER */
 
 #ifdef sparc
 static void set_cst(ulong *sethi, ulong val)
@@ -289,6 +289,7 @@ static void set_cst(ulong *sethi, ulong val)
 #define set_cst(x, n) (*(ulong *)(x) = (n))
 #endif
 
+#ifndef NOCOMPILER
 static int check_primitives(struct list *scan)
 {
   int count = 0;
@@ -313,17 +314,19 @@ static int check_primitives(struct list *scan)
 
   return count;
 }
+#endif /* ! NOCOMPILER */
 
-VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
-      " object from:" EOL
-      "its machine code s1," EOL
-      "security level n1, help string s2, varname s3, filename s4, lineno n2,"
-      " returntype n3, line number info s5" EOL
-      "constants l1=list of constant/offset pairs" EOL
-      "builtins l2=list of name/offset pairs" EOL
-      "globals l3=list of name/offset pairs" EOL
-      "absolute primitives l4=list of name/offset pairs" EOL
-      "relative primitives l5=list of name/offset pairs",
+VAROP(link, 0, "`s1 `n1 `s2 `s3 `s4 `n2 `l1 `l2 `l3 `l4 `l5 `n3 `s5 `s6 -> `code."
+      " Builds a code object from:" EOL
+      "its machine code `s1," EOL
+      "security level `n1, help string `s2, varname `s3, filename `s4,"
+      " lineno `n2, returntype `n3, line number info `s5,"
+      " argument types `s6 (null for varargs)" EOL
+      "constants `l1=list of constant/offset pairs" EOL
+      "builtins `l2=list of name/offset pairs" EOL
+      "globals `l3=list of name/offset pairs" EOL
+      "absolute primitives `l4=list of name/offset pairs" EOL
+      "relative primitives `l5=list of name/offset pairs",
       0)
 {
 #ifdef NOCOMPILER
@@ -341,11 +344,11 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
   struct string *mcode;
   int seclev, alineno;
   mtype return_type;
-  struct string *help, *varname, *afilename;
+  struct string *help, *varname, *afilename, *arg_types;
   struct list *csts, *abuiltins, *globals, *primitives, *rel_primitives;
 
 
-  if (nargs != 13) runtime_error(error_wrong_parameters);
+  if (nargs != 14) runtime_error(error_wrong_parameters);
 
   GCPRO1(args);
 
@@ -360,6 +363,8 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
   if (afilename) TYPEIS(afilename, type_string);
   alineno = GETINT(args->data[5]);
   return_type = GETINT(args->data[11]);
+  arg_types = args->data[13];
+  if (arg_types) TYPEIS(arg_types, type_string);
 
   csts = args->data[6];
   scan_csts = csts;
@@ -370,7 +375,27 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
       TYPEIS(scan_csts, type_pair);
       cst = scan_csts->car;
       TYPEIS(cst, type_pair);
-      ISINT(cst->cdr);
+      long ofs = GETINT(cst->cdr);
+
+      if (ofs < 0)
+        {
+          /* negative offsets are for closures with no closure
+             variables */
+
+          TYPEIS(cst->car, type_mcode);
+
+          struct gcpro gcprol;
+          GCPRO(gcprol, scan_csts);
+          struct closure *cl = unsafe_alloc_closure(0);
+          UNGCPRO1(gcprol);
+
+          cst = scan_csts->car;
+          cl->code = cst->car;
+          cl->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
+          cst->car = cl;
+          cst->cdr = makeint(-ofs);
+        }
+
       scan_csts = scan_csts->cdr;
 
       ncsts++;
@@ -622,8 +647,11 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
     }
 
   size = ALIGN(clen, sizeof(uword)) + (ncsts + nrel) * sizeof(uword);
-  /* The next line gave a net slowdown, at least on the compiler */
-  /*size = ALIGN(size, 32);*/ /* Avoid sharing cache lines with other objects */
+
+  /* The following gave a net slowdown, at least on the compiler */
+  /* Avoid sharing cache lines with other objects */
+  /*  size = ALIGN(size, 32);*/
+
   size += offsetof(struct mcode, mcode);
   cc_length += size;
   /* allocate extra space to ensure that gen1 will have space for this object
@@ -642,7 +670,7 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
   primitives = args->data[9];
   rel_primitives = args->data[10];
   linenos = args->data[12];
-  TYPEIS(linenos, type_string);
+  arg_types = args->data[13];
 
   newp->o.size = size;
   newp->o.garbage_type = garbage_mcode;
@@ -655,6 +683,7 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
   newp->varname = varname; assert(immutablep(varname));
   newp->linenos = linenos; assert(immutablep(linenos));
   newp->filename = afilename; assert(immutablep(afilename));
+  newp->arg_types = arg_types; assert(immutablep(arg_types));
   newp->lineno = alineno;
   newp->code_length = clen;
   newp->myself = (ubyte *)newp;
@@ -744,7 +773,10 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
       scan_primitives = scan_primitives->cdr;
     }
 
-  assert(cst_offsets - (uword *)((ubyte *)newp->mcode + ALIGN(clen, sizeof(uword))) == nrel + ncsts);
+  assert(cst_offsets
+         - (uword *)((ubyte *)newp->mcode
+                     + ALIGN(clen, sizeof(uword)))
+         == nrel + ncsts);
 
   /* Set global offsets */
   scan_globals = globals;
@@ -780,7 +812,8 @@ VAROP(link, "s1 n1 s2 s3 s4 n2 l1 l2 l3 l4 l5 n3 s5 -> code. Builds a code"
 #endif /* !NOCOMPILER */
 }
 
-UNSAFEOP(make_closure, "mcode -> fn. Makes a function with no closure vars from given mcode object",
+UNSAFEOP(make_closure, 0, "`mcode -> `f. Makes a function with no closure"
+         " vars from given `mcode object",
 	  1, (struct mcode *mcode),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -789,35 +822,37 @@ UNSAFEOP(make_closure, "mcode -> fn. Makes a function with no closure vars from 
   return alloc_closure0((struct code *)mcode);
 }
 
-TYPEDOP(closurep, "x -> b. True if x is a closure",
+TYPEDOP(closurep, "closure?", "`x -> `b. True if `x is a closure",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_closure));
 }
 
-TYPEDOP(securep, "x -> b. True if x is a secure primitive",
+TYPEDOP(securep, "secure?", "`x -> `b. True if `x is a secure primitive",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_secure));
 }
 
-TYPEDOP(primitivep, "x -> b. True if x is a primitive",
+TYPEDOP(primitivep, "primitive?", "`x -> `b. True if `x is a primitive",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_primitive));
 }
 
-TYPEDOP(varargsp, "x -> b. True if x is a variable argument primitive",
+TYPEDOP(varargsp, "varargs?",
+        "`x -> `b. True if `x is a variable argument primitive",
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_varargs));
 }
 
-TYPEDOP(primitive_nargs, "primitive -> b. Returns # of arguments of primitive"
+TYPEDOP(primitive_nargs, 0,
+        "`primitive -> `b. Returns # of arguments of primitive"
         " or secop; -1 for varargs",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
@@ -830,7 +865,7 @@ TYPEDOP(primitive_nargs, "primitive -> b. Returns # of arguments of primitive"
   return makeint(p->op->nargs);
 }
 
-TYPEDOP(primitive_flags, "primitive -> n. Returns flags of primitive",
+TYPEDOP(primitive_flags, 0, "`primitive -> `n. Returns flags of primitive",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
@@ -842,7 +877,7 @@ TYPEDOP(primitive_flags, "primitive -> n. Returns flags of primitive",
   return makeint(p->op->flags);
 }
 
-TYPEDOP(primitive_type, "primitive -> l. Returns type of primitive",
+TYPEDOP(primitive_type, 0, "`primitive -> `l. Returns type of primitive",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOESCAPE, "f.l")
 {
@@ -870,7 +905,20 @@ TYPEDOP(primitive_type, "primitive -> l. Returns type of primitive",
   return l;	
 }
 
-TYPEDOP(closure_return_type, "c -> n. Returns return type of closure c",
+TYPEDOP(closure_arguments, 0, "`c -> `s. Returns a string of type information"
+        " for `c's arguments (`type_xxx or `stype_xxx constants). Returns"
+        " null for vararg functions.",
+        1, (struct closure *c), OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "f.x")
+{
+  TYPEIS(c, type_closure);
+  if (TYPE(c->code, type_code))
+    return c->code->arg_types;
+  
+  assert(TYPE(c->code, type_mcode));
+  return ((struct mcode *)c->code)->arg_types;
+}
+
+TYPEDOP(closure_return_type, 0, "`c -> `n. Returns return type of closure `c",
         1, (struct closure *c), OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "f.n")
 {
   TYPEIS(c, type_closure);
@@ -882,24 +930,26 @@ TYPEDOP(closure_return_type, "c -> n. Returns return type of closure c",
   return makeint(((struct mcode *)c->code)->return_type);
 }
 
-UNSAFEOP(global_table, " -> table. Returns global symbol table",
-	 0, (void),
-	 OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+UNSAFETOP(global_table, 0, " -> `t. Returns global symbol table",
+          0, (void),
+          OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
 {
   return global;
 }
 
-TYPEDOP(global_name, "n -> s. Returns the name of global n",
+TYPEDOP(global_name, 0, "`n -> `s. Returns the name of global `n"
+        " for 0 <= `n < `global_names()",
         1, (value midx),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.s")
 {
   long idx = GETINT(midx);
-  if (idx < 0 || idx >= vector_len(global_names))
+  if (idx < 0 || idx >= intval(environment->used))
     runtime_error(error_bad_value);
   return GNAME(idx);
 }
 
-TYPEDOP(global_lookup, "s -> n. Returns index of global variable s",
+TYPEDOP(global_lookup, 0, "`s -> `n. Returns index of global variable `s."
+        " Creates it if it doesn't exist already.",
 	1, (struct string *name),
 	OP_LEAF | OP_NOESCAPE, "s.n")
 {
@@ -908,7 +958,8 @@ TYPEDOP(global_lookup, "s -> n. Returns index of global variable s",
   return makeint(mglobal_lookup(name));
 }
 
-TYPEDOP(global_value, "n -> x. Returns value of global variable n",
+TYPEDOP(global_value, 0, "`n -> `x. Returns value of global variable `n"
+        " for 0 <= `n < `global_names()",
 	1, (value midx),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.x")
 {
@@ -919,7 +970,17 @@ TYPEDOP(global_value, "n -> x. Returns value of global variable n",
   return GVAR(idx);
 }
 
-UNSAFEOP(global_set, "n x -> x. Sets global variable n to x. Fails if n is readonly",
+TYPEDOP(global_names, 0,
+        " -> `n. Returns the number of globals used. See also `global_name()"
+        " and `global_value()",
+	0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
+{
+  return environment->used;
+}
+
+UNSAFEOP(global_set, "global_set!",
+         "`n `x -> `x. Sets global variable `n to `x."
+         " Fails if `n is readonly",
 	 2, (value midx, value x),
 	 OP_LEAF | OP_NOALLOC)
 {
@@ -931,7 +992,7 @@ UNSAFEOP(global_set, "n x -> x. Sets global variable n to x. Fails if n is reado
   return x;
 }
 
-TYPEDOP(module_status, "s -> n. Returns status of module s",
+TYPEDOP(module_status, 0, "`s -> `n. Returns status of module `s",
 	1, (struct string *name),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
@@ -940,7 +1001,7 @@ TYPEDOP(module_status, "s -> n. Returns status of module s",
   return makeint(module_status(name->str));
 }
 
-TYPEDOP(module_seclevel, "s -> n. Returns seclevel of module s",
+TYPEDOP(module_seclevel, 0, "`s -> `n. Returns seclevel of module `s",
 	1, (struct string *name),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
@@ -949,7 +1010,8 @@ TYPEDOP(module_seclevel, "s -> n. Returns seclevel of module s",
   return makeint(module_seclevel(name->str));
 }
 
-UNSAFEOP(module_set, "s n1 n2 -> . Sets status of module s to n1, seclevel n2",
+UNSAFEOP(module_set, "module_set!",
+         "`s `n1 `n2 -> . Sets status of module `s to `n1, seclevel `n2",
 	 3, (struct string *name, value status, value seclev),
 	 OP_LEAF | OP_NOESCAPE)
 {
@@ -965,7 +1027,7 @@ UNSAFEOP(module_set, "s n1 n2 -> . Sets status of module s to n1, seclevel n2",
   undefined();
 }
 
-UNSAFEOP(module_unload, "s -> b. Unload module s, false if protected",
+UNSAFEOP(module_unload, 0, "`s -> `b. Unload module `s, false if protected",
 	 1, (struct string *name),
 	 OP_LEAF | OP_NOALLOC)
 {
@@ -974,7 +1036,8 @@ UNSAFEOP(module_unload, "s -> b. Unload module s, false if protected",
   return makebool(module_unload(name->str));
 }
 
-TYPEDOP(module_require, "s -> n. Load module s if needed, return its new status",
+TYPEDOP(module_require, 0,
+        "`s -> `n. Load module s if needed, return its new status",
 	1, (struct string *name),
 	0, "s.n")
 {
@@ -986,7 +1049,9 @@ TYPEDOP(module_require, "s -> n. Load module s if needed, return its new status"
   return makeint(module_require(tname));
 }
 
-TYPEDOP(module_vstatus, "n -> s/n. Return status of global variable n",
+TYPEDOP(module_vstatus, 0,
+        "`n0 -> `s/`n. Return status of global variable `n0; either the"
+        " name of the defining library, or one of the `var_xxx constants",
 	1, (value goffset),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.S")
 {
@@ -1002,7 +1067,9 @@ TYPEDOP(module_vstatus, "n -> s/n. Return status of global variable n",
   else return makeint(status);
 }
 
-UNSAFEOP(module_vset, "n s/n -> . Sets status of global variable n",
+UNSAFEOP(module_vset, "module_vset!",
+         "`n0 `s/`n1 -> . Sets status of global variable `n0 to either the"
+         " name `s of the owning module, `var_normal, or `var_write",
 	 2, (value goffset, value status),
 	 OP_LEAF | OP_NOALLOC)
 {
@@ -1028,7 +1095,7 @@ UNSAFEOP(module_vset, "n s/n -> . Sets status of global variable n",
   return makebool(module_vset(n, intval(status), mod));
 }
 
-UNSAFEOP(module_table, " -> table. Returns module status table",
+UNSAFEOP(module_table, 0, " -> `t. Returns the module status table",
 	 0, (void),
 	 OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
@@ -1037,23 +1104,25 @@ UNSAFEOP(module_table, " -> table. Returns module status table",
 
 void support_init(void)
 {
-  DEFINE("mudlle_parse", mudlle_parse);
-  DEFINE("mudlle_parse_file", mudlle_parse_file);
-  DEFINE("link", link);
-  DEFINE("make_closure", make_closure);
-  DEFINE("closure?", closurep);
-  DEFINE("secure?", securep);
-  DEFINE("varargs?", varargsp);
-  DEFINE("primitive?", primitivep);
-  DEFINE("primitive_nargs", primitive_nargs);
-  DEFINE("primitive_flags", primitive_flags);
-  DEFINE("primitive_type", primitive_type);
-  DEFINE("closure_return_type", closure_return_type);
-  DEFINE("global_table", global_table);
-  DEFINE("global_name", global_name);
-  DEFINE("global_lookup", global_lookup);
-  DEFINE("global_value", global_value);
-  DEFINE("global_set!", global_set);
+  DEFINE(mudlle_parse);
+  DEFINE(mudlle_parse_file);
+  DEFINE(link);
+  DEFINE(make_closure);
+  DEFINE(closurep);
+  DEFINE(securep);
+  DEFINE(varargsp);
+  DEFINE(primitivep);
+  DEFINE(primitive_nargs);
+  DEFINE(primitive_flags);
+  DEFINE(primitive_type);
+  DEFINE(closure_arguments);
+  DEFINE(closure_return_type);
+  DEFINE(global_table);
+  DEFINE(global_name);
+  DEFINE(global_names);
+  DEFINE(global_lookup);
+  DEFINE(global_value);
+  DEFINE(global_set);
 
   /* The mudlle types */
   system_define("type_code",                makeint(type_code));
@@ -1127,27 +1196,46 @@ void support_init(void)
   CASSERT_STMT(last_runtime_error == 15);
 
   /* Module support */
-  DEFINE("module_status",                   module_status);
-  DEFINE("module_seclevel",                 module_seclevel);
-  DEFINE("module_set!",                     module_set);
-  DEFINE("module_table",                    module_table);
-  system_define("module_unloaded",          makeint(module_unloaded));
-  system_define("module_error",             makeint(module_error));
-  system_define("module_loading",           makeint(module_loading));
-  system_define("module_loaded",            makeint(module_loaded));
-  system_define("module_protected",         makeint(module_protected));
-  DEFINE("module_unload",                   module_unload);
-  DEFINE("module_require",                  module_require);
-  DEFINE("module_vstatus",                  module_vstatus);
-  DEFINE("module_vset!",                    module_vset);
-  system_define("var_normal",               makeint(var_normal));
-  system_define("var_module",               makeint(var_module));
-  system_define("var_write",                makeint(var_write));
+  DEFINE(module_status);
+  DEFINE(module_seclevel);
+  DEFINE(module_set);
+  DEFINE(module_table);
+  DEFINE(module_unload);
+  DEFINE(module_require);
+  DEFINE(module_vstatus);
+  DEFINE(module_vset);
 
   /* C options information */
 #ifdef GCDEBUG
   system_define("OPTION_GCDEBUG", makebool(TRUE));
 #else
   system_define("OPTION_GCDEBUG", makebool(FALSE));
+#endif
+  
+#ifdef i386
+  system_define("x86:function_offset",
+                makeint(offsetinobj(struct mcode, mcode)));
+  system_define("x86:mcode_seclevel",
+                makeint(offsetinobj(struct mcode, seclevel)));
+
+  system_define("x86:object_offset", makeint(sizeof (struct obj)));
+  system_define("x86:object_size",   makeint(offsetof(struct obj, size)));
+  system_define("x86:object_info",   makeint(offsetof(struct obj, size)
+                                             + sizeoffield(struct obj, size)));
+  system_define("x86:object_type",   makeint(offsetof(struct obj, flags) - 1));
+  system_define("x86:object_flags",  makeint(offsetof(struct obj, flags)));
+
+#ifndef NOCOMPILER
+  system_define("x86:cc_frame_end_sp",
+                makeint(offsetof(struct ccontext, frame_end_sp)));
+  system_define("x86:cc_frame_end_bp",
+                makeint(offsetof(struct ccontext, frame_end_bp)));
+  system_define("x86:cc_callee",
+                makeint(offsetof(struct ccontext, callee)));
+#endif /* ! NOCOMPILER */
+#endif /* i386 */
+
+#ifndef NOCOMPILER
+  system_define("mc:max_fast_calls", makeint(MAX_FAST_CALLS));
 #endif
 }

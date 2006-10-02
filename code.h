@@ -24,6 +24,8 @@
 
 #include <limits.h>
 
+#include "types.h"
+
 /* Definition of generated code */
 
 /* A bytecode style representation is used:
