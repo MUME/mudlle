@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_SYMBOL_H
-#define RUNTIME_SYMBOL_H
+#ifndef SYMBOL_H
+#define SYMBOL_H
 
 #include "../types.h"
 
@@ -30,4 +30,4 @@ value code_table_set(struct table *tab, struct string *s, value c);
 
 void symbol_init(void);
 
-#endif /* RUNTIME_SYMBOL_H */
+#endif

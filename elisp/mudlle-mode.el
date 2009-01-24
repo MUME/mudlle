@@ -28,30 +28,24 @@
 (if mudlle-mode-map
     ()
   (setq mudlle-mode-map (make-sparse-keymap))
-  (define-key mudlle-mode-map "["        'electric-mudlle-brace)
-  (define-key mudlle-mode-map "]"        'electric-mudlle-brace)
-  (define-key mudlle-mode-map ";"        'electric-mudlle-semi)
-  (define-key mudlle-mode-map "\M-\C-q"  'indent-mudlle-exp)
-  (define-key mudlle-mode-map "\177"     'backward-delete-char-untabify)
-  (define-key mudlle-mode-map "\t"       'mudlle-indent-command)
-  (define-key mudlle-mode-map "\M-\t"    'mudlle-complete-symbol)
-  (define-key mudlle-mode-map "\C-c\C-h" 'mudlle-help)
-  (define-key mudlle-mode-map "\C-c\C-a" 'mudlle-apropos))
+  (define-key mudlle-mode-map "[" 'electric-mudlle-brace)
+  (define-key mudlle-mode-map "]" 'electric-mudlle-brace)
+  (define-key mudlle-mode-map ";" 'electric-mudlle-semi)
+  (define-key mudlle-mode-map "\e\C-q" 'indent-mudlle-exp)
+  (define-key mudlle-mode-map "\177" 'backward-delete-char-untabify)
+  (define-key mudlle-mode-map "\t" 'mudlle-indent-command)
+  (define-key mudlle-mode-map "\e\t" 'mudlle-complete-symbol))
 
 (defvar mudlle-apropos-mode-map nil "Keymap for mudlle-apropos-mode.")
 (unless mudlle-apropos-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "\r"          'mudlle-apropos-follow)
-    (define-key map "q"           'quit-window)
-    (define-key map " "           'scroll-up)
-    (define-key map "\177"        'scroll-down)
-    (define-key map "a"           'mudlle-apropos)
-    (define-key map "n"           'mudlle-apropos-next)
-    (define-key map "p"           'mudlle-apropos-previous)
-    (define-key map "\t"          'mudlle-apropos-next)
-    (define-key map "\e\t"        'mudlle-apropos-previous)
-    (define-key map [(shift tab)] 'mudlle-apropos-previous)
-    (define-key map [backtab]     'mudlle-apropos-previous)
+    (define-key map "\r"   'mudlle-apropos-follow)
+    (define-key map "q"    'quit-window)
+    (define-key map " "    'scroll-up)
+    (define-key map "\177" 'scroll-down)
+    (define-key map "a"    'mudlle-apropos)
+    (define-key map "n"    'mudlle-apropos-next)
+    (define-key map "p"    'mudlle-apropos-previous)
     (setq mudlle-apropos-mode-map map)))
 
 (defvar mudlle-mode-syntax-table nil
@@ -109,58 +103,54 @@
   :type  '(choice (const nil :Tag none) (directory)))
 
 (defcustom mudlle-indent-level 2
-  "Indentation of mudlle statements with respect to containing block."
+  "*Indentation of mudlle statements with respect to containing block."
   :type 'integer
   :group 'mudlle)
 (defcustom mudlle-brace-imaginary-offset 0
-  "Imagined indentation of a mudlle open brace that actually follows a statement."
+  "*Imagined indentation of a mudlle open brace that actually follows a statement."
   :type 'integer
   :group 'mudlle)
 (defcustom mudlle-brace-offset 0
-  "Extra indentation for braces, compared with other text in same context."
+  "*Extra indentation for braces, compared with other text in same context."
   :type 'integer
   :group 'mudlle)
 (defcustom mudlle-argdecl-indent 5
-  "Indentation level of declarations of mudlle function arguments."
+  "*Indentation level of declarations of mudlle function arguments."
   :type 'integer
   :group 'mudlle)
 (defcustom mudlle-continued-statement-offset 2
-  "Extra indent for lines not starting new statements."
+  "*Extra indent for lines not starting new statements."
   :type 'integer
   :group 'mudlle)
 (defcustom mudlle-continued-brace-offset 0
-  "Extra indent for substatements that start with open-braces.
+  "*Extra indent for substatements that start with open-braces.
 This is in addition to mudlle-continued-statement-offset."
   :type 'integer
   :group 'mudlle)
 (defcustom mudlle-auto-newline nil
-  "Non-nil means automatically newline before and after braces,
+  "*Non-nil means automatically newline before and after braces,
 and after colons and semicolons, inserted in mudlle code."
   :type 'boolean
   :group 'mudlle)
 (defcustom mudlle-tab-always-indent t
-  "Non-nil means TAB in mudlle mode should always reindent the current line,
+  "*Non-nil means TAB in mudlle mode should always reindent the current line,
 regardless of where in the line point is when the TAB command is used."
   :type 'boolean
   :group 'mudlle)
 (defcustom mudlle-string-regexp "\"\\([^\"\\]\\|\\\\.\\|\\\\\n\\)*\""
-  "Regular expression matching a mudlle string."
+  "*Regular expression matching a mudlle string."
   :type 'regexp
   :group 'mudlle)
 (defcustom mudlle-symbol-regexp "[a-zA-Z][a-zA-Z0-9$_:?!]*"
-  "Regular expression matching a mudlle symbol."
+  "*Regular expression matching a mudlle symbol."
   :type 'regexp
   :group 'mudlle)
 (defcustom mudlle-function-data-file nil
-  "File name to load in order to set `mudlle-functions' to an alist with
+  "*File name to load in order to set `mudlle-functions' to an alist with
 mudlle documentation."
   :type '(choice (const nil :tag None) (file :must-match t))
   :group 'mudlle)
 
-(defcustom mudlle-mode-hook nil
-  "Hook run by `mudlle-mode'."
-  :type 'hook
-  :group 'mudlle)
 
 
 (defun mudlle-mode ()
@@ -426,13 +416,7 @@ Returns nil if line starts inside a string, t if in a comment."
 	     (goto-char (1+ containing-sexp))
 	     (when (looking-at "[ \t]*[^ \t\n]")
 	       (skip-syntax-forward "-"))
-             ;; if the open is just before end of line (ignoring
-             ;; comments), indent an extra mudlle-indent-level
-             (if (not (looking-at "\\s-*\\(/\\*\\([^*]*\\|\\*[^/]\\)*\\*/\\s-*\\)*\\(//.*\\)?$"))
-                 (current-column)
-               (beginning-of-line)
-               (skip-syntax-forward "-")
-               (+ (current-column) mudlle-indent-level)))
+	     (current-column))
 	    (t
 	     ;; Statement level.  Is it a continuation or a new statement?
 	     ;; Find previous non-comment character.
@@ -597,21 +581,15 @@ the file specified by `mudlle-function-data-file'")
 		(all-completions pattern mudlle-functions)))
 	     (message "Making completion list...done"))))))
 
-(defconst mudlle-nbsp
-  (aref (decode-coding-string "\240" 'iso-latin-1) 0)
-  "The non-breaking space character.")
-
 (defun mudlle-apropos-abbreviate (str)
   (let ((width (- (min fill-column (- (window-width) 1)) 8))
         cut)
     (when (string-match "\n" str)
       (setq str (substring str 0 (match-beginning 0))
 	    cut t))
-    (setq str (replace-regexp-in-string "\t" "" str))
     (when (> (length str) width)
       (setq str (substring str 0 width)
 	    cut t))
-    (setq str (replace-regexp-in-string mudlle-nbsp " " str))
     (if cut
 	(concat str " ...")
       str)))
@@ -662,16 +640,14 @@ the file specified by `mudlle-function-data-file'")
 	(when (or (string-match regexp (car func))
 		  (and (cadr func)
 		       (string-match regexp (cadr func))))
-	  (let ((name (car func))
-		(help (cadr func))
-		(type (car (cddr func))))
-	    (when help
-	      (setq help (mudlle-apropos-abbreviate help)))
-	    (insert (propertize (format "%-38s  %s\n    %s\n"
-					(propertize name 'face 'bold)
-					type
-					(or help "<no help>"))
-				'mudlle-item name)))))
+	  (insert-string (propertize (format "%-38s  %s\n    %s\n"
+					     (propertize (car func)
+							 'face 'bold)
+					     (car (cddr func))
+					     (if (cadr func)
+						 (mudlle-apropos-abbreviate (cadr func))
+					       "<no help>"))
+				     'mudlle-item (car func)))))
       (setq funcs (cdr funcs))))
   (goto-char (point-min))
   (toggle-read-only 1))
@@ -734,6 +710,7 @@ the file specified by `mudlle-function-data-file'")
           (let (typename
                 (path mudlle-c-source-path)
                 (file (cadr type)))
+            (message "FILE %s" file)
             (cond ((eq (car type) 'closure)
                    (setq typename "closure")
                    (if (and mudlle-c-source-path
@@ -765,9 +742,9 @@ the file specified by `mudlle-function-data-file'")
           (let ((start (point))
                 (helpstr (cadr ahelp)))
             (cond ((stringp helpstr)
-                   (insert helpstr))
+                   (insert-string helpstr))
                   ((not helpstr)
-                   (insert "no help text"))
+                   (insert-string "no help text"))
                   (t
                    (princ helpstr)))
             (goto-char start)
@@ -804,11 +781,8 @@ the file specified by `mudlle-function-data-file'")
                         (t
                          (forward-char 1)
                          (setq col (1+ col))
-                         (cond ((= c ?\ )
-				(setq word col))
-			       ((= c mudlle-nbsp)
-				(delete-backward-char 1)
-				(insert-char ?\  1))))))
+                         (when (= c ?\ )
+                           (setq word col)))))
                 (when c
                   (backward-char (- col word))
                   (insert-char ?\n 1)

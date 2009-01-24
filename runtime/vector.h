@@ -19,12 +19,12 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_VECTOR_H
-#define RUNTIME_VECTOR_H
+#ifndef VECTOR_H
+#define VECTOR_H
 
 value code_vector_ref(struct vector *vec, value i);
 value code_vector_set(struct vector *vec, value i, value c);
 
 void vector_init(void);
 
-#endif /* RUNTIME_VECTOR_H */
+#endif

@@ -34,7 +34,6 @@ TYPEDOP(new_bitset, 0,
 
   size = (size + 7) >> 3;
   struct string *newp = alloc_empty_string(size);
-  memset(newp->str, 0, size);
   return newp;
 }
 

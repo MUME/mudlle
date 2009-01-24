@@ -135,15 +135,17 @@ struct vector *get_staticpro_data(void)
   for (int i = 0; i < last_root; ++i)
     {
       struct vector *v = alloc_vector(4);
-      v->data[2] = makeint(roots[i].line);
-      v->data[3] = *roots[i].data;
-
+      struct string *str;
       res->data[i] = v;
-      SET_VECTOR((struct vector *)res->data[i], 0,
-                 alloc_string(roots[i].desc));
-      SET_VECTOR((struct vector *)res->data[i], 1,
-                 alloc_string(roots[i].file));
 
+      str = alloc_string(roots[i].desc);
+      ((struct vector *)res->data[i])->data[0] = str;
+
+      str = alloc_string(roots[i].file);
+      ((struct vector *)res->data[i])->data[1] = str;
+
+      ((struct vector *)res->data[i])->data[2] = makeint(roots[i].line);
+      ((struct vector *)res->data[i])->data[3] = *roots[i].data;
     }
   UNGCPRO();
 

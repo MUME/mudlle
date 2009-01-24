@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_BOOL_H
-#define RUNTIME_BOOL_H
+#ifndef BOOL_H
+#define BOOL_H
 
 void bool_init(void);
 
-#endif /* RUNTIME_BOOL_H */
+#endif

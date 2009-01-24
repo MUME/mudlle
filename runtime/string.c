@@ -70,10 +70,6 @@ TYPEDOP(make_string, 0, "`n -> `s. Create a string of length `n",
   if (size < 0)
     runtime_error(error_bad_value);
   struct string *newp = alloc_empty_string(size);
-  /* alloc_empty_string() doesn't zero its data,
-   * and we don't want to pass sensitive info to
-   * someone on accident, so let's zero away... */
-  memset(newp->str, 0, size);
   return newp;
 }
 
@@ -706,22 +702,8 @@ static void regexp_free(void *p)
 }
 
 TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
-        " expression `s with flags `n.\r\n"
-        "Returns cons(`errorstring, `erroroffset) on error.\r\n"
-	"The following flags are supported:\r\n"
-	"  \t`PCRE_7BIT       \tconvert pattern to its 7-bit equivalent\r\n"
-	"  \t`PCRE_ANCHORED   \tforce pattern anchoring\r\n"
-	"  \t`PCRE_CASELESS   \tdo caseless matching\r\n"
-	"  \t`PCRE_DOLLAR_ENDONLY\r\n"
-	"                  \t$ only matches end of string,"
-	" and not newline\r\n"
-	"  \t`PCRE_DOTALL     \t. matches anything, including newline\r\n"
-	"  \t`PCRE_EXTENDED   \tignore whitespace and # comments\r\n"
-	"  \t`PCRE_EXTRA      \tuse PCRE extra features"
-	" (no idea what that means)\r\n"
-	"  \t`PCRE_INDICES    \tsee above\r\n"
-	"  \t`PCRE_MULTILINE  \t^ and $ match at newlines\r\n"
-	"  \t`PCRE_UNGREEDY   \tinvert greedyness of quantifiers",
+        " expression `s with flags `n."
+        " Returns cons(`errorstring, `erroroffset) on error",
 	2, (struct string *pat, value mflags),
 	OP_LEAF | OP_NOESCAPE, "sn.[ok]")
 {
@@ -779,36 +761,25 @@ static const pcre *get_regexp(value x)
   return (const pcre *)restr->str;
 }
 
+#if ((PCRE_MAJOR * 100) + PCRE_MINOR) >= 206
+#	define PCRE_START_OFFSET 0, 
+#else
+#	define PCRE_START_OFFSET
+#endif
+
 TYPEDOP(regexp_exec, 0,
-        "`r `s `n0 `n1 -> `v. Tries to match the string `s, starting at"
-	" character `n0 with regexp matcher `r and flags `n1.\r\n"
-	"Returns a vector of submatches or false if no match.\r\n"
-	"A submatch is either a string matched by the corresponding"
-	" parenthesis group, or null if that group was not used.\r\n"
-	"If `n & `PCRE_INDICES, submatches are instead represented as"
-	" cons(`start, `length) or null.\r\n"
-	"The following flags are supported:\r\n"
-	"  \t`PCRE_7BIT      \tconvert the haystack to its 7-bit equivalent"
-	" before matching\r\n"
-	"  \t`PCRE_ANCHORED  \tmatch only at the first position\r\n"
-	"  \t`PCRE_INDICES   \tsee above\r\n"
-	"  \t`PCRE_NOTBOL    \t`s is not the beginning of a line\r\n"
-	"  \t`PCRE_NOTEMPY   \tan empty string is not a valid match\r\n"
-	"  \t`PCRE_NOTEOL    \t`s is not the end of a line",
-        4, (struct string *mre, struct string *str, value msofs, value mflags),
-	OP_LEAF | OP_NOESCAPE, "osnn.[vn]")
+        "`r `s `n -> `v. Tries to match the string `s with regexp"
+	" matcher `r and flags `n. Returns a vector of submatches or false if"
+	" no match. If `n & `PCRE_INDICES, return a vector of"
+        " cons(`start, `length) for each submatch instead.",
+        3, (struct string *mre, struct string *str, value mflags),
+	OP_LEAF | OP_NOESCAPE, "osn.[vn]")
 {
   struct gcpro gcpro1;
 
   int flags = GETINT(mflags);
   const pcre *re = get_regexp(mre);
   TYPEIS(str, type_string);
-
-  size_t slen = string_len(str);
-
-  long sofs = GETINT(msofs);
-  if (sofs < 0 || sofs > slen)
-    runtime_error(error_bad_index);
 
   int nsub = pcre_info(re, NULL, NULL);
   if (nsub < 0)
@@ -818,6 +789,7 @@ TYPEDOP(regexp_exec, 0,
 
   char *haystack = str->str;
   char *lstr = NULL;
+  size_t slen = string_len(str);
 
   bool indices = flags & PCRE_INDICES;
   flags &= ~PCRE_INDICES;
@@ -831,9 +803,8 @@ TYPEDOP(regexp_exec, 0,
       flags &= ~PCRE_7BIT;
     }
 
-  /* n.b., requires reasonably new libpcre (older ones did not have
-     the 'sofs' parameter) */
-  int res = pcre_exec(re, NULL, haystack, slen, sofs,
+  int res = pcre_exec(re, NULL, haystack, slen,
+                      PCRE_START_OFFSET
                       flags, ovec, olen);
 
   free(lstr);

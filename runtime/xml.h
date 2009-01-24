@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_XML_H
-#define RUNTIME_XML_H
+#ifndef MXML_H
+#define MXML_H
 
 #ifdef USE_XML
 enum xml_node {
@@ -40,4 +40,4 @@ enum xml_node {
 
 void xml_init(void);
 
-#endif /* RUNTIME_XML_H */
+#endif /* XML_H */

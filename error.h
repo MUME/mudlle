@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef ERROR_H
-#define ERROR_H
+#ifndef RUNTIME_ERROR_H
+#define RUNTIME_ERROR_H
 
 #include <setjmp.h>
 
@@ -74,4 +74,4 @@ void runtime_warning(const char *msg);
 
 struct vector *get_mudlle_call_trace(void);
 
-#endif /* ERROR_H */
+#endif

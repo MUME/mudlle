@@ -23,8 +23,8 @@
  * Support routines for different charsets
  */
 
-#ifndef CHARSET_H
-#define CHARSET_H
+#ifndef UTILS_CHARSET_H
+#define UTILS_CHARSET_H
 
 #include <stdbool.h>
 #include <string.h>
@@ -63,4 +63,4 @@ void str8lwr(char *str);
 void str7lwr(char *str);
 char *str8cap(char *str);
 
-#endif  /* CHARSET_H */
+#endif // UTILS_CHARSET_H

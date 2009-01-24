@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef MVALUES_H
-#define MVALUES_H
+#ifndef VALUES_H
+#define VALUES_H
 
 #include <stddef.h>
 #include "types.h"
@@ -268,4 +268,4 @@ struct mcode /* machine-language code object */
 };
 #endif  /* NOCOMPILER */
 
-#endif  /* MVALUES_H */
+#endif  /* VALUES_H */

@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_RUNTIME_H
-#define RUNTIME_RUNTIME_H
+#ifndef RUNTIME_H
+#define RUNTIME_H
 
 #include "../mudlle.h"
 #include "../types.h"
@@ -169,4 +169,5 @@ void check_interrupt(void);
 void mudlle_consts_init(void);
 
 
-#endif /* RUNTIME_RUNTIME_H */
+#endif
+

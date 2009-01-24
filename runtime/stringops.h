@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_STRINGOPS_H
-#define RUNTIME_STRINGOPS_H
+#ifndef STRING_H
+#define STRING_H
 
 value string_append(struct string *s1, struct string *s2);
 value code_string_ref(struct string *str, value i);
@@ -32,4 +32,4 @@ const unsigned char *get_iso88591_pcre_table(void);
 
 bool is_regexp(value _re);
 
-#endif /* RUNTIME_STRINGOPS_H */
+#endif

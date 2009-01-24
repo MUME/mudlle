@@ -29,14 +29,6 @@
 
 struct oport;
 
-struct oport_stat {
-  enum {
-    oport_type_string,
-    oport_type_file,
-  } type;
-  size_t size;
-};
-
 /* Methods for the oport class */
 struct oport_methods
 {
@@ -45,7 +37,6 @@ struct oport_methods
   void (*write)(struct oport *p, const char *data, int nchars);
   void (*swrite)(struct oport *p, struct string *s, int from, int nchars);
   void (*flush)(struct oport *p);
-  void (*stat)(struct oport *p, struct oport_stat *buf);
 };
 
 struct oport /* A generic output port */
@@ -70,11 +61,8 @@ value make_file_oport(FILE *f);
      Also there is no report of any errors that may occur on f
 */
 
-typedef struct {
-  void (*write)(const char *str, size_t len, value data);
-  void (*stat)(struct oport_stat *buf, value data);
-} line_oport_methods_t;
-value make_line_oport(const line_oport_methods_t *methods, value data);
+typedef void (*line_handler_t)(const char *str, size_t len, value data);
+value make_line_oport(line_handler_t line_handler, value data);
 
 struct string *port_string(struct oport *p);
 /* Returns: A mudlle string representing all the data send to port p.
@@ -120,9 +108,6 @@ void port_append_escape(struct oport *p1, struct oport *p2, int esc);
 
 #define opwrite(op, s, n) \
   do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->write((op), (s), (n))); } while (0)
-
-#define opstat(op, buf)                                                     \
-  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->stat(op, buf)); } while (0)
 
 #define pswrite(op, s, f, n) \
   do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->swrite((op), (s), (f), (n))); } while (0)

@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_SUPPORT_H
-#define RUNTIME_SUPPORT_H
+#ifndef SUPPORT_H
+#define SUPPORT_H
 
 void support_init(void);
 
-#endif /* RUNTIME_SUPPORT_H */
+#endif

@@ -88,4 +88,4 @@ int table_entries(struct table *table);
 
 #define DEF_TABLE_SIZE 8	/* Convenient initial size */
 
-#endif /* TABLE_H */
+#endif

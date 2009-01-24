@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_ARITH_H
-#define RUNTIME_ARITH_H
+#ifndef ARITH_H
+#define ARITH_H
 
 void arith_init(void);
 
-#endif /* RUNTIME_ARITH_H */
+#endif

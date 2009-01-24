@@ -217,7 +217,7 @@ static value build_file_stat(struct stat *sb)
 }
 
 UNSAFETOP(file_stat, 0, "`s -> `v. Returns status of file `s, or false for"
-          " failure. See the `FS_xxx constants and `file_lstat().",
+          "failure. See the `FS_xxx constants and `file_lstat().",
           1, (struct string *fname),
           OP_LEAF, "s.[vn]")
 {
@@ -339,98 +339,46 @@ UNSAFETOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
 #endif /* ! WIN32 */
 
 TYPEDOP(strerror, 0, "`n -> `s. Returns an error string corresponding to"
-        " errno `n, or `false if there is no such errno.",
+        " errno `n, an integer with an errno if there is an error",
         1, (value merrno), OP_LEAF, "n.S")
 {
-  const char *s = strerror(GETINT(merrno));
-  return s ? alloc_string(s) : makebool(false);
+  const char *s;
+  if ((s = strerror(GETINT(merrno))))
+    return alloc_string(s);
+  return makeint(errno);
+
 }
 
-UNSAFETOP(print_file_part, 0,
-          "`oport `s1 `n0 `x -> `n1. Print `x bytes of contents of file"
-          " `s1 starting from byte `n0, or the rest of the file if"
-          " `x is null.\n"
-          "Output it sent to port `oport.\n"
-          "Returns zero if successful, a Unix errno value"
-          " if there was file I/O error, or -1 if `oport became too full.\n"
-          "It is not an error to start after the end of the file, nor to"
-          " try to read beyond the end of the file.",
-	  4, (struct oport *p, struct string *name, value mstart,
-              value mbytes),
-          OP_LEAF, "osn[nu].n")
+UNSAFETOP(print_file, 0,
+          "`oport `s1 -> `n. Print the contents of file `s1 and to output"
+          " port `oport. Returns zero or a Unix errno value.",
+	  2, (struct oport *p, struct string *name),
+	  OP_LEAF, "os.n")
 {
   TYPEIS(name, type_string);
-
-  long start = GETINT(mstart);
-  if (start < 0)
-    runtime_error(error_bad_value);
-  long bytes;
-  if (mbytes == NULL)
-    bytes = -1;
-  else
-    {
-      bytes = GETINT(mbytes);
-      if (bytes < 0)
-        runtime_error(error_bad_value);
-    }
 
   FILE *f = fopen(name->str, "r");
   if (f == NULL)
     return makeint(errno);
 
-  if (start != 0 && fseek(f, start, SEEK_SET) == -1)
-    {
-      int r = errno;
-      fclose(f);
-      return makeint(r);
-    }
-
   struct gcpro gcpro1;
   GCPRO1(p);
   p = get_oport(p);
 
-  int result = 0;
-  char *buf = malloc(16 * 1024);
-  while (bytes)
+  for (;;)
     {
-      long toread = (bytes < 0 || bytes > sizeof buf
-                     ? sizeof buf
-                     : bytes);
-      size_t res = fread(buf, 1, toread, f);
-      if (res == 0)
-        {
-          result = ferror(f) ? EIO : 0;
-          break;
-        }
-      struct oport_stat obuf;
-      opstat(p, &obuf);
-      if (obuf.size >= (obuf.type == oport_type_file
-                        ? 10 * 1024 * 1024
-                        : 128 * 1024))
-        {
-          result = -1;
-          break;
-        }
+      char buf[1024];
+      size_t res = fread(buf, 1, sizeof buf, f);
+      if (res <= 0)
+        break;
       opwrite(p, buf, res);
-      if (bytes >= 0)
-        bytes -= res;
     }
-  free(buf);
+
   UNGCPRO();
+
   fclose(f);
 
-  return makeint(result);
-}
-
-UNSAFETOP(print_file, 0,
-          "`oport `s1 -> `n. Print the contents of file `s1 and to output"
-          " port `oport. Returns zero if successful, a Unix errno value"
-          " if there was file I/O error, or -1 if `oport became too full."
-          " Cf. `print_file_part().",
-	  2, (struct oport *p, struct string *name),
-	  OP_LEAF, "os.n")
-{
-  return code_print_file_part(p, name, makeint(0), NULL);
+  return makeint(0);
 }
 
 UNSAFETOP(file_read, 0,
@@ -626,7 +574,6 @@ void files_init(void)
   DEFINE(file_write);
   DEFINE(file_append);
   DEFINE(print_file);
-  DEFINE(print_file_part);
 
   DEFINE(mkdir);
   DEFINE(directory_files);

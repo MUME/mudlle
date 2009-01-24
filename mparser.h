@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef MPARSER_H
-#define MPARSER_H
+#ifndef PARSER_H
+#define PARSER_H
 
 #include "tree.h"
 #include "tokens.h"
@@ -28,4 +28,4 @@
 mfile parse(block_t heap);
 void parser_init(void);
 
-#endif /* MPARSER_H */
+#endif

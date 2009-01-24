@@ -281,4 +281,4 @@ do {						\
 int mudlle_strtoint(const char *sp, int *i);
 int mudlle_strtofloat(const char *sp, double *d);
 
-#endif /* TYPES_H */
+#endif
