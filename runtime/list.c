@@ -29,7 +29,8 @@ TYPEDOP(cons, 0, "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2",
   return (alloc_list(car, cdr));
 }
 
-TYPEDOP(car, 0, "`l -> `x. Returns first element of pair `l", 1, (struct list *l),
+TYPEDOP(car, 0, "`l -> `x. Returns first element of pair `l",
+        1, (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
   TYPEIS(l, type_pair);
@@ -49,13 +50,15 @@ TYPEDOP(pairp, "pair?", "`x -> `b. Returns TRUE if `x is a pair", 1, (value v),
   return makebool(TYPE(v, type_pair));
 }
 
-TYPEDOP(listp, "list?", "`x -> `b. Returns TRUE if `x is a pair or null", 1, (value v),
+TYPEDOP(listp, "list?", "`x -> `b. Returns TRUE if `x is a pair or null",
+        1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(!v || TYPE(v, type_pair));
 }
 
-TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object", 1, (value v),
+TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object",
+        1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(v == NULL);
@@ -81,11 +84,11 @@ TYPEDOP(setcdr, "set_cdr!", "`l `x ->. Sets the 2nd element of pair `l to `x",
   undefined();
 }
 
-static const typing list_tset = { ".l", "xx*.k", NULL };
+static const typing list_tset = { ".u", "xx*.k", NULL };
 
 FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
-       list_tset, /* extern */)
+       list_tset, static)
 {
   struct list *l;
   struct gcpro gcpro1, gcpro2;

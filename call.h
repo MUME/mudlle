@@ -75,12 +75,12 @@ void callable(value c, int nargs);
 */
 
 int callablep(value c, int nargs);
-/* Returns: FALSE if c is not something that can be called with
+/* Returns: false if c is not something that can be called with
      nargs arguments.
 */
 
 int seclevel_violator(value c);
-/* Returns: TRUE is calling c will cause a seclevel runtime error
+/* Returns: true is calling c will cause a seclevel runtime error
 */
 
 /* as above, but trap errors */

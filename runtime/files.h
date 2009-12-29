@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef FILES_H
-#define FILES_H
+#ifndef RUNTIME_FILES_H
+#define RUNTIME_FILES_H
 
 enum {
   FS_DEV     =  0,
@@ -57,5 +57,6 @@ enum {
 };
 
 void files_init(void);
+void poll_async_processes(void);
 
-#endif
+#endif /* RUNTIME_FILES_H */

@@ -169,8 +169,8 @@ extern struct catch_context *exception_context;
 
 int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode);
 /* Effects: Executes fn(x) with error protection in place.
-   Returns: TRUE if all went well, FALSE otherwise.
-     If FALSE, information on the exeception that occurred is in 
+   Returns: true if all went well, false otherwise.
+     If false, information on the exeception that occurred is in 
        exception_signal/exception_value.
      The execution environment is protected by this function, i.e.:
         stack
@@ -244,6 +244,6 @@ void remove_call_trace(value v);
 void add_call_trace(value v, int unhandled_only);
 
 value mjmpbuf(void);
-int is_mjmpbuf(value buf);
+bool is_mjmpbuf(value buf);
 
 #endif

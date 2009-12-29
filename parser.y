@@ -224,7 +224,7 @@ mfile parse(block_t heap)
 
   parser_memory = heap;
   line_memory = new_block();
-  erred = FALSE;
+  erred = false;
   result = yyparse();
   free_block(line_memory);
   line_memory = parser_memory = NULL;
@@ -283,10 +283,8 @@ static const struct mkeyword types[] = {
 
 static int find_type(const char *name, mtype *type)
 {
-  int i;
-
-  for (i = 0; i < NTYPES; i++)
-    if (!stricmp(name, types[i].name))
+  for (int i = 0; i < NTYPES; i++)
+    if (stricmp(name, types[i].name) == 0)
       {
 	*type = types[i].value;
 	return 1;
@@ -484,8 +482,8 @@ help :
   } | STRING ;
 
 parameters : 
-  '(' plist ')' { $$.varargs = FALSE; $$.args = $2; } |
-  variable_name { $$.varargs = TRUE; $$.var = $1; } ;
+  '(' plist ')' { $$.varargs = false; $$.args = $2; } |
+  variable_name { $$.varargs = true; $$.var = $1; } ;
 
 plist :
   /* empty */ { $$ = NULL; } |
@@ -623,8 +621,8 @@ table_entry_list :
   table_entry { $$ = new_cstlist(parser_memory, $1, NULL); } |
   table_entry_list table_entry { 
     str_and_len_t *sym = &$2->u.constpair->cst1->u.string;
-    str_and_len_t *conflict;
-    if ((conflict = cstlist_has_symbol($1, *sym)))
+    str_and_len_t *conflict = cstlist_find_symbol($1, *sym);
+    if (conflict)
       {
 	compile_error("table entry '%s' conflicts with entry '%s'",
 		      sym->str, conflict->str);

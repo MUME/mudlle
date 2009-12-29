@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_ERROR_H
-#define RUNTIME_ERROR_H
+#ifndef ERROR_H
+#define ERROR_H
 
 #include <setjmp.h>
 
@@ -28,7 +28,8 @@
 #define SIGNAL_LONGJMP 2
 #define SIGNAL_RETURN  3
 
-typedef enum { 
+typedef enum {
+  error_none = -1,
   error_bad_function,
   error_stack_underflow,
   error_bad_type,
@@ -69,7 +70,8 @@ void runtime_error(runtime_errors error) NORETURN;
    Note: Never returns
 */
 
+void runtime_warning(const char *msg);
+
 struct vector *get_mudlle_call_trace(void);
 
-#endif
-
+#endif /* ERROR_H */

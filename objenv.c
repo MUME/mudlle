@@ -83,6 +83,7 @@ ulong env_add_entry(struct env *env, value v)
   return used;
 }
 
+#if 0
 void print_env(struct oport *f, struct env *env)
 {
   ulong used = intval(env->used), i;
@@ -97,3 +98,4 @@ void print_env(struct oport *f, struct env *env)
     }
   UNGCPRO();
 }
+#endif  /* 0 */

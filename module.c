@@ -101,7 +101,7 @@ int module_unload(const char *name)
      successful
      Sets to null all variables that belonged to name, and resets their status
      to var_normal
-   Returns: FALSE if name was protected or loading
+   Returns: false if name was protected or loading
 */
 {
   int status = module_status(name);
@@ -110,7 +110,7 @@ int module_unload(const char *name)
     {
       ulong gsize = intval(environment->used), i;
 
-      if (status == module_loading || status == module_protected) return FALSE;
+      if (status == module_loading || status == module_protected) return false;
 
       for (i = 0; i < gsize; i++)
 	{
@@ -128,13 +128,13 @@ int module_unload(const char *name)
       module_set(name, module_unloaded, 0);
     }
 
-  return TRUE;
+  return true;
 }
 
 int module_load(const char *name)
 /* Effects: Attempts to load module name by calling mudlle hook
      Error/warning messages are sent to muderr
-     Sets erred to TRUE in case of error
+     Sets erred to true in case of error
      Updates module status
    Modifies: erred
    Requires: module_status(name) == module_unloaded
@@ -155,9 +155,8 @@ int module_require(const char *name)
      Other effects as in module_load
 */
 {
-  int status;
-
-  if ((status = module_status(name)) == module_unloaded)
+  int status = module_status(name);
+  if (status == module_unloaded)
     status = module_load(name);
 
   return status;
@@ -184,24 +183,24 @@ int module_vstatus(long n, struct string **name)
 int module_vset(long n, int status, struct string *name)
 /* Effects: Sets status of global variable n to status.
      name is the module name for status var_module
-   Returns: TRUE if successful, FALSE if the change is impossible
+   Returns: true if successful, false if the change is impossible
      (ie status was already var_module)
 */
 {
-  if (!integerp(mvars->data[n])) return FALSE;
+  if (!integerp(mvars->data[n])) return false;
 
   if (status == var_module)
     mvars->data[n] = name;
   else
     mvars->data[n] = makeint(status);
 
-  return TRUE;
+  return true;
 }
 
 void module_init(void)
 /* Initialise this module */
 {
   module_data = alloc_table(DEF_TABLE_SIZE);
-  staticpro((value *)&module_data);
+  staticpro(&module_data);
   load_library = global_lookup("load_library");
 }

@@ -19,6 +19,9 @@
 # "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
 # PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
+# disable built-in rules
+.SUFFIXES:
+
 USE_XML       := yes
 USE_GMP       := yes
 USE_READLINE  := yes
@@ -47,7 +50,7 @@ OBJS= compile.o env.o interpret.o objenv.o print.o table.o	\
 SRC = $(filter-out x86builtins.c, $(OBJS:%.o=%.c))
 
 CC=gcc 
-CFLAGS := -g -std=gnu99 -O0 -Wall -Wshadow -Wwrite-strings	\
+CFLAGS := -g -m32 -std=gnu99 -O0 -Wall -Wshadow -Wwrite-strings	\
 	-Wnested-externs -Wunused
 export CC
 export CFLAGS
@@ -86,7 +89,7 @@ endif
 all: mudlle
 
 mudlle: $(OBJS) runlib
-	$(CC) -g -Wall -o mudlle $(OBJS) runtime/librun.a $(LDFLAGS)
+	$(CC) $(CFLAGS) -o mudlle $(OBJS) runtime/librun.a $(LDFLAGS)
 
 puremud: $(OBJS) runlib
 	purify -cache-dir=/tmp $(CC) -o puremud $(OBJS) runtime/librun.a -lm
@@ -126,16 +129,16 @@ parser.c: parser.y
 	mv parser.tab.c parser.c
 
 builtins.o: builtins.S
-	$(CC) -o builtins.o -c builtins.S
+	$(CC) $(CFLAGS) -o builtins.o -c builtins.S
 
 x86builtins.o: x86builtins.S x86consts.h
-	$(CC) -g -c x86builtins.S -o x86builtins.o
+	$(CC) $(CFLAGS) -c x86builtins.S -o x86builtins.o
 
 x86consts.h: genconst
 	./genconst > $@
 
 genconst: genconst.o Makefile
-	$(CC) -g -Wall -o $@ $<
+	$(CC) $(CFLAGS) -o $@ $<
 
 genconst.o: genconstdefs.h
 
@@ -151,7 +154,10 @@ dep depend: .depend
 .depend: $(SRC) genconst.c genconstdefs.h
 	$(MAKEDEPEND) $(CFLAGS) $(SRC) genconst.c > .depend
 
-compiler:
-	/bin/sh install-compiler
+compiler: mudlle
+	/bin/sh build-compiler
+
+install: compiler
+	/bin/sh install-compiler $(IDIR)
 
 -include .depend

@@ -75,7 +75,7 @@ static INLINE value invoke_stack(struct closure *c, int nargs);
 
 #define RESTORE_INS() (ins = ((instruction *)me.u.mudlle.code) + ins_index)
 #define INSUBYTE() (ins_index++, *ins++)
-#define INSBYTE() ((byte)INSUBYTE())
+#define INSBYTE() ((sbyte)INSUBYTE())
 #define INSUWORD() (byte1 = *ins++, ins_index += 2, (byte1 << 8) + *ins++)
 #define INSWORD() ((word)INSUWORD())
 
@@ -496,7 +496,7 @@ void do_interpret(struct closure *fn, int nargs)
       case op_branch1:
       branch1:
 	{
-	  byte offset = INSBYTE();
+	  sbyte offset = INSBYTE();
 
 	  ins_index += offset;
 	  ins += offset;

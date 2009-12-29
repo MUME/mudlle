@@ -35,7 +35,7 @@ int mstart(block_t heap, mfile f, int seclev);
      - setup information for mrecall/massign/mexecute
 
      Sends error/warning messages.
-   Returns: TRUE if compilation can proceed
+   Returns: true if compilation can proceed
 */
 
 void mrecall(ulong n, const char *name, fncode fn);

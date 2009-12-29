@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef IO_H
-#define IO_H
+#ifndef RUNTIME_IO_H
+#define RUNTIME_IO_H
 
 enum {
   tm_sec,
@@ -36,4 +36,6 @@ enum {
 
 void io_init(void);
 
-#endif /* IO_H */
+struct oport *get_oport(struct oport *oport);
+
+#endif /* RUNTIME_IO_H */

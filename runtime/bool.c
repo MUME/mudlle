@@ -22,36 +22,37 @@
 #include <string.h>
 #include "runtime/runtime.h"
 
-OPERATION(not, 0, "`b1 -> `b2. `b2 = not `b1", 1, (value v),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(not, 0, "`b1 -> `b2. `b2 = not `b1", 1, (value v),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
-  return makebool(!istrue(v));
+  return makebool(isfalse(v));
 }
 
-OPERATION(or, 0, "`b1 `b2 -> `b3. Returns `b1 or `b2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(or, 0, "`b1 `b2 -> `b3. Returns `b1 or `b2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
-  return (makebool(istrue(v1) || istrue(v2)));
+  return makebool(istrue(v1) || istrue(v2));
 }
 
-OPERATION(and, 0, "`b1 `b2 -> `b3. Returns `b1 and `b2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(and, 0, "`b1 `b2 -> `b3. Returns `b1 and `b2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
-  return (makebool(istrue(v1) && istrue(v2)));
+  return makebool(istrue(v1) && istrue(v2));
 }
 
-OPERATION(equal, "==", "`x1 `x2 -> `b. TRUE if `x1 and x2 `are the same object",
-	  2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(equal, "==", "`x1 `x2 -> `b. TRUE if `x1 and x2 `are the same object",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
-  return (makebool(v1 == v2));
+  return makebool(v1 == v2);
 }
 
-OPERATION(not_equal, "!=", "`x1 `x2 -> `b. TRUE if `x1 and `x2 are different objects",
-          2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(not_equal, "!=", "`x1 `x2 -> `b. TRUE if `x1 and `x2 are different"
+        " objects",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
-  return (makebool(v1 != v2));
+  return makebool(v1 != v2);
 }
 
 void bool_init(void)
@@ -61,6 +62,6 @@ void bool_init(void)
   DEFINE(and);
   DEFINE(equal);
   DEFINE(not_equal);
-  system_define("true", makebool(TRUE));
-  system_define("false", makebool(FALSE));
+  system_define("true", makebool(true));
+  system_define("false", makebool(false));
 }

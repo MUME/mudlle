@@ -91,35 +91,31 @@ static value make_list(cstlist csts, int has_tail)
 
 static value make_bigint(const char *s)
 {
-  struct bigint *bi;
   mpz_t m;
-
   if (mpz_init_set_str(m, s, 0))
-    assert(0);
-  bi = alloc_bigint(m);
+    abort();
+  struct bigint *bi = alloc_bigint(m);
   free_mpz_temps();
   return (value)bi;
 }
 
 static value make_array(cstlist csts)
 {
-  struct gcpro gcpro1;
-  struct list *l;
-  struct vector *v;
-  ulong size = 0, i;
-  cstlist scan;
+  ulong size = 0;
   
-  for (scan = csts; scan; scan = scan->next) size++;
+  for (cstlist scan = csts; scan; scan = scan->next) size++;
 
   /* This intermediate step is necessary as v is IMMUTABLE
      (so must be allocated after its contents) */
-  l = make_list(csts, 0);
+  struct list *l = make_list(csts, 0);
+
+  struct gcpro gcpro1;
   GCPRO1(l);
-  v = alloc_vector(size);
+  struct vector *v = alloc_vector(size);
   v->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
   UNGCPRO();
 
-  for (i = 0; i < size; i++, l = l->cdr) v->data[i] = l->car;
+  for (int i = 0; i < size; i++, l = l->cdr) v->data[i] = l->car;
 
   return v;
 }
@@ -356,7 +352,7 @@ static void generate_while(component condition, component iteration, fncode fn)
   adjust_depth(1, fn);
 }
 
-void generate_args(clist args, fncode fn, uword *_count)
+static void generate_args(clist args, fncode fn, uword *_count)
 {
   uword count = 0;
 
@@ -372,7 +368,6 @@ void generate_args(clist args, fncode fn, uword *_count)
 static void generate_block(block b, fncode fn)
 {
   clist cc = b->sequence;
-  vlist vl;
 
   env_block_push(b->locals);
 
@@ -383,14 +378,17 @@ static void generate_block(block b, fncode fn)
       if (cc->next) ins0(op_discard, fn);
     }
 
-  for (vl = b->locals; vl; vl = vl->next)
+  for (vlist vl = b->locals; vl; vl = vl->next)
     if (!vl->was_written)
       if (!vl->was_read)
-	warning_line(b->filename, b->lineno, "local variable %s is unused", vl->var);
+	warning_line(b->filename, b->lineno, "local variable %s is unused",
+                     vl->var);
       else
-	warning_line(b->filename, b->lineno, "local variable %s is never written", vl->var);
+	warning_line(b->filename, b->lineno,
+                     "local variable %s is never written", vl->var);
     else if (!vl->was_read)
-      warning_line(b->filename, b->lineno, "local variable %s is never read", vl->var);
+      warning_line(b->filename, b->lineno,
+                   "local variable %s is never read", vl->var);
   env_block_pop();
 }
 
@@ -468,7 +466,7 @@ static void generate_component(component comp, fncode fn)
       {
 	uword idx;
 
-	idx = add_constant(generate_function(comp->u.closure, FALSE, fn), fn);
+	idx = add_constant(generate_function(comp->u.closure, false, fn), fn);
 	if (idx < ARG1_MAX) ins1(op_closure_code1, idx, fn);
 	else ins2(op_closure_code2, idx, fn);
 	break;
@@ -504,17 +502,18 @@ static void generate_component(component comp, fncode fn)
 
       switch (comp->u.builtin.fn)
 	{
-	case b_if:
-	  generate_if(args->c,
-		      new_component(fnmemory(fn), c_block,
-				    new_codeblock(fnmemory(fn), NULL,
-						  new_clist(fnmemory(fn), args->next->c,
-							    new_clist(fnmemory(fn), component_undefined, NULL)),
-						  NULL,
-						  -1)),
-		      component_undefined,
-		      fn);
+	case b_if: {
+          block cb = new_codeblock(fnmemory(fn), NULL,
+                                   new_clist(fnmemory(fn), args->next->c,
+                                             new_clist(fnmemory(fn),
+                                                       component_undefined,
+                                                       NULL)),
+                                   NULL,
+                                   -1);
+	  generate_if(args->c, new_component(fnmemory(fn), c_block, cb),
+		      component_undefined, fn);
 	  break;
+        }
 	case b_ifelse:
 	  generate_if(args->c, args->next->c, args->next->next->c, fn);
 	  break;
@@ -579,8 +578,7 @@ static struct string *make_arg_types(function f)
   for (vlist a = f->args; a; a = a->next)
     ++i;
  
-  struct string *result = (struct string *)allocate_string(type_string, i + 1);
-  result->str[i] = 0;
+  struct string *result = alloc_empty_string(i);
   for (vlist a = f->args; a; a = a->next)
     result->str[--i] = a->type;
 
@@ -590,11 +588,7 @@ static struct string *make_arg_types(function f)
 
 static struct code *generate_function(function f, int toplevel, fncode fn)
 {
-  fncode newfn;
-  vlist argument;
-  uword nargs, clen;
   struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
-  varlist closure, cvar;
 
   /* Make help string (must be allocated before code (immutability restriction)) */
   struct string *help;
@@ -626,7 +620,7 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
   struct string *arg_types = make_arg_types(f);
   GCPRO(gcpro4, arg_types);
 
-  newfn = new_fncode(toplevel);
+  fncode newfn = new_fncode(toplevel);
 
   set_lineno(f->lineno, newfn);
 
@@ -641,11 +635,13 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
 	 the last argument (on top of the stack) is local value 0, the next to
 	 last local value 1, and so on.
 	 It then discards all the parameters */
-      for (nargs = 0, argument = f->args; argument; argument = argument->next)
+      int nargs = 0;
+      for (vlist argument = f->args; argument; argument = argument->next)
 	nargs++;
       ins1(op_argcheck, nargs, newfn);
 
-      for (nargs = 0, argument = f->args; argument; argument = argument->next) 
+      nargs = 0;
+      for (vlist argument = f->args; argument; argument = argument->next) 
 	{
 	  if (argument->type != stype_any)
 	    ins1(op_typecheck + argument->type, nargs, newfn);
@@ -666,24 +662,22 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
   peephole(newfn);
 
   struct code *c = generate_fncode(newfn, help, varname, filename, f->lineno,
-                                   compile_level);
-  c->return_type = f->type;
-  c->arg_types = arg_types;
-  closure = env_pop(&c->nb_locals);
+                                   arg_types, f->type, compile_level);
+  varlist closure = env_pop(&c->nb_locals);
 
   UNGCPRO();
 
   /* Generate code for creating closure */
   
   /* Count length of closure */
-  clen = 0;
-  for (cvar = closure; cvar; cvar = cvar->next) clen++;
+  int clen = 0;
+  for (varlist cvar = closure; cvar; cvar = cvar->next) clen++;
 
   /* Generate closure */
   ins1(op_closure, clen, fn);
 
   /* Add variables to it */
-  for (cvar = closure; cvar; cvar = cvar->next)
+  for (varlist cvar = closure; cvar; cvar = cvar->next)
     ins1(op_closure_var + cvar->vclass, cvar->offset, fn);
 
   delete_fncode(newfn);
@@ -693,30 +687,28 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
 
 struct closure *compile_code(mfile f, int seclev)
 {
-  str_and_len_t sl = {};
-  struct code *cc;
-  struct gcpro gcpro1;
-  uword dummy;
-  fncode top;
-  block b = f->body;
+  str_and_len_t sl = { .len = 0, .str = NULL };
 
   const char *filename = (f->body->filename
                           ? f->body->filename
                           : "");
   compile_level = seclev;
-  erred = FALSE;
+  erred = false;
   env_reset();
-  top = new_fncode(TRUE);
+  fncode top = new_fncode(true);
   env_push(NULL, top);		/* Environment must not be totally empty */
   function func = new_function(fnmemory(top), stype_any, sl, NULL,
-                               new_component(fnmemory(top), c_block, b),
+                               new_component(fnmemory(top), c_block,
+                                             f->body),
                                f->body->lineno,
                                filename);
   func->varname = "top-level";
-  cc = generate_function(func, TRUE, top);
+  struct code *cc = generate_function(func, true, top);
 
+  struct gcpro gcpro1;
   GCPRO1(cc);
-  generate_fncode(top, NULL, NULL, NULL, 0, seclev);
+  generate_fncode(top, NULL, NULL, NULL, 0, NULL, stype_any, seclev);
+  uword dummy;
   env_pop(&dummy);
   delete_fncode(top);
   UNGCPRO();
@@ -728,7 +720,7 @@ struct closure *compile_code(mfile f, int seclev)
 
 int interpret(value *result, int seclev, int reload)
 {
-  int ok = FALSE;
+  bool ok = false;
   block_t parser_block;
   mfile f;
 
@@ -779,9 +771,9 @@ void compile_init(void)
   component_undefined = new_component(compile_block, c_constant,
 				      new_constant(compile_block, cst_int, 42));
   component_true = new_component(compile_block, c_constant,
-				 new_constant(compile_block, cst_int, TRUE));
+				 new_constant(compile_block, cst_int, true));
   component_false = new_component(compile_block, c_constant,
-				  new_constant(compile_block, cst_int, FALSE));
+				  new_constant(compile_block, cst_int, false));
   
   builtin_functions[b_or] = global_lookup("or");
   builtin_functions[b_and] = global_lookup("and");
@@ -808,7 +800,7 @@ void compile_init(void)
   builtin_ops[b_set] = op_builtin_set;
   builtin_functions[b_cons] = global_lookup("cons");
 
-  staticpro((value *)&last_filename);
+  staticpro(&last_filename);
   last_filename = alloc_string("");
   last_c_filename = xstrdup("");
 }

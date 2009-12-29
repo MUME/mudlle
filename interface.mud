@@ -39,7 +39,8 @@ lcompile = fn (s, protect)
 
     display(format("compiling %s", s)); newline();
     if (prelinked = mc:compile(mudlle_parse_file(s, s), protect))
-      save_data(objname, prelinked)
+      save_data(objname, prelinked);
+    !!prelinked
   ];
 
 fcompile = fn (s) lcompile(s, false);

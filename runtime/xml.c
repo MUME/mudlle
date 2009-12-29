@@ -116,11 +116,12 @@ static struct vector *reverse_siblings(struct vector *node)
   return prev;
 }
 
-SECOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
+SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
       " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
-      " an error string.",
+       " an error string. `t is the name table, or NULL.",
       3, (struct string *mfilename, value mflags,
-          struct table *name_table), LVL_IMPLEMENTOR, 0)
+           struct table *name_table), LVL_IMPLEMENTOR, 0,
+       "snx.x")
 {
   struct vector *xmlstack = NULL, *node = NULL;
   struct gcpro gcpro1, gcpro2, gcpro3;
@@ -323,7 +324,7 @@ void xml_init(void)
   DEFINE_INT(XML_READER_TYPE_XML_DECLARATION);
 
   zero_vector = alloc_vector(0);
-  staticpro((value *)&zero_vector);
+  staticpro(&zero_vector);
 }
 
 #else  /* ! USE_XML */

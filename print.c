@@ -30,13 +30,15 @@
 #include "ins.h"
 #include "table.h"
 
+#include "runtime/stringops.h"
+
 
 #define MAX_PRINT_COUNT   400
 #define MAX_PRINT_STRLEN  400 
 #define FLOATSTRLEN 20
 
 static int prt_count;
-jmp_buf print_complex;
+static jmp_buf print_complex;
 
 static unsigned char writable_chars[256 / 8];
 #define set_writable(c, ok) do {			\
@@ -142,7 +144,7 @@ static int write_instruction(struct code *code, struct oport *f,
 {
   ubyte byte1, byte2;
   ubyte op;
-  byte sgnbyte;
+  sbyte sgnbyte;
   word word1;
   int line;
 
@@ -153,7 +155,7 @@ static int write_instruction(struct code *code, struct oport *f,
     "add", "sub", "bitand", "bitor", "not" };
 
 #define insubyte() (*i++)
-#define insbyte() ((byte)insubyte())
+#define insbyte() ((sbyte)insubyte())
 #define insuword() (byte1 = *i++, byte2 = *i++, (byte1 << 8) + byte2)
 #define insword() ((word)insuword())
 
@@ -383,7 +385,7 @@ static void write_integer(struct oport *f, long v)
 {
   char buf[INTSTRLEN];
 
-  pputs(int2str(buf, 10, (ulong)v, TRUE), f);
+  pputs(int2str(buf, 10, (ulong)v, true), f);
 }
 
 static void write_float(struct oport *f, struct mudlle_float *v)
@@ -401,12 +403,10 @@ static void write_float(struct oport *f, struct mudlle_float *v)
 static void write_bigint(struct oport *f, prt_level level, struct bigint *bi)
 {
 #ifdef USE_GMP
-  char *buf;
-  int size;
 
   check_bigint(bi);
-  size = mpz_sizeinbase(bi->mpz, 10);
-  buf = alloca(size + 2);
+  int size = mpz_sizeinbase(bi->mpz, 10);
+  char buf[size + 2];
   mpz_get_str(buf, 10, bi->mpz);
   if (level != prt_display)
     pputs("#b", f);
@@ -426,6 +426,8 @@ static void write_private(struct oport *f, struct grecord *val)
       else
         pputs_cst("{old jmpbuf}", f);
     }
+  else if (is_regexp(val))
+    pputs_cst("{regexp}", f);
   else
     pputs_cst("{private}", f);
 }
@@ -515,7 +517,7 @@ void output_value(struct oport *f, prt_level level, value v)
 	  struct oport *p;
 
 	  GCPRO2(f, v);
-	  p = make_string_outputport();
+	  p = make_string_oport();
 	  GCPRO(gcpro3, p);
 	  prt_count = 0;
 	  _print_value(p, level, v, 1);
@@ -532,10 +534,10 @@ void print_init(void)
 {
   unsigned int c;
 
-  for (c = 32; c < 127; c++) set_writable(c, TRUE);
-  set_writable('"', FALSE);
-  set_writable('\\', FALSE);
-  for (c = 161; c < 255; c++) set_writable(c, TRUE); 
+  for (c = 32; c < 127; c++) set_writable(c, true);
+  set_writable('"', false);
+  set_writable('\\', false);
+  for (c = 161; c < 255; c++) set_writable(c, true); 
 
-  staticpro((value *)&write_table_oport);
+  staticpro(&write_table_oport);
 }

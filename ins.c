@@ -335,12 +335,12 @@ static void number_instructions(fncode fn)
 static int resolve_offsets(fncode fn)
 /* Effects: Resolves all branch offsets in fn. Increases the size of
      the branches if necessary.
-   Returns: TRUE if all branches could be resolved without increasing
+   Returns: true if all branches could be resolved without increasing
      the size of any branches
 */
 {
   ilist scan, prev1, prev2;
-  int ok = TRUE;
+  int ok = true;
 
   prev1 = prev2 = NULL;
 
@@ -387,7 +387,7 @@ static int resolve_offsets(fncode fn)
 		  newp->lab = newp->to = NULL;
 		  prev1->next = newp;
 
-		  ok = FALSE;
+		  ok = false;
 		}
 	    }
 	}
@@ -556,6 +556,8 @@ struct code *generate_fncode(fncode fn,
 			     struct string *varname,
 			     struct string *afilename,
 			     int alineno,
+                             struct string *arg_types,
+                             mtype return_type,
 			     int seclev)
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
@@ -571,13 +573,18 @@ struct code *generate_fncode(fncode fn,
   struct local_value *scancst;
   struct code *gencode;
   ulong size;
-  struct gcpro gcpro1, gcpro2, gcpro3;
+  struct gcpro gcpro1, gcpro2, gcpro3, gcpro4, gcpro5;
+  struct string *lineno_data = NULL;
+
+  reverse_ilist(&fn->instructions);
 
   /* Count # of instructions */
   sequence_length = 0;
   for (scanins = fn->instructions; scanins; scanins = scanins->next) sequence_length++;
 
-  GCPRO2(help, varname); GCPRO(gcpro3, afilename);
+  GCPRO5(help, varname, afilename, arg_types, lineno_data);
+  lineno_data = build_lineno_data(fn);
+
   /* Warning: Portability */
   size = offsetof(struct code, constants) + fn->cstindex * sizeof(value) + 
     sequence_length * sizeof(instruction);
@@ -589,7 +596,7 @@ struct code *generate_fncode(fncode fn,
   gencode->o.garbage_type = garbage_code;
   gencode->o.type = type_code;
   gencode->o.flags = OBJ_IMMUTABLE; /* Code is immutable */
-  gencode->return_type = stype_any;
+  gencode->return_type = return_type;
   gencode->nb_constants = fn->cstindex;
   gencode->nb_locals = 0; /* Initialised later */
   gencode->stkdepth = fn->max_depth;
@@ -600,9 +607,8 @@ struct code *generate_fncode(fncode fn,
   gencode->varname = varname;
 
   gencode->call_count = gencode->instruction_count = 0;
-  gencode->lineno_data = NULL;
-
-  reverse_ilist(&fn->instructions);
+  gencode->lineno_data = lineno_data;
+  gencode->arg_types = arg_types;
 
   /* Copy the sequence (which is reversed) */
   codeins = (instruction *)(gencode->constants + fn->cstindex);
@@ -616,9 +622,6 @@ struct code *generate_fncode(fncode fn,
       GCCHECK(scancst->lvalue);
     }
 
-  GCPRO1(gencode);
-  gencode->lineno_data = build_lineno_data(fn);
-  UNGCPRO();
   /* Jump to interpreter to execute interpreted code - machine specific */
 
 #ifdef AMIGA
@@ -723,7 +726,7 @@ void end_block(fncode fn)
 int exit_block(const char *name, fncode fn)
 /* Effects: Generates code to exit from specified named block
      (pop stack, jump to block exit label)
-   Returns: FALSE if the named block doesn't exist
+   Returns: false if the named block doesn't exist
 */
 {
   blocks find = fn->blks;
@@ -731,7 +734,7 @@ int exit_block(const char *name, fncode fn)
 
   for (;;)
     {
-      if (!find) return FALSE;
+      if (!find) return false;
       if (name == NULL)
 	{
 	  if (find->name == NULL) break;
@@ -745,5 +748,5 @@ int exit_block(const char *name, fncode fn)
   if (npop > 0) ins1(op_exit_n, npop, fn);
   branch(op_branch1, find->exitlab, fn);
 
-  return TRUE;
+  return true;
 }

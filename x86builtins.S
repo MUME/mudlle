@@ -222,16 +222,6 @@
 	
 /* Simple integer operations: +, /, % */
 
-#define INT1ARG \
-	ISINT(arg0b); \
-	je	E(error_bad_type)
-
-#define INT2ARGS \
-	ISINT(arg0b); \
-	je	E(error_bad_type)
-	ISINT(arg1b); \
-	je	E(error_bad_type)
-
 	.globl	N(bmultiply)
 
 N(bmultiply):

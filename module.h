@@ -50,13 +50,13 @@ int module_unload(const char *name);
      successful
      Sets to null all variables that belonged to name, and resets their status
      to var_normal
-   Returns: FALSE if name was protected
+   Returns: false if name was protected
 */
 
 int module_load(const char *name);
 /* Effects: Attempts to load module name by calling mudlle hook
      Error/warning messages are sent to muderr
-     Sets erred to TRUE in case of error
+     Sets erred to true in case of error
      Updates module status
    Modifies: erred
    Requires: module_status(name) == module_unloaded
@@ -82,7 +82,7 @@ int module_vstatus(long n, struct string **name);
 int module_vset(long n, int status, struct string *name);
 /* Effects: Sets status of global variable n to status.
      name is the module name for status var_module
-   Returns: TRUE if successful, FALSE if the change is impossible
+   Returns: true if successful, false if the change is impossible
      (ie status was already var_module)
 */
 

@@ -41,7 +41,8 @@ TYPEDOP(make_vector, 0, "`n -> `v. Create an empty vector of length `n",
   return (newp);
 }
 
-TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector", 1, (struct vector *vec),
+TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector",
+        1, (struct vector *vec),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "v.n")
 {
   TYPEIS(vec, type_vector);
@@ -69,7 +70,8 @@ TYPEDOP(sequence_copy, 0, "`v -> `v. Returns a readonly copy of vector `v",
   return result;
 }
 
-TYPEDOP(vector_fill, "vector_fill!", "`v `x -> `v. Set all elements of `v to `x",
+TYPEDOP(vector_fill, "vector_fill!",
+        "`v `x -> `v. Set all elements of `v to `x",
 	2, (struct vector *vec, value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vx.1")
 {
@@ -87,8 +89,8 @@ TYPEDOP(vector_fill, "vector_fill!", "`v `x -> `v. Set all elements of `v to `x"
   return vec;
 }
 
-TYPEDOP(vector_shift, "vector_shift!", "`v `n0 `n1 `n2 -> `v. Moves `n1 elements starting at"
-	" index `n0 `n2 slots",
+TYPEDOP(vector_shift, "vector_shift!", "`v `n0 `n1 `n2 -> `v."
+        " Moves `n1 elements starting at index `n0 `n2 slots",
 	4, (struct vector *vec, value mstart, value msize, value mdist),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnnn.1")
 {
@@ -162,7 +164,7 @@ static const typing vector_tset = { "x*.v", NULL };
 
 FULLOP(vector, 0, "`x0 `x1 ... -> `v. Returns a vector of the arguments",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
-       vector_tset, /* extern */)
+       vector_tset, static)
 {
   return args;
 }
@@ -170,7 +172,7 @@ FULLOP(vector, 0, "`x0 `x1 ... -> `v. Returns a vector of the arguments",
 FULLOP(sequence, 0,
        "`x0 `x1 ... -> `v. Returns a read-only vector of the arguments",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
-       vector_tset, /* extern */)
+       vector_tset, static)
 {
   // we could create immutable vectors here by scanning all args...
   args->o.flags |= OBJ_READONLY;

@@ -36,9 +36,6 @@
 #include "context.h"
 
 
-#undef INLINE
-#define INLINE 
-
 /* A semi-generational GC:
    - is copying for mutable data
    - a generational for immutable data.
@@ -110,16 +107,16 @@ static ulong last_root;
 /* machine code roots */
 static void forward_registers(void);
 static void unmark_safe_registers(void);
-static INLINE void save_restore_mcode(struct mcode *code);
-static INLINE void scan_mcode(struct mcode *code);
+static void save_restore_mcode(struct mcode *code);
+#ifndef NOCOMPILER
+static void scan_mcode(struct mcode *code);
+#endif
 void flush_icache(ubyte *from, ubyte *to);
 
-void _staticpro(value *pro, const char *desc, const char *file, int line)
+void _staticpro(void *pro, const char *desc, const char *file, int line)
 {
   assert (last_root < MAXROOTS);
 
-  if (strncmp(desc, "(value *)", 9) == 0)
-    desc += 9;
   if (*desc == '&')
     ++desc;
   roots[last_root].data = pro;
@@ -133,23 +130,20 @@ struct vector *get_staticpro_data(void)
 {
   struct vector *res = alloc_vector(last_root);
   struct gcpro gcpro1;
-  int i;
 
   GCPRO1(res);
-  for (i = 0; i < last_root; ++i)
+  for (int i = 0; i < last_root; ++i)
     {
       struct vector *v = alloc_vector(4);
-      struct string *str;
+      v->data[2] = makeint(roots[i].line);
+      v->data[3] = *roots[i].data;
+
       res->data[i] = v;
+      SET_VECTOR((struct vector *)res->data[i], 0,
+                 alloc_string(roots[i].desc));
+      SET_VECTOR((struct vector *)res->data[i], 1,
+                 alloc_string(roots[i].file));
 
-      str = alloc_string(roots[i].desc);
-      ((struct vector *)res->data[i])->data[0] = str;
-
-      str = alloc_string(roots[i].file);
-      ((struct vector *)res->data[i])->data[1] = str;
-
-      ((struct vector *)res->data[i])->data[2] = makeint(roots[i].line);
-      ((struct vector *)res->data[i])->data[3] = *roots[i].data;
     }
   UNGCPRO();
 
@@ -229,11 +223,11 @@ static ubyte *newstart1, *newend1, *newpos1;
 static ubyte *tempblock1, *oldpos1, *oldstart1;
 static ulong tempsize1;
 
-static int newarea;		/* TRUE during new_major_collection */
+static int newarea;		/* true during new_major_collection */
 static ulong major_offset;
-static int saw_mcode;		/* TRUE if forwarded an mcode object */
+static bool saw_mcode;		/* true if forwarded an mcode object */
 
-static int (*special_forward)(struct obj **ptr);
+static int (*special_forward)(void *_ptr);
 
 ulong minorgen, majorgen;
 static ulong newminorgen, newmajorgen;
@@ -284,7 +278,7 @@ void garbage_cleanup(void)
   gcblock = NULL;
 }
 
-INLINE static value move_object(struct obj *obj, struct obj *newobj, long newgen)
+static value move_object(struct obj *obj, struct obj *newobj, long newgen)
 {
   long size = obj->size;
 
@@ -302,7 +296,7 @@ INLINE static value move_object(struct obj *obj, struct obj *newobj, long newgen
   return newobj;
 }
 
-INLINE static ubyte *scan(ubyte *ptr)
+static ubyte *scan(ubyte *ptr)
 {
   struct obj *obj = (struct obj *)ptr;
 
@@ -327,12 +321,14 @@ INLINE static ubyte *scan(ubyte *ptr)
       struct code *code = (struct code *)obj;
       struct obj **c, **cend;
 
-      saw_mcode = TRUE;		/* Code objects contain a jump to the interpreter */
-      if (pointerp(code->help)) special_forward((struct obj **)&code->help);
-      if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
-      if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
-      if (pointerp(code->lineno_data)) special_forward((struct obj **)&code->lineno_data);
-      if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
+#ifndef NOCOMPILER
+      saw_mcode = true; /* code objects contain jump to interpreter */
+#endif
+      if (pointerp(code->help)) special_forward(&code->help);
+      if (pointerp(code->filename)) special_forward(&code->filename);
+      if (pointerp(code->varname)) special_forward(&code->varname);
+      if (pointerp(code->lineno_data)) special_forward(&code->lineno_data);
+      if (pointerp(code->arg_types)) special_forward(&code->arg_types);
       c = code->constants;
       cend = code->constants + code->nb_constants;
       while (c < cend)
@@ -343,8 +339,12 @@ INLINE static ubyte *scan(ubyte *ptr)
       break;
     }
     case garbage_mcode: 
-      saw_mcode = TRUE;
+#ifdef NOCOMPILER
+      abort();
+#else
+      saw_mcode = true;
       scan_mcode((struct mcode *)obj);
+#endif
       break;
     case garbage_permanent: case garbage_temp:
     case garbage_string: case garbage_forwarded:
@@ -388,7 +388,7 @@ static void safe_forward(value *ptr)
      only once */
   if (pointerp(*ptr) && !((ulong)*ptr & 0x2)) /* Hack */
     {
-      special_forward((struct obj **)ptr);
+      special_forward(ptr);
       *ptr = (value)((ulong)*ptr | 0x2);
     }
 }
@@ -401,30 +401,25 @@ static void unmark_safe(value *ptr)
 static void forward_roots(void)
 /* Forward all roots */
 {
-  struct gcpro *aprotect;
-  struct gcpro_list *protect_list;
-  struct dynpro *dyn;
-  ulong i;
-  struct call_stack *stk;
-  struct session_context *sc;
-
   /* Forward activation stack */
   forward_registers();
 
   /* Static roots */
-  for (i = 0; i < last_root; i++)
+  for (int i = 0; i < last_root; i++)
     safe_forward(roots[i].data);
 
   /* Dynamic roots */
-  for (dyn = first.next; dyn->next; dyn = dyn->next)
-    if (pointerp(dyn->obj)) special_forward((struct obj **)&dyn->obj);
+  for (struct dynpro *dyn = first.next; dyn->next; dyn = dyn->next)
+    if (pointerp(dyn->obj)) special_forward(&dyn->obj);
 
   /* Forward protected C vars */
-  for (aprotect = gcpro; aprotect; aprotect = aprotect->next)
+  for (struct gcpro *aprotect = gcpro; aprotect; aprotect = aprotect->next)
     safe_forward(aprotect->obj);
   
   /* Forward protected C lists */
-  for (protect_list = gcpro_list; protect_list; protect_list = protect_list->next)
+  for (struct gcpro_list *protect_list = gcpro_list;
+       protect_list;
+       protect_list = protect_list->next)
     {
       struct local_value *val;
 
@@ -433,24 +428,24 @@ static void forward_roots(void)
     }
 
   /* Forward the call stack */
-  for (stk = call_stack; stk; stk = stk->next)
+  for (struct call_stack *stk = call_stack; stk; stk = stk->next)
     {
       switch (stk->type)
 	{
 	case call_c:
 	  if (pointerp(stk->u.c.prim))
-	    special_forward((struct obj **)&stk->u.c.prim);
+	    special_forward(&stk->u.c.prim);
 	  switch (stk->u.c.nargs) {
 	  case 5:
-	  if (pointerp(stk->u.c.arg5)) special_forward((struct obj **)&stk->u.c.arg5);
+            if (pointerp(stk->u.c.arg5)) special_forward(&stk->u.c.arg5);
 	  case 4:
-	  if (pointerp(stk->u.c.arg4)) special_forward((struct obj **)&stk->u.c.arg4);
+            if (pointerp(stk->u.c.arg4)) special_forward(&stk->u.c.arg4);
 	  case 3:
-	  if (pointerp(stk->u.c.arg3)) special_forward((struct obj **)&stk->u.c.arg3);
+            if (pointerp(stk->u.c.arg3)) special_forward(&stk->u.c.arg3);
 	  case 2:
-	  if (pointerp(stk->u.c.arg2)) special_forward((struct obj **)&stk->u.c.arg2);
+            if (pointerp(stk->u.c.arg2)) special_forward(&stk->u.c.arg2);
 	  case 1:
-	  if (pointerp(stk->u.c.arg1)) special_forward((struct obj **)&stk->u.c.arg1);
+            if (pointerp(stk->u.c.arg1)) special_forward(&stk->u.c.arg1);
 	  case 0:
 	    break;
 	  default:
@@ -460,11 +455,11 @@ static void forward_roots(void)
 
 	case call_bytecode:
 	  if (pointerp(stk->u.mudlle.fn))
-	    special_forward((struct obj **)&stk->u.mudlle.fn);
+	    special_forward(&stk->u.mudlle.fn);
 	  if (pointerp(stk->u.mudlle.code))
-	    special_forward((struct obj **)&stk->u.mudlle.code);
+	    special_forward(&stk->u.mudlle.code);
 	  if (pointerp(stk->u.mudlle.locals))
-	    special_forward((struct obj **)&stk->u.mudlle.locals);
+	    special_forward(&stk->u.mudlle.locals);
 	  break;
 
         case call_compiled:
@@ -476,37 +471,40 @@ static void forward_roots(void)
     }
 
   /* Forward the oports in the session_context */
-  for (sc = session_context; sc; sc = sc->parent)
+  for (struct session_context *sc = session_context; sc; sc = sc->parent)
     {
-      if (sc->_mudout) special_forward((struct obj **)&sc->_mudout);
-      if (sc->_muderr) special_forward((struct obj **)&sc->_muderr);
-      if (sc->data) special_forward((struct obj **)&sc->data);
+      if (sc->_mudout) special_forward(&sc->_mudout);
+      if (sc->_muderr) special_forward(&sc->_muderr);
+      if (sc->data) special_forward(&sc->data);
     }
 
 
   /* Static roots */
-  for (i = 0; i < last_root; i++)
+  for (int i = 0; i < last_root; i++)
     unmark_safe(roots[i].data);
 
   /* Forward protected C vars */
-  for (aprotect = gcpro; aprotect; aprotect = aprotect->next)
+  for (struct gcpro *aprotect = gcpro; aprotect; aprotect = aprotect->next)
     unmark_safe(aprotect->obj);
   
   /* Forward protected C lists */
-  for (protect_list = gcpro_list; protect_list; protect_list = protect_list->next)
+  for (struct gcpro_list *protect_list = gcpro_list;
+       protect_list;
+       protect_list = protect_list->next)
     {
-      struct local_value *val;
-
-      for (val = protect_list->cl->first; val; val = val->next)
+      for (struct local_value *val = protect_list->cl->first;
+           val;
+           val = val->next)
 	unmark_safe(&val->lvalue);
     }
 
   unmark_safe_registers();
 }
 
-INLINE static int minor_forward(struct obj **ptr)
+static int minor_forward(void *_ptr)
 /* The forward function for minor collections */
 {
+  struct obj **ptr = _ptr;
   struct obj *obj = *ptr, *newobj;
   long size;
 
@@ -526,7 +524,7 @@ INLINE static int minor_forward(struct obj **ptr)
 	  /* Immutable, forward to generation 1 */
 
 	  /* In minor collections only bother with generation 0 */
-	  if ((ubyte *)obj < newpos1) return TRUE;
+	  if ((ubyte *)obj < newpos1) return true;
 
 	  /* Gen 1 grows upward */
 	  if (obj->garbage_type == garbage_mcode)
@@ -561,7 +559,7 @@ INLINE static int minor_forward(struct obj **ptr)
 	  obj->size = (long)newobj;
 	  *ptr = newobj;
 
-	  return TRUE;
+	  return true;
 	}
       else
 	{
@@ -587,12 +585,12 @@ INLINE static int minor_forward(struct obj **ptr)
 	  obj->size = (long)newobj;
 	  *ptr = newobj;
 
-	  return FALSE;
+	  return false;
 	}
     }
 }
 
-INLINE static ubyte *minor_scan(ubyte *ptr)
+static ubyte *minor_scan(ubyte *ptr)
 {
   struct obj *obj = (struct obj *)ptr;
 
@@ -609,7 +607,7 @@ INLINE static ubyte *minor_scan(ubyte *ptr)
 
       if (rec->o.flags & OBJ_READONLY)
 	{
-	  int imm = TRUE;
+	  int imm = true;
 
 	  /* Scan & check if it can be made immutable */
 	  while (o < recend)
@@ -639,12 +637,9 @@ static void minor_collection(void)
 {
   ubyte *unscanned0, *oldstart0, *data;
   ulong nsize0;
-#ifdef GCSTATS
-  int i;
-#endif
 
 
-  saw_mcode = FALSE;
+  saw_mcode = false;
   special_forward = minor_forward;
   major_offset = 0;
 
@@ -666,7 +661,7 @@ static void minor_collection(void)
 #ifdef GCSTATS
   /* Minor stats */
   gcstats.minor_count++;
-  for (i = 0; i < last_type; i++) gcstats.g0nb[i] = gcstats.g0sizes[i] = 0;
+  for (int i = 0; i < last_type; i++) gcstats.g0nb[i] = gcstats.g0sizes[i] = 0;
 #endif
   forward_roots();
 
@@ -727,8 +722,9 @@ static void scan_temp(ubyte *data)
 }
 
 
-static int major_forward(struct obj **ptr)
+static int major_forward(void *_ptr)
 {
+  struct obj **ptr = _ptr;
   struct obj *obj = *ptr, *newobj;
   long size = obj->size, newgen;
 
@@ -743,7 +739,7 @@ static int major_forward(struct obj **ptr)
 
       if ((ubyte *)obj >= posgen0 && (ubyte *)obj < endgen0)
 	{
-	  if (!newarea) return FALSE;	/* No gen 0 data needs copying */
+	  if (!newarea) return false;	/* No gen 0 data needs copying */
 
 	  /* forward to new generation 0 */
 	  newobj = (struct obj *)(newpos0 -= ALIGN(size, sizeof(value)));
@@ -803,19 +799,16 @@ static int major_forward(struct obj **ptr)
 	}
       *ptr = move_object(obj, newobj, newgen);
     }
-  return FALSE;
+  return false;
 }
 
 static void major_collection(void)
 {
   ulong nsize0;
   ubyte *data;
-#ifdef GCSTATS
-  int i;
-#endif
 
-  saw_mcode = FALSE;
-  newarea = FALSE;
+  saw_mcode = false;
+  newarea = false;
   special_forward = major_forward;
   major_offset = startgen1 - endgen1;
 
@@ -830,7 +823,7 @@ static void major_collection(void)
 #ifdef GCSTATS
   /* Make stats */
   gcstats.major_count++;
-  for (i = 0; i < last_type; i++) gcstats.g1nb[i] = gcstats.g1sizes[i] = 0;
+  for (int i = 0; i < last_type; i++) gcstats.g1nb[i] = gcstats.g1sizes[i] = 0;
 #endif
 
   gcrange_start = gcblock; gcrange_end = gcblock + gcblocksize;
@@ -893,12 +886,9 @@ static void new_major_collection(ulong newsize)
 {
   ubyte *newblock = xmalloc(newsize), *data, *oldstart0, *unscanned0;
   ulong nsize0;
-#ifdef GCSTATS
-  int i;
-#endif
 
-  saw_mcode = FALSE;
-  newarea = TRUE;
+  saw_mcode = false;
+  newarea = true;
   major_offset = 0;
   special_forward = major_forward;
 
@@ -918,7 +908,7 @@ static void new_major_collection(ulong newsize)
   gcstats.size = newsize;
   gcstats.minor_count++;
   gcstats.major_count++;
-  for (i = 0; i < last_type; i++)
+  for (int i = 0; i < last_type; i++)
     gcstats.g1nb[i] = gcstats.g1sizes[i] = gcstats.g0nb[i] = gcstats.g0sizes[i] = 0;
 #endif
   gcrange_start = gcblock; gcrange_end = gcblock + gcblocksize;
@@ -976,9 +966,6 @@ static void new_major_collection(ulong newsize)
 void garbage_collect(long n)
 {
   ulong newsize, need, size1, used0;
-#ifdef GCSTATS
-  int i;
-#endif
 
 #if 0
   fprintf(stderr, "GC %ld ...", n); fflush(stderr);
@@ -987,7 +974,7 @@ void garbage_collect(long n)
 #ifdef GCSTATS
   /* Copy allocation stats */
   gcstats.size = gcblocksize;
-  for (i = 0; i < last_type; i++)
+  for (int i = 0; i < last_type; i++)
     {
       gcstats.lnb[i] = gcstats.anb[i]; gcstats.anb[i] = 0;
       gcstats.lsizes[i] = gcstats.asizes[i]; gcstats.asizes[i] = 0;
@@ -1016,23 +1003,26 @@ void garbage_collect(long n)
 
 #ifdef GCSTATS
   fflush(stdout);
-  fprintf(stderr, "MUDLLE: Major collection: gen0: %d of %d, gen1: %d, blocksize: %ld\n",
-	  endgen0 - (posgen0 - n), endgen0 - startgen0, endgen1 - startgen1, gcblocksize);
+  fprintf(stderr, "MUDLLE: Major collection: gen0: %td of %td, gen1: %td,"
+          " blocksize: %ld\n",
+	  endgen0 - (posgen0 - n), endgen0 - startgen0, endgen1 - startgen1,
+          gcblocksize);
   if (startgen0 >= posgen0)
     fprintf(stderr, "MUDLLE: generation 0 lacks space\n");
   else if (2 * (endgen1 - startgen1) >= gcblocksize - (endgen0 - (posgen0 - n)))
     fprintf(stderr, "MUDLLE: Cause: not 2x generation 1\n");
   else if ((endgen1 - startgen1) >= 2 * oldsize1)
-    fprintf(stderr, "MUDLLE: Generation 1 has doubled in size, was %ld\n", oldsize1);
+    fprintf(stderr, "MUDLLE: Generation 1 has doubled in size, was %ld\n",
+            oldsize1);
   else
     fprintf(stderr, "MUDLLE: Cause generation 0 too full\n");
-#endif
+#endif  /* GCSTATS */
 
   major_collection();
 
 #ifdef GCSTATS
   if (!tempblock1)
-    fprintf(stderr, "MUDLLE: Now: gen0: %d of %d, gen1: %d\n",
+    fprintf(stderr, "MUDLLE: Now: gen0: %td of %td, gen1: %td\n",
 	    endgen0 - (posgen0 - n), endgen0 - startgen0, endgen1 - startgen1);
 #endif
 
@@ -1041,8 +1031,9 @@ void garbage_collect(long n)
        - had to allocate a spill block for the major collection
        - no space for the minor area
        - not much space for the major area (at least 2x)
-       - not much space for the minor area (not more than THRESHOLD_MINOR % full)
-         (to avoid constant garbage collection as memory usage approaches block size)
+       - not much space for the minor area (not more than THRESHOLD_MINOR %
+         full) (to avoid constant garbage collection as memory usage approaches
+         block size)
   */
   if (tempblock1)
     size1 = (newpos1 - newstart1) + (oldpos1 - oldstart1);
@@ -1062,18 +1053,20 @@ void garbage_collect(long n)
 
 #ifdef GCSTATS
   fprintf(stderr, "MUDLLE: Increasing block size to %ld\n", newsize);
-  fprintf(stderr, "MUDLLE: Stats: gen 0: %ld of %d, gen1: %ld\n",
+  fprintf(stderr, "MUDLLE: Stats: gen 0: %ld of %td, gen1: %ld\n",
 	  used0, endgen0 - startgen0, size1);
   if (tempblock1)
     fprintf(stderr, "MUDLLE: Cause: spill block of %ld bytes\n", tempsize1);
   else if (size1 * 2 + used0 >= gcblocksize)
-    fprintf(stderr, "MUDLLE: Cause: not 2x generation 1 size (%ld) available\n", size1);
+    fprintf(stderr, "MUDLLE: Cause: not 2x generation 1 size (%ld) available\n",
+            size1);
   else if (startgen0 >= posgen0)
     fprintf(stderr, "MUDLLE: Cause: not enough space for both generations\n");
   else
-    fprintf(stderr, "MUDLLE: Cause: generation 0 is too full (used %ld, size %d)\n",
+    fprintf(stderr, "MUDLLE: Cause: generation 0 is too full"
+            " (used %ld, size %td)\n",
 	    used0, endgen0 - startgen0);
-#endif
+#endif  /* GCSTATS */
 
   /* And make sure there will be n bytes available and that generation 0 is
      only THRESHOLD_INCREASE full. */
@@ -1081,7 +1074,8 @@ void garbage_collect(long n)
   if (need > newsize)
     {
 #ifdef GCSTATS
-      fprintf(stderr, "MUDLLE: Reincreasing block size to %ld to allow 2x generation0\n",
+      fprintf(stderr, "MUDLLE: Reincreasing block size to %ld to allow"
+              " 2x generation0\n",
 	      need);
 #endif
       newsize = need;
@@ -1092,7 +1086,8 @@ void garbage_collect(long n)
   if (need > newsize)
     {
 #ifdef GCSTATS
-      fprintf(stderr, "MUDLLE: Reincreasing block size to %ld to allow 3x generation1\n",
+      fprintf(stderr, "MUDLLE: Reincreasing block size to %ld to allow"
+              " 3x generation1\n",
 	      need);
 #endif
       newsize = need;
@@ -1100,7 +1095,7 @@ void garbage_collect(long n)
 
   new_major_collection(newsize);
 #ifdef GCSTATS
-  fprintf(stderr, "MUDLLE: New stats: gen 0: %d of %d, gen1: %d\n",
+  fprintf(stderr, "MUDLLE: New stats: gen 0: %td of %td, gen1: %td\n",
 	  endgen0 - (posgen0 - n), endgen0 - startgen0, endgen1 - startgen1);
 #endif
 
@@ -1121,7 +1116,7 @@ long gc_reserve(long x)
   return -(posgen0 - startgen0);
 }
 
-INLINE static value fast_gc_allocate(long n)
+static value fast_gc_allocate(long n)
 /* Requires: n == ALIGN(n, sizeof(value))
 */
 {
@@ -1158,7 +1153,7 @@ value gc_allocate(long n)
 /* Basic allocation */
 /* ---------------- */
 
-struct grecord *unsafe_allocate_record(ubyte type, ulong entries)
+struct grecord *unsafe_allocate_record(mtype type, ulong entries)
 {
   ulong size = sizeof(struct obj) + entries * sizeof(value);
   struct grecord *newp = gc_allocate(size);
@@ -1178,7 +1173,7 @@ struct grecord *unsafe_allocate_record(ubyte type, ulong entries)
   return newp;
 }
 
-struct grecord *allocate_record(ubyte type, ulong entries)
+struct grecord *allocate_record(mtype type, ulong entries)
 {
   struct grecord *newp = unsafe_allocate_record(type, entries);
 
@@ -1188,7 +1183,7 @@ struct grecord *allocate_record(ubyte type, ulong entries)
   return newp;
 }
 
-struct gstring *allocate_string(ubyte type, ulong bytes)
+struct gstring *allocate_string(mtype type, ulong bytes)
 {
   ulong size = sizeof(struct obj) + bytes;
   struct gstring *newp = gc_allocate(size);
@@ -1205,7 +1200,7 @@ struct gstring *allocate_string(ubyte type, ulong bytes)
   return newp;
 }
 
-struct gpermanent *allocate_permanent(ubyte type, ulong nb, void *ext)
+struct gpermanent *allocate_permanent(mtype type, ulong nb, void *ext)
 {
   struct gpermanent *newp = gc_allocate(sizeof(struct gpermanent));
 
@@ -1225,7 +1220,7 @@ struct gpermanent *allocate_permanent(ubyte type, ulong nb, void *ext)
   return newp;
 }
 
-struct gtemp *allocate_temp(ubyte type, void *ext)
+struct gtemp *allocate_temp(mtype type, void *ext)
 {
   struct gtemp *newp = gc_allocate(sizeof(struct gtemp));
 
@@ -1298,7 +1293,7 @@ int check_immutable(struct obj *obj)
       
   if (obj->garbage_type != garbage_record ||
       (obj->flags & (OBJ_READONLY | OBJ_IMMUTABLE)) != OBJ_READONLY)
-    return FALSE;
+    return false;
 
   recend = (struct obj **)((ubyte *)rec + rec->o.size);
   o = rec->data;
@@ -1314,14 +1309,14 @@ int check_immutable(struct obj *obj)
              immutable objects */
           
           rec->o.flags |= OBJ_IMMUTABLE;
-          return TRUE;
+          return true;
         }
       /* If contains non-immutable pointer, give up */
       if (*o != obj && !immutablep(*o)) break;
       o++;
     }
 
-  return FALSE;
+  return false;
 }
 
 void detect_immutability(void)
@@ -1332,7 +1327,7 @@ void detect_immutability(void)
   garbage_collect(0); /* Get rid of junk in generation 0 */
   do
     {
-      change = FALSE;
+      change = false;
       ptr = posgen0;
       while (ptr < endgen0)
 	{
@@ -1360,60 +1355,57 @@ void save_restore(struct obj *obj)
 /* Effects: Restores the information used during GC for obj (forwarding)
 */
 {
-  if (pointerp(obj) && obj->garbage_type == garbage_forwarded)
+  if (!pointerp(obj) || obj->garbage_type != garbage_forwarded)
+    return;
+
+  struct obj *copy = (struct obj *)obj->size;
+
+  /* Restore this value */
+  obj->garbage_type = copy->garbage_type;
+  if ((ubyte *)copy < save_hwm)
+    obj->size = ntohl(copy->size);
+  else /* if save aborted, data at end has not been networkized */
+    obj->size = copy->size;
+
+  /* And its contents, recursively */
+  switch (obj->garbage_type)
     {
-      struct obj *copy = (struct obj *)obj->size;
+    case garbage_record: {
+      struct grecord *rec = (struct grecord *)obj;
 
-      /* Restore this value */
-      obj->garbage_type = copy->garbage_type;
-      if ((ubyte *)copy < save_hwm)
-	obj->size = ntohl(copy->size);
-      else /* if save aborted, data at end has not been networkized */
-	obj->size = copy->size;
+      unsigned i = (rec->o.size - sizeof(struct obj)) / sizeof(struct obj *);
+      struct obj **o = rec->data;
+      while (i) { --i; save_restore(*o++); }
+      break;
+    }
+    case garbage_code: {
+      struct code *code = (struct code *)obj;
 
-      /* And its contents, recursively */
-      switch (obj->garbage_type)
-	{
-	case garbage_record: {
-	  struct grecord *rec = (struct grecord *)obj;
-	  ulong i;
-	  value *o;
-
-	  i = (rec->o.size - sizeof(struct obj)) / sizeof(struct obj *);
-	  o = (value *)&rec->data;
-	  while (i) { --i; save_restore(*o++); }
-	  break;
-	}
-	case garbage_code: {
-	  struct code *code = (struct code *)obj;
-	  unsigned i;
-	  value *c;
-
-	  save_restore((struct obj *)code->help);
-	  save_restore((struct obj *)code->filename);
-	  save_restore((struct obj *)code->varname);
-	  save_restore((struct obj *)code->lineno_data);
-	  save_restore((struct obj *)code->arg_types);
-	  i = code->nb_constants;
-	  c = (value *)&code->constants;
-	  while (i) { --i; save_restore(*c++); }
-	  break;
-	}
-	case garbage_mcode:
-	  save_restore_mcode((struct mcode *)obj);
-	  break;
-	case garbage_permanent: case garbage_temp:
-	case garbage_string: case garbage_forwarded:
-	  break;
-	}
+      save_restore(&code->help->o);
+      save_restore(&code->filename->o);
+      save_restore(&code->varname->o);
+      save_restore(&code->lineno_data->o);
+      save_restore(&code->arg_types->o);
+      unsigned i = code->nb_constants;
+      struct obj **c = code->constants;
+      while (i) { --i; save_restore(*c++); }
+      break;
+    }
+    case garbage_mcode:
+      save_restore_mcode((struct mcode *)obj);
+      break;
+    case garbage_permanent: case garbage_temp:
+    case garbage_string: case garbage_forwarded:
+      break;
     }
 }
 
 static jmp_buf nomem;
 static unsigned long mutable_size;
 
-static int size_forward(struct obj **ptr)
+static int size_forward(void *_ptr)
 {
+  struct obj **ptr = _ptr;
   struct obj *obj = *ptr;
   struct obj *newobj;
   long size;
@@ -1427,12 +1419,13 @@ static int size_forward(struct obj **ptr)
       /* Forward to generation 0 */
       newobj = (struct obj *)newpos0;
       newpos0 += ALIGN(size, sizeof(value));
-      if (!(obj->flags & OBJ_IMMUTABLE)) mutable_size += ALIGN(size, sizeof(value));
+      if (!(obj->flags & OBJ_IMMUTABLE))
+              mutable_size += ALIGN(size, sizeof(value));
       if (newpos0 > newend0) longjmp(nomem, 1);
 
       *ptr = move_object(obj, newobj, minorgen);
     }
-  return FALSE;
+  return false;
 }
 
 unsigned long gc_size(value x, unsigned long *mutble)
@@ -1463,7 +1456,7 @@ unsigned long gc_size(value x, unsigned long *mutble)
 	  save = (value *)newpos0;
 	  newpos0 += sizeof(value);
 	  *save = x;
-	  if (pointerp(x)) special_forward((struct obj **)save);
+	  if (pointerp(x)) special_forward(save);
 
 	  /* Scan copied data */
 	  save_hwm = (ubyte *)(save + 1);
@@ -1502,7 +1495,8 @@ static int save_forward(struct obj **ptr)
       obj->garbage_type == garbage_mcode ||
       obj->type == type_closure ||
       obj->type == type_outputport ||
-      obj->type == type_internal)
+      obj->type == type_internal ||
+      obj->type == type_private)
     {
       /* Set ptr to the gone value */
       *ptr = (struct obj *)(newstart0 + sizeof(ubyte *));
@@ -1526,10 +1520,10 @@ static int save_forward(struct obj **ptr)
 	  *ptr = move_object(obj, newobj, minorgen);
 	}
     }
-  return FALSE;
+  return false;
 }
 
-INLINE static ubyte *save_scan(ubyte *ptr)
+static ubyte *save_scan(ubyte *ptr)
 {
   struct obj *obj = (struct obj *)ptr;
 
@@ -1637,8 +1631,9 @@ void *gc_save(value x, unsigned long *size)
     }
 }
 
-INLINE static int load_forward(struct obj **ptr)
+static int load_forward(void *_ptr)
 {
+  struct obj **ptr = _ptr;
   struct obj *obj, *newobj;
 
   /* Correct pointer addresses on load */
@@ -1664,10 +1659,10 @@ INLINE static int load_forward(struct obj **ptr)
 #endif
       *ptr = move_object(obj, newobj, minorgen);
     }
-  return FALSE;
+  return false;
 }
 
-INLINE static ubyte *load_scan(ubyte *ptr)
+static ubyte *load_scan(ubyte *ptr)
 {
   struct obj *obj = (struct obj *)ptr;
 
@@ -1703,7 +1698,7 @@ INLINE static ubyte *load_scan(ubyte *ptr)
   return ptr;
 }
 
-static value _gc_load(int (*forwarder)(struct obj **ptr),
+static value _gc_load(int (*forwarder)(void *_ptr),
 		      ubyte *load, value *old, unsigned long size)
 /* Effects: Reloads a value saved with gc_save. <load,size> delimits
      the zone of memory containing gc_save's results.
@@ -1725,7 +1720,7 @@ static value _gc_load(int (*forwarder)(struct obj **ptr),
   
   /* Old value of pointer to first value, forward it */
   *old = (value)ntohl((long)*old);
-  if (pointerp(*old)) special_forward((struct obj **)old);
+  if (pointerp(*old)) special_forward(old);
 
   /* Must scan forwards, but data is allocated downwards => double loop */
   unscanned0 = posgen0;		/* Upper bound of unscanned data */
@@ -1755,8 +1750,9 @@ value gc_load(void *_load, unsigned long size)
 }
 
 #ifndef GCDEBUG
-static int load_forward_debug(struct obj **ptr)
+static int load_forward_debug(void *_ptr)
 {
+  struct obj **ptr = _ptr;
   struct obj *obj, *newobj;
 
   /* Correct pointer addresses on load */
@@ -1787,7 +1783,7 @@ static int load_forward_debug(struct obj **ptr)
 
       *ptr = newobj;
     }
-  return FALSE;
+  return false;
 }
 
 value gc_load_debug(void *_load, unsigned long size)
@@ -1802,7 +1798,7 @@ value gc_load_debug(void *_load, unsigned long size)
 
   return _gc_load(load_forward_debug, load, old, size);
 }
-#endif
+#endif  /* ! GCDEBUG */
 
 void dump_memory(void)
 /* Effects: Dumps GC's memory to a file for use by the profiler.
@@ -1866,7 +1862,7 @@ static void forward_pc(ulong *pcreg)
 			      offsetof(struct mcode, magic));
       oldbase = base;
       GCCHECK(base);
-      special_forward((struct obj **)&base);
+      special_forward(&base);
 
       /* And adjust the pc value for the new base location */
       *pcreg = (ulong)base + (*pcreg - (ulong)oldbase);
@@ -1905,12 +1901,12 @@ static void forward_registers(void)
 
 	  frame += 2;		/* Skip scratch regs */
 
-	  for (i = 0; i < 12; i++)
+	  for (int i = 0; i < 12; i++)
 	    {
 	      if (pointerp(*frame))
 		{
 		  GCCHECK((value)*frame);
-		  special_forward((struct obj **)frame);
+		  special_forward(frame);
 		}
 	      frame++;
 	    }
@@ -1926,7 +1922,7 @@ static void forward_registers(void)
 	      if (pointerp(*frame))
 		{
 		  GCCHECK((value)*frame);
-		  special_forward((struct obj **)frame);
+		  special_forward(frame);
 		}
 	      frame++;
 	    }
@@ -1944,7 +1940,7 @@ static void forward_registers(void)
 	  if (pointerp(*args))
 	    {
 	      GCCHECK((value)*args);
-	      special_forward((struct obj **)args);
+	      special_forward(args);
 	    }
 	  args++;
 	}
@@ -1960,17 +1956,17 @@ static void unmark_safe_registers(void)
 {
 }
 
-static INLINE void scan_mcode(struct mcode *code)
+static void scan_mcode(struct mcode *code)
 {
   unsigned i;
   uword *offsets;
   ubyte *old_base;
   ulong *mcode, delta;
 
-  if (pointerp(code->help)) special_forward((struct obj **)&code->help);
-  if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
-  if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
-  if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
+  if (pointerp(code->help)) special_forward(&code->help);
+  if (pointerp(code->varname)) special_forward(&code->varname);
+  if (pointerp(code->filename)) special_forward(&code->filename);
+  if (pointerp(code->arg_types)) special_forward(&code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
 
@@ -1991,7 +1987,7 @@ static INLINE void scan_mcode(struct mcode *code)
       cst = (value)(*cstins << 10 | (*orins & ((1 << 10) - 1)));
       if (pointerp(cst))
 	{
-	  special_forward((struct obj **)&cst);
+	  special_forward(&cst);
 	  *cstins = (*cstins & ~((1 << 22) - 1)) | ((ulong)cst >> 10);
 	  *orins = (*orins & ~((1 << 13) - 1)) | ((ulong)cst & ((1 << 10) - 1));
 	}
@@ -2014,16 +2010,16 @@ static INLINE void scan_mcode(struct mcode *code)
     }
 }
 
-static INLINE void save_restore_mcode(struct mcode *code)
+static void save_restore_mcode(struct mcode *code)
 {
   unsigned i;
   uword *offsets;
   ulong *mcode;
 
-  save_restore((struct obj *)code->help);
-  save_restore((struct obj *)code->varname);
-  save_restore((struct obj *)code->filename);
-  save_restore((struct obj *)code->arg_types);
+  save_restore(&code->help->o);
+  save_restore(&code->varname->o);
+  save_restore(&code->filename->o);
+  save_restore(&code->arg_types->o);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)((char *)mcode + code->code_length);
@@ -2044,7 +2040,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
     }
 }
 
-#endif
+#endif  /* sparc */
 
 #ifdef AMIGA
 
@@ -2055,7 +2051,7 @@ static INLINE void save_restore_mcode(struct mcode *code)
 /* the static area where the current machine code activation saves its
    information. The old values are copied to the activation stack on
    every call to machine code */
-int registers_valid;		/* TRUE if static area is being used */
+int registers_valid;		/* true if static area is being used */
 ulong save_registers[5];
 ulong extra_registers[5];
 ulong initial_stack, final_stack;
@@ -2067,10 +2063,8 @@ void check_registers(void)
   GCCHECK(activation_stack);
   if (registers_valid)
     {
-      int i;
-
-      for (i = 0; i < 5; i++) GCCHECK(save_registers[i]);
-      for (i = 0; i < 5; i++) GCCHECK(extra_registers[i]);
+      for (int i = 0; i < 5; i++) GCCHECK(save_registers[i]);
+      for (int i = 0; i < 5; i++) GCCHECK(extra_registers[i]);
     }
 }
 
@@ -2089,7 +2083,7 @@ void push_registers(void)
 
       /*check_registers();*/
     }
-  registers_valid = TRUE;
+  registers_valid = true;
 }
 
 void pop_registers(void)
@@ -2105,7 +2099,7 @@ void pop_registers(void)
       /*check_registers();*/
     }
   else
-    registers_valid = FALSE;
+    registers_valid = false;
 }
 
 static void forward_stack(ulong *from, ulong *to)
@@ -2130,7 +2124,7 @@ static void forward_stack(ulong *from, ulong *to)
 				  offsetof(struct mcode, magic));
 	  oldbase = base;
 	  GCCHECK(base);
-	  special_forward((struct obj **)&base);
+	  special_forward(&base);
 
 	  *from = (ulong)base + (*from - (ulong)oldbase);
 	}
@@ -2144,15 +2138,13 @@ static void forward_registers(void)
 
   if (registers_valid)
     {
-      int i;
-
       forward_stack((ulong *)final_stack, (ulong *)initial_stack);
-      for (i = 0; i < 5; i++)
+      for (int i = 0; i < 5; i++)
 	if (pointerp(save_registers[i]))
-	  special_forward((struct obj **)&save_registers[i]);
-      for (i = 0; i < 5; i++)
+	  special_forward(&save_registers[i]);
+      for (int i = 0; i < 5; i++)
 	if (pointerp(extra_registers[i]))
-	  special_forward((struct obj **)&extra_registers[i]);
+	  special_forward(&extra_registers[i]);
     }
   while (astack)
     {
@@ -2162,7 +2154,7 @@ static void forward_registers(void)
 
       astack = astack->data[12];
     }
-  if (activation_stack) special_forward((struct obj **)&activation_stack);
+  if (activation_stack) special_forward(&activation_stack);
 }
 
 void flush_icache(ubyte *from, ubyte *to)
@@ -2170,16 +2162,16 @@ void flush_icache(ubyte *from, ubyte *to)
   CacheClearU();
 }
 
-static INLINE void scan_mcode(struct mcode *code)
+static void scan_mcode(struct mcode *code)
 {
   unsigned i;
   uword *offsets;
   ubyte *mcode;
 
-  if (pointerp(code->help)) special_forward((struct obj **)&code->help);
-  if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
-  if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
-  if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
+  if (pointerp(code->help)) special_forward(&code->help);
+  if (pointerp(code->varname)) special_forward(&code->varname);
+  if (pointerp(code->filename)) special_forward(&code->filename);
+  if (pointerp(code->arg_types)) special_forward(&code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2187,28 +2179,28 @@ static INLINE void scan_mcode(struct mcode *code)
     {
       --i;
       if (pointerp(*(value *)(mcode + *offsets)))
-	special_forward((struct obj **)(mcode + *offsets));
+	special_forward((mcode + *offsets));
       offsets++;
     }
 }
 
-static INLINE void save_restore_mcode(struct mcode *code)
+static void save_restore_mcode(struct mcode *code)
 {
   unsigned i;
   uword *offsets;
   ubyte *mcode;
 
-  save_restore((struct obj *)code->help);
-  save_restore((struct obj *)code->varname);
-  save_restore((struct obj *)code->filename);
-  save_restore((struct obj *)code->arg_types);
+  save_restore(&code->help->o);
+  save_restore(&code->varname->o);
+  save_restore(&code->filename->o);
+  save_restore(&code->arg_types->o);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
   while (i) { --i; save_restore(*(value *)(mcode + *offsets++)); }
 }
 
-#endif
+#endif  /* AMIGA */
 
 #if defined(i386) && !defined(NOCOMPILER)
 void flush_icache(ubyte *from, ubyte *to)
@@ -2237,23 +2229,23 @@ static void forward_pc(ulong *pcreg)
 			      offsetof(struct mcode, magic));
       oldbase = base;
       GCCHECK(base);
-      special_forward((struct obj **)((char *)&base)); /* type punning */
+      special_forward(((char *)&base)); /* type punning */
 
       /* And adjust the pc value for the new base location */
       *pcreg = (ulong)base + (*pcreg - (ulong)oldbase);
     }
 }
 
-static INLINE void forward_ccontext(struct ccontext *cc)
+static void forward_ccontext(struct ccontext *cc)
 {
   if (pointerp(cc->callee[0]))
-    special_forward((struct obj **)&cc->callee[0]);
+    special_forward(&cc->callee[0]);
   if (pointerp(cc->callee[1]))
-    special_forward((struct obj **)&cc->callee[1]);
+    special_forward(&cc->callee[1]);
   if (pointerp(cc->caller[0]))
-    special_forward((struct obj **)&cc->caller[0]);
+    special_forward(&cc->caller[0]);
   if (pointerp(cc->caller[1]))
-    special_forward((struct obj **)&cc->caller[1]);
+    special_forward(&cc->caller[1]);
 
   forward_pc(&cc->retadr);
 }
@@ -2262,7 +2254,7 @@ static void forward_registers(void)
 {
   struct ccontext *cc = &ccontext;
   struct catch_context *mcc;
-  ulong *sp, *bp, *x, *argsend;
+  ulong *sp, *bp, *argsend;
 
   while (cc->frame_start)
     {   
@@ -2275,10 +2267,11 @@ static void forward_registers(void)
       // The return address is sometimes in retadr, sometimes at sp[-1]
       forward_pc(&sp[-1]);
 
-      /* First frame is special: it may contain C arguments that might be GCPROtected.
-	 So we must use safe_forward */
+      /* First frame is special: it may contain C arguments that might
+	 be GCPROtected. So we must use safe_forward */
       forward_pc(bp + 1);
-      for (x = sp; x < bp; x++) /* forward mudlle values & caller's closure) */
+      /* forward mudlle values & caller's closure) */
+      for (ulong *x = sp; x < bp; x++)
 	if (pointerp(*x)) safe_forward((value *)x);
 	  
       sp = bp + 2;
@@ -2293,8 +2286,9 @@ static void forward_registers(void)
 	   * sp[0] -> bp[-2] is mudlle values
 	   */
 	  forward_pc(bp + 1);
-	  for (x = sp; x < bp; x++) /* forward mudlle values & caller's closure) */
-	    if (pointerp(*x)) special_forward((struct obj **)x);
+          /* forward mudlle values & caller's closure) */
+	  for (ulong *x = sp; x < bp; x++)
+	    if (pointerp(*x)) special_forward(x);
 	  
 	  sp = bp + 2;
 	  assert(bp[0] > (ulong)bp);
@@ -2303,8 +2297,8 @@ static void forward_registers(void)
       assert(bp == cc->frame_start);
       /* Forward initial args (between sp and bp - (12 + sizeof cc + 8)) */
       argsend = (ulong *)((char *)bp - (12 + sizeof *cc + 8));
-      for (x = sp; x < argsend; x++)
-	if (pointerp(*x)) special_forward((struct obj **)x);
+      for (ulong *x = sp; x < argsend; x++)
+	if (pointerp(*x)) special_forward(x);
 	  
       cc = (struct ccontext *)argsend;
     }
@@ -2313,7 +2307,7 @@ static void forward_registers(void)
   for (mcc = catch_context; mcc; mcc = mcc->parent)
     {
       if (pointerp(mcc->_mjmpbuf))
-        special_forward((struct obj **)&mcc->_mjmpbuf);
+        special_forward(&mcc->_mjmpbuf);
       forward_ccontext(&mcc->occontext);
     }
 }
@@ -2321,7 +2315,7 @@ static void forward_registers(void)
 static void unmark_safe_registers(void)
 {
   struct ccontext *cc = &ccontext;
-  ulong *sp, *bp, *x;
+  ulong *sp, *bp;
 
   while (cc->frame_start)
     {   
@@ -2329,25 +2323,25 @@ static void unmark_safe_registers(void)
       bp = cc->frame_end_bp;
 
       /* Unmark safe forwarded variables from first frame */
-      for (x = sp; x < bp; x++)
+      for (ulong *x = sp; x < bp; x++)
 	unmark_safe((value *)x);
 
       cc = (struct ccontext *)((char *)cc->frame_start - (12 + sizeof *cc + 8));
     }
 }
 
-static INLINE void scan_mcode(struct mcode *code)
+static void scan_mcode(struct mcode *code)
 {
   unsigned i;
   uword *offsets;
   ubyte *mcode, *old_base;
   ulong delta;
 
-  if (pointerp(code->help)) special_forward((struct obj **)&code->help);
-  if (pointerp(code->varname)) special_forward((struct obj **)&code->varname);
-  if (pointerp(code->filename)) special_forward((struct obj **)&code->filename);
-  if (pointerp(code->linenos)) special_forward((struct obj **)&code->linenos);
-  if (pointerp(code->arg_types)) special_forward((struct obj **)&code->arg_types);
+  if (pointerp(code->help)) special_forward(&code->help);
+  if (pointerp(code->varname)) special_forward(&code->varname);
+  if (pointerp(code->filename)) special_forward(&code->filename);
+  if (pointerp(code->linenos)) special_forward(&code->linenos);
+  if (pointerp(code->arg_types)) special_forward(&code->arg_types);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2355,7 +2349,7 @@ static INLINE void scan_mcode(struct mcode *code)
     {
       --i;
       if (pointerp(*(value *)(mcode + *offsets)))
-	special_forward((struct obj **)(mcode + *offsets));
+	special_forward((mcode + *offsets));
       offsets++;
     }
 
@@ -2371,17 +2365,17 @@ static INLINE void scan_mcode(struct mcode *code)
     }
 }
 
-static INLINE void save_restore_mcode(struct mcode *code)
+static void save_restore_mcode(struct mcode *code)
 {
   unsigned i;
   uword *offsets;
   ubyte *mcode;
 
-  save_restore((struct obj *)code->help);
-  save_restore((struct obj *)code->varname);
-  save_restore((struct obj *)code->filename);
-  save_restore((struct obj *)code->linenos);
-  save_restore((struct obj *)code->arg_types);
+  save_restore(&code->help->o);
+  save_restore(&code->varname->o);
+  save_restore(&code->filename->o);
+  save_restore(&code->linenos->o);
+  save_restore(&code->arg_types->o);
   i = code->nb_constants;
   mcode = code->mcode;
   offsets = (uword *)(mcode + ALIGN(code->code_length, sizeof(uword)));
@@ -2397,8 +2391,7 @@ static void patch_value(value *x, value oldglobals, value newglobals)
 void patch_globals_stack(value oldglobals, value newglobals)
 {
   struct ccontext *cc = &ccontext;
-  struct catch_context *mcc;
-  ulong *sp, *bp, *x, *argsend;
+  ulong *sp, *bp, *argsend;
 
   while (cc->frame_start)
     {
@@ -2415,7 +2408,7 @@ void patch_globals_stack(value oldglobals, value newglobals)
 	   * bp[1] is return address
 	   * sp[0] -> bp[-2] is mudlle values
 	   */
-	  for (x = sp; x < bp; x++) 
+	  for (ulong *x = sp; x < bp; x++) 
 	    patch_value((value *)x, oldglobals, newglobals);
 	  
 	  sp = bp + 2;
@@ -2429,11 +2422,11 @@ void patch_globals_stack(value oldglobals, value newglobals)
     }
 
   /* Also forward saved ccontexts */
-  for (mcc = catch_context; mcc; mcc = mcc->parent)
+  for (struct catch_context *mcc = catch_context; mcc; mcc = mcc->parent)
     patch_value(&mcc->occontext.callee[1], oldglobals, newglobals);
 }
 
-#endif
+#endif  /* i386 && ! NOCOMPILER */
 
 #ifdef NOCOMPILER
 void flush_icache(ubyte *from, ubyte *to)
@@ -2448,14 +2441,10 @@ static void unmark_safe_registers(void)
 {
 }
 
-static INLINE void scan_mcode(struct mcode *code)
+static void save_restore_mcode(struct mcode *code)
 {
 }
-
-static INLINE void save_restore_mcode(struct mcode *code)
-{
-}
-#endif
+#endif  /* NOCOMPILER */
 
 #if 0
 
@@ -2468,13 +2457,12 @@ static int what_generation(value o)
   assert(0);
 }
 
-void gc_verify(value _o, int start, int gen, int immut)
+void gc_verify(value _o, bool start, int gen, bool immut)
 {
-  struct obj *o = _o;
-
-  if (_o == NULL || (unsigned)_o & 1)
+  if (_o == NULL || (unsigned long)_o & 1)
     return;
 
+  struct obj *o = _o;
   if (start ? o->garbage_type & 0x80 : ~o->garbage_type & 0x80)
     return;
 
@@ -2485,19 +2473,32 @@ void gc_verify(value _o, int start, int gen, int immut)
   else
     gen = what_generation(o);
 
-  if (immut == 1)
+  if (immut)
     assert(immutablep(o));
 
-  immut = !!immutablep(o);
+  immut = immutablep(o);
+  if (gen == 1)
+    assert(immut);
 
   if (!start)
     o->garbage_type &= ~0x80;
 
   switch (o->garbage_type)
     {
+    case garbage_temp:
+      if (o->type != type_internal)
+        abort();
+      break;
+    case garbage_permanent:
+      assert(o->type == type_primitive
+             || o->type == type_secure
+             || o->type == type_varargs);
+      break;
     case garbage_string:
-      assert(o->type == type_string
-	     || o->type == type_gone);
+      if (!(o->type == type_string
+            || o->type == type_gone
+            || o->type == type_float))
+        abort();
       break;
     case garbage_record:
       {
@@ -2507,18 +2508,47 @@ void gc_verify(value _o, int start, int gen, int immut)
 	if (immut)
 	  assert(o->flags & OBJ_READONLY);
 
-	assert(o->type == type_vector
-	       || o->type == type_pair
-	       || o->type == type_table
-	       || o->type == type_symbol);
+	if (!(o->type == type_vector
+              || o->type == type_pair
+              || o->type == type_table
+              || o->type == type_internal
+              || o->type == type_closure
+              || o->type == type_outputport
+              || o->type == type_symbol))
+          abort();
 
 	while (rec < recend)
 	  gc_verify(*rec++, start, gen, immut);
 
 	break;
       }
+    case garbage_code:
+      {
+	if (immut && (~o->flags & OBJ_READONLY))
+          abort();
+
+        switch (o->type)
+          {
+          case type_code:
+            {
+              struct code *code = (struct code *)o;
+            
+              gc_verify(code->help, start, gen, immut);
+              gc_verify(code->filename, start, gen, immut);
+              gc_verify(code->varname, start, gen, immut);
+              gc_verify(code->lineno_data, start, gen, immut);
+              gc_verify(code->arg_types, start, gen, immut);
+              break;
+            }
+          case type_mcode:
+            /* unimplemented */
+          default:
+            abort();
+          }
+        break;
+      }
     default:
-      assert(0);
+      abort();
     }
  
   if (start)

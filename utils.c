@@ -186,10 +186,12 @@ char *strlwr(char *s)
 }
 
 #if (!HAVE_MEMMOVE)
-void memmove(char *to, const char *from, int n)
+void *memmove(void *dest, const void *src, size_t n)
 {
-  if (to == from) return;
+  if (dest == src) return dest;
 
+  char *to = dest;
+  const char *from = src;
   if (to > from && to < from + n)
     {
       from += n;
@@ -200,7 +202,9 @@ void memmove(char *to, const char *from, int n)
     {
       while (n--) *to++ = *from++;
     }
-  else memcpy(to, from, n);
+  else
+    return memcpy(to, from, n);
+  return dest;
 }
 
 #endif

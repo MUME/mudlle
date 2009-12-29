@@ -19,32 +19,46 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-// Compiler x86 compiler as protected modules
-mc:verbose = 0;
-x86:reset_counters();
-start = ctime();
-pcompile("compiler/dihash.mud");
-pcompile("compiler/compiler.mud");
-pcompile("compiler/link.mud");
-pcompile("compiler/misc.mud");
-pcompile("compiler/sequences.mud");
-pcompile("compiler/dlist.mud");
-pcompile("compiler/graph.mud");
-pcompile("compiler/ax86.mud");
-pcompile("compiler/vars.mud");
-pcompile("compiler/flow.mud");
-pcompile("compiler/optimise.mud");
-pcompile("compiler/ins3.mud");
-pcompile("compiler/mx86.mud");
-pcompile("compiler/phase1.mud");
-pcompile("compiler/phase2.mud");
-pcompile("compiler/phase3.mud");
-pcompile("compiler/phase4.mud");
-pcompile("compiler/genx86.mud");
-pcompile("compiler/x86.mud");
-pcompile("compiler/compile.mud");
-pcompile("compiler/noinf.mud");
-pcompile("compiler/inference.mud");
-display(format("cpu time: %s ms", ctime() - start)); newline();
-display(format("nins:   %s", nins)); newline();
-display(format("nbytes: %s", nbytes)); newline();
+  // Compiler x86 compiler as protected modules
+
+trap_error(fn() [
+  mc:verbose = 0;
+  x86:reset_counters();
+  start = ctime();
+
+  safecomp = fn (s)
+    if (!pcompile(s))
+      [
+        display("Failed!"); newline();
+        quit(1) 
+      ];
+  
+  safecomp("compiler/dihash.mud");
+  safecomp("compiler/compiler.mud");
+  safecomp("compiler/link.mud");
+  safecomp("compiler/misc.mud");
+  safecomp("compiler/sequences.mud");
+  safecomp("compiler/dlist.mud");
+  safecomp("compiler/graph.mud");
+  safecomp("compiler/ax86.mud");
+  safecomp("compiler/vars.mud");
+  safecomp("compiler/flow.mud");
+  safecomp("compiler/optimise.mud");
+  safecomp("compiler/ins3.mud");
+  safecomp("compiler/mx86.mud");
+  safecomp("compiler/phase1.mud");
+  safecomp("compiler/phase2.mud");
+  safecomp("compiler/phase3.mud");
+  safecomp("compiler/phase4.mud");
+  safecomp("compiler/genx86.mud");
+  safecomp("compiler/x86.mud");
+  safecomp("compiler/compile.mud");
+  safecomp("compiler/noinf.mud");
+  safecomp("compiler/inference.mud");
+
+  display(format("cpu time: %s ms%n", ctime() - start));
+  display(format("nins:   %s%n", nins));
+  display(format("nbytes: %s%n", nbytes));
+], fn (n) [
+  quit(1);
+], call_trace_on);

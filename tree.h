@@ -41,7 +41,7 @@ typedef struct _vlist {
   struct _vlist *next;
   const char *var;
   mtype type;
-  int was_read, was_written;
+  bool was_read, was_written;
 } *vlist;
 
 typedef struct _clist {
@@ -62,7 +62,7 @@ typedef struct {
   mtype type;			/* Return type */
   str_and_len_t help;
   vlist args;			/* Stored in reverse order! */
-  int varargs;			/* TRUE if accepts arg vector (==> length(vargs)=1) */
+  bool varargs;			/* true if accepts arg vector (==> length(vargs)=1) */
   component value;
   int lineno;
   const char *filename;
@@ -196,7 +196,7 @@ block new_codeblock(block_t heap, vlist locals, clist sequence,
 clist new_clist(block_t heap, component c, clist next);
 cstpair new_cstpair(block_t heap, constant cst1, constant cst2);
 cstlist new_cstlist(block_t heap, constant cst, cstlist next);
-str_and_len_t *cstlist_has_symbol(cstlist list, str_and_len_t needle);
+str_and_len_t *cstlist_find_symbol(cstlist list, str_and_len_t needle);
 vlist new_vlist(block_t heap, const char *var, mtype type, vlist next);
 constant new_constant(block_t heap, enum constant_class vclass, ...);
 component new_component(block_t heap, enum component_class vclass, ...);
@@ -228,12 +228,9 @@ component new_postfix_inc_component(block_t heap, const char *var, int op);
 void print_mudlle_file(FILE *out, mfile f);
 #endif
 
-clist append_clist(clist l1, clist l2);
 clist reverse_clist(clist l);
 cstlist reverse_cstlist(cstlist l);
-vlist append_vlist(vlist l1, vlist l2);
-vlist reverse_vlist(vlist l);
 
 value mudlle_parse(block_t heap, mfile f);
 
-#endif
+#endif /* TREE_H */

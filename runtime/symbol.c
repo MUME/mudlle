@@ -60,7 +60,8 @@ TYPEDOP(symbol_set, "symbol_set!",
   undefined();
 }
 
-TYPEDOP(tablep, "table?", "`x -> `b. TRUE if `x is a symbol table", 1, (value v),
+TYPEDOP(tablep, "table?", "`x -> `b. TRUE if `x is a symbol table",
+        1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_table));
@@ -243,7 +244,7 @@ EXT_TYPEDOP(table_ref, 0,
 TYPEDOP(table_lookup, 0, "`table `s -> `x. Returns the symbol for `s in"
         " `table, or false if none",
         2, (struct table *table, struct string *s),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.x")
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ts.[yn]")
 {
   struct symbol *sym;
 
@@ -252,7 +253,7 @@ TYPEDOP(table_lookup, 0, "`table `s -> `x. Returns the symbol for `s in"
 
   if (!table_lookup_len(table, s->str, string_len(s), &sym)
       || !sym->data)
-    return makebool(FALSE);
+    return makebool(false);
   return sym;
 }
 

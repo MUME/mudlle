@@ -242,10 +242,11 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
     ];
 
   dihash_empty! = fn "`d -> . Remove all entries from dihash `d" (vector hash)
-    [
-      hash[div_used] = 0;
-      vector_fill!(hash[div_data], null);
-    ];
+    if (hash[div_used])
+      [
+        hash[div_used] = 0;
+        vector_fill!(hash[div_data], null);
+      ];
 
   dihash_map! = fn "`c `d -> . Maps all entries `x with key `i to `c(`i, `x) in the dihash `d" (function func, vector hash)
     vforeach(fn (v) [
@@ -311,7 +312,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       result
     ];
 
-  ihash_to_dihash = fn "`i -> `d. Returns a dihash of the data stored in the ihash `i" (ihash)
+  ihash_to_dihash = fn "`i -> `d. Returns a dihash of the data stored in the ihash `i" (vector ihash)
     [
       | res |
       res = make_dihash();

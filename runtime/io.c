@@ -36,7 +36,7 @@
 #include "context.h"
 
 
-static struct oport *get_oport(struct oport *oport)
+struct oport *get_oport(struct oport *oport)
 {
   if (TYPE(oport, type_outputport))
     return oport;
@@ -58,7 +58,8 @@ TYPEDOP(newline, 0, " -> . Print a newline", 0, (void),
   undefined();
 }
 
-TYPEDOP(stdout, 0, " -> `port. Returns the standard output port.",
+TYPEDOP(standard_out, "stdout",
+        " -> `port. Returns the standard output port.",
         0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".o")
 {
   return mudout;
@@ -96,7 +97,8 @@ TYPEDOP(ctime, 0, " -> `n. Returns the number of milliseconds of CPU"
   struct rusage usage;
 
   getrusage(RUSAGE_SELF, &usage);
-  return (makeint(1000 * usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000));
+  return (makeint(1000 * usage.ru_utime.tv_sec
+                  + usage.ru_utime.tv_usec / 1000));
 #endif
 }
 #endif
@@ -120,7 +122,7 @@ TYPEDOP(time_afterp, "time_after?",
   return makebool(uintval(t0) > uintval(t1));
 }
 
-static value _mktime(value t, struct tm *(*convert)(const time_t *time))
+static value make_tm(value t, struct tm *(*convert)(const time_t *time))
 {
   struct tm *tm;
   time_t timeval;
@@ -151,7 +153,7 @@ TYPEDOP(gmtime, 0,
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
 
-  return _mktime(t, gmtime);
+  return make_tm(t, gmtime);
 }
 
 TYPEDOP(localtime, 0,
@@ -161,7 +163,7 @@ TYPEDOP(localtime, 0,
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
 
-  return _mktime(t, localtime);
+  return make_tm(t, localtime);
 }
 
 static void get_tm_struct(struct tm *tm, struct vector *v)
@@ -180,7 +182,7 @@ static void get_tm_struct(struct tm *tm, struct vector *v)
   tm->tm_wday = GETINT(v->data[tm_wday]);
   tm->tm_yday = GETINT(v->data[tm_yday]);
 
-  tm->tm_isdst = FALSE;
+  tm->tm_isdst = false;
 #ifdef HAVE_TM_ZONE
   tm->tm_zone = "GMT";
   tm->tm_gmtoff = 0;
@@ -221,9 +223,22 @@ TYPEDOP(strftime, 0,
   return makeint(0);
 }
 
+TYPEDOP(mktime, 0,
+        "`v -> `n. Does the inverse of `gmtime(). Returns -1 on error.",
+        1, (struct vector *vgmt),
+        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "v.n")
+{
+  struct tm gmt;
+  get_tm_struct(&gmt, vgmt);
+  time_t t = mktime(&gmt);
+  if (t != -1)
+    t -= timezone;
+  return makeint(t);
+}
+
 TYPEDOP(with_output, 0, "`oport `f -> `x. Evaluates `f() with output sent"
         " to port."
-        " If `p is not a port, just evaluates `f() (no error)."
+        " If `oport is not a port, just evaluates `f() (no error)."
         " Output is restored when done. Returns the result of `f()",
         2, (value out, value code),
         0, "xf.x")
@@ -269,7 +284,7 @@ UNSAFEOP(with_output_file, 0,
     runtime_error(error_bad_value);
 
   GCPRO2(code, oport);
-  oport = make_file_outputport(f);
+  oport = make_file_oport(f);
 
   if (!istrue(unhandled_only))
     add_call_trace(oport, 0);
@@ -352,14 +367,14 @@ static void pformat(struct oport *p, struct string *str,
   UNGCPRO();
 }
 
-static const typing pformat_tset = { "osx*.", NULL };
+static const typing pformat_tset = { "xsx*.", NULL };
 
 FULLOP(pformat, 0, 
        "`oport `s `x1 `x2 ... -> . Outputs formatted string `s to `oport,"
        " with parameters `x1, ... See `format() for syntax. Does nothing if"
        " `oport is not an output port.",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
-       pformat_tset, /* extern */)
+       pformat_tset, static)
 {
   struct string *str;
   struct oport *p;
@@ -394,7 +409,7 @@ FULLOP(format, 0,
       "  s   \ta string repr. of the next param (like display)" EOL
       "  w   \ta string repr. of the next param (like write)",
        -1, (struct vector *args, ulong nargs), 0, OP_LEAF, 
-       format_tset, /* extern */)
+       format_tset, static)
 {
   struct string *str;
   struct gcpro gcpro1;
@@ -402,7 +417,7 @@ FULLOP(format, 0,
 
   if (nargs < 1) runtime_error(error_wrong_parameters);
   GCPRO1(args);
-  p = make_string_outputport();
+  p = make_string_oport();
   UNGCPRO();
   str = args->data[0];
   TYPEIS(str, type_string);
@@ -415,9 +430,9 @@ FULLOP(format, 0,
   return str;
 }
 
-OPERATION(pputc, 0, "`oport `n -> . Print character `n to output port `oport."
-          " Does nothing if `oport is not an output port.",
-          2, (struct oport *p, value mchar), OP_LEAF)
+TYPEDOP(pputc, 0, "`oport `n -> . Print character `n to output port `oport."
+        " Does nothing if `oport is not an output port.",
+        2, (struct oport *p, value mchar), OP_LEAF, "xn.")
 {
   p = get_oport(p);
   
@@ -429,7 +444,7 @@ OPERATION(pputc, 0, "`oport `n -> . Print character `n to output port `oport."
 
 TYPEDOP(pprint, 0, "`oport `s -> . Print `s to output port `oport. Does nothing"
         " if `oport is not an output port.",
-        2, (struct oport *p, struct string *s), OP_LEAF, "os.")
+        2, (struct oport *p, struct string *s), OP_LEAF, "xs.")
 {
   struct gcpro gcpro1;
 
@@ -449,7 +464,7 @@ TYPEDOP(pprint_substring, 0,
         " to output port `oport. Does nothing if `oport is not an output"
         " port.",
         4, (struct oport *p, struct string *s, value mstart, value mlength),
-        OP_LEAF, "osnn.")
+        OP_LEAF, "xsnn.")
 {
   int start = GETINT(mstart), length = GETINT(mlength);
   struct gcpro gcpro1;
@@ -474,7 +489,7 @@ TYPEDOP(make_string_oport, 0,
 	0, (void),
 	OP_LEAF, ".o")
 {
-  return make_string_outputport();
+  return make_string_oport();
 }
 
 static void check_string_port(struct oport *p)
@@ -503,21 +518,21 @@ TYPEDOP(string_oport_length, 0,
   return makeint(string_port_length(p));
 }
 
-OPERATION(port_empty, "port_empty!",
-          "`oport -> . Empties the contents of string port `oport.",
-          1, (struct oport *p),
-          OP_LEAF)
+TYPEDOP(port_empty, "port_empty!",
+        "`oport -> . Empties the contents of string port `oport.",
+        1, (struct oport *p),
+        OP_LEAF, "o.")
 {
   check_string_port(p);
   empty_string_oport(p);
   undefined();
 }
 
-OPERATION(add_call_trace_oport, "add_call_trace_oport!",
-          "`x `b -> . Also send call traces to `x (an oport"
-          " or a character). If `b is TRUE, only send those not handled"
-          " otherwise.",
-	  2, (value oport, value only_unhandled), OP_LEAF)
+TYPEDOP(add_call_trace_oport, "add_call_trace_oport!",
+        "`x `b -> . Also send call traces to `x (an oport"
+        " or a character). If `b is TRUE, only send those not handled"
+        " otherwise.",
+        2, (value oport, value only_unhandled), OP_LEAF, "ox.")
 {
   struct gcpro gcpro1;
 
@@ -532,9 +547,10 @@ OPERATION(add_call_trace_oport, "add_call_trace_oport!",
   undefined();
 }
 
-OPERATION(remove_call_trace_oport, "remove_call_trace_oport!",
-          "`x -> . Stop sending call traces to `x",
-	  1, (value oport), OP_LEAF)
+TYPEDOP(remove_call_trace_oport, "remove_call_trace_oport!",
+        "`x -> . Stop sending call traces to `x (an oport or a character)."
+        " Cf. `add_call_trace_oport!().",
+        1, (value oport), OP_LEAF, "o.")
 {
   if (!TYPE(oport, type_outputport) && !TYPE(oport, type_character))
     runtime_error(error_bad_type);
@@ -546,7 +562,7 @@ OPERATION(remove_call_trace_oport, "remove_call_trace_oport!",
 
 void io_init(void)
 {
-  DEFINE(stdout);
+  DEFINE(standard_out);
   DEFINE(print);
   DEFINE(display);
   DEFINE(examine);
@@ -560,6 +576,7 @@ void io_init(void)
   DEFINE(strftime);
   DEFINE(gmtime);
   DEFINE(localtime);
+  DEFINE(mktime);
   DEFINE(with_output);
   DEFINE(with_output_file);
   DEFINE(pputc);

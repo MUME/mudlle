@@ -296,9 +296,9 @@ writes mc:this_module, mc:erred, mc:linkrun
 	   protect and true,
 	   mod[mc:m_name],
 	   dependencies(mod[mc:m_imports]),
-	   lmap(fn (v) cdr(v), mod[mc:m_defines]),
-	   lmap(fn (v) cdr(v), mod[mc:m_reads]),
-	   lmap(fn (v) cdr(v), mod[mc:m_writes]),
+	   lmap(fn (v) v[mc:mv_name], mod[mc:m_defines]),
+	   lmap(fn (v) v[mc:mv_name], mod[mc:m_reads]),
+	   lmap(fn (v) v[mc:mv_name], mod[mc:m_writes]),
 	   prelink(mod[mc:m_body]));
 
   dependencies = fn (imports)

@@ -41,7 +41,7 @@ typedef unsigned long ulong;
 #endif
 typedef signed short word;
 typedef unsigned short uword;
-typedef signed char byte;
+typedef signed char sbyte;
 typedef unsigned char ubyte;
 
 #define sizeoffield(type, field) (sizeof ((type *)0)->field)
@@ -115,13 +115,13 @@ struct closure			/* Is a record */
   struct obj o;
   struct code *code;		/* May be type_code, type_mcode, type_primitive
 				   as well */
-  struct variable *variables[1]; /* May be other types */
+  struct variable *variables[]; /* May be other types */
 };
 
 struct string			/* Is a string */
 {
   struct obj o;
-  char str[1];			/* Must be null terminated */
+  char str[];			/* Must be null terminated */
 };
 
 struct mudlle_float
@@ -135,7 +135,7 @@ struct bigint
   struct obj	o;
 #ifdef USE_GMP
   mpz_t		mpz;
-  mp_limb_t	limbs[1];
+  mp_limb_t	limbs[];
 #endif
 };
 
@@ -195,7 +195,7 @@ struct primitive_ext		/* The external structure */
 struct vector			/* Is a record */
 {
   struct obj o;
-  value data[1];
+  value data[];
 };
 
 struct list			/* Is a record */
@@ -225,6 +225,8 @@ struct mjmpbuf {
 struct closure *unsafe_alloc_closure(ulong nb_variables);
 struct closure *alloc_closure0(struct code *code);
 struct string *alloc_string(const char *s);
+struct string *mudlle_string_copy(struct string *s);
+struct string *alloc_empty_string(size_t length);
 struct string *alloc_string_length(const char *s, size_t length);
 struct mudlle_float *alloc_mudlle_float(double d);
 struct bigint *alloc_bigint(mpz_t mpz);
@@ -244,7 +246,8 @@ void check_bigint(struct bigint *bi);
    constants: */
 enum {
   PRIVATE_CALL_IN = 1,
-  PRIVATE_MJMPBUF = 2
+  PRIVATE_MJMPBUF = 2,
+  PRIVATE_REGEXP  = 3
 };
 
 struct grecord *alloc_private(int id, ulong size);
@@ -253,7 +256,7 @@ struct grecord *alloc_private(int id, ulong size);
 #define vector_len(vec) (((vec)->o.size - sizeof(struct obj)) / sizeof(value))
 
 /* 0 is false, everything else is true */
-#define isfalse(v) ((value)(v) == makebool(FALSE))
+#define isfalse(v) ((value)(v) == makebool(false))
 #define istrue(v)  (!isfalse(v))
 /* Make a mudlle boolean from a C boolean (1 or 0) */
 #define makebool(i) makeint(!!(i))
@@ -278,4 +281,4 @@ do {						\
 int mudlle_strtoint(const char *sp, int *i);
 int mudlle_strtofloat(const char *sp, double *d);
 
-#endif
+#endif /* TYPES_H */

@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_H
-#define RUNTIME_H
+#ifndef RUNTIME_RUNTIME_H
+#define RUNTIME_RUNTIME_H
 
 #include "../mudlle.h"
 #include "../types.h"
@@ -58,14 +58,14 @@ storage_class value code_ ## x args
 #define EXT_OPERATION(x, name, helpmsg, nargs, args, flags)             \
   FULLOP(x, name, helpmsg, nargs, args, 0, flags, NULL, /* extern */)
 
-#define EXT_TOPERATION(x, name, helpmsg, nargs, args, flags, type)      \
-  MTYPE(type_ ## x, type);                                              \
-  FULLOP(x, name, helpmsg, nargs, args, 0, flags, type_ ## x,           \
-         /* extern */)
-
 #define VAROP(x, name, helpmsg, flags)                                  \
   FULLOP(x, name, helpmsg, -1, (struct vector *args, ulong nargs),      \
 	 0, flags, NULL, static)
+
+#define VARTOP(x, name, helpmsg, flags, type)                           \
+  MTYPE(type_ ## x, type);                                              \
+  FULLOP(x, name, helpmsg, -1, (struct vector *args, ulong nargs),      \
+	 0, flags, type_ ## x, static)
 
 #define SECOP(x, name, helpmsg, nargs, args, seclevel, flags)           \
   FULLOP(x, name, helpmsg, nargs, args, seclevel, flags,                \
@@ -146,6 +146,7 @@ void check_interrupt(void);
    s: string
    v: vector
    l: list (pair or null)
+   u: null
    k: pair
    t: table
    y: symbol
@@ -155,6 +156,7 @@ void check_interrupt(void);
    A-Z: special typesets, as follows:
     S: string or integer
    *: Kleene closure of the previous type; must be followed by "."
+   [...]: one of the enclosed characters
 
   A typing is just an array of strings (terminated by NULL).
   Rep chosen for ease of type specification
@@ -167,5 +169,4 @@ void check_interrupt(void);
 void mudlle_consts_init(void);
 
 
-#endif
-
+#endif /* RUNTIME_RUNTIME_H */

@@ -63,11 +63,10 @@ void system_define(const char *name, value val)
      as a 'define' of the system module.
 */
 {
-  ulong aindex;
   struct gcpro gcpro1;
 
   GCPRO1(val);
-  aindex = global_lookup(name); /* may allocate ... */
+  ulong aindex = global_lookup(name);        /* may allocate ... */
   UNGCPRO();
 
   assert(GVAR(aindex) == NULL /* cannot define same constant twice */);
@@ -78,18 +77,16 @@ void system_define(const char *name, value val)
 
 void define_string_vector(const char *name, const char *const *vec, int count)
 {
-  struct vector *v;
-  struct gcpro gcpro1;
-  int n;
-
   if (count < 0)
     for (count = 0; vec[count]; ++count)
       ;
 
-  v = alloc_vector(count);
+  struct vector *v = alloc_vector(count);
+
+  struct gcpro gcpro1;
   GCPRO1(v);
 
-  for (n = 0; n < count; ++n)
+  for (int n = 0; n < count; ++n)
     {
       struct string *s = alloc_string(vec[n]);
       s->o.flags |= OBJ_READONLY;
@@ -102,14 +99,12 @@ void define_string_vector(const char *name, const char *const *vec, int count)
 
 void define_int_vector(const char *name, const int *vec, int count)
 {
-  struct vector *v;
-  struct gcpro gcpro1;
-  int n;
+  struct vector *v = alloc_vector(count);
 
-  v = alloc_vector(count);
+  struct gcpro gcpro1;
   GCPRO1(v);
 
-  for (n = 0; n < count; ++n)
+  for (int n = 0; n < count; ++n)
     v->data[n] = makeint(vec[n]);
 
   UNGCPRO();
@@ -117,60 +112,75 @@ void define_int_vector(const char *name, const int *vec, int count)
   system_define(name, v);
 }
 
-void runtime_define(const struct primitive_ext *op)
+static void validate_typing(const struct primitive_ext *op)
 {
-  const char *const *type;
-
-  struct primitive *prim;
-  char bname[MAXNAME];
-
-  assert(op->nargs <= MAX_PRIMITIVE_ARGS);
+  static const char allowed[] = "fnsvluktyxo123456789S";
 
   if (op->type == NULL)
-    goto no_types;
+    return;
 
-  for (type = op->type; *type; ++type)
+  for (const char *const *type = op->type; *type; ++type)
     {
-      char *period = strchr(*type, '.');
-      char *star = strchr(*type, '*');
-      int args;
+      const char *this = *type;
+      int argc = 0;
+      bool saw_period = false;
+      for (const char *s = this; *s; ++s)
+        {
+          if (*s == '.')
+            {
+              saw_period = true;
+              ++s;
+              if (*s == 0)
+                break;
+            }
+          if (*s == '[')
+            {
+              for (;;)
+                {
+                  ++s;
+                  assert(*s);
+                  if (*s == ']')
+                    break;
+                  assert(strchr(allowed, *s));
+                }
+            }
+          else if (*s == '*')
+            {
+              assert (s > this && s[1] == '.' && !saw_period);
+              continue;
+            }
+          else
+            assert(strchr(allowed, *s));
+          if (saw_period)
+            {
+              assert(!s[1]);
+              break;
+            }
+          ++argc;
+        }
 
-      /* all type specifications have to have a period in them, with 0
-         or 1 characters after it! */
-      assert(period);
-      assert(period[1] == 0 || period[2] == 0);
+      assert(saw_period);
 
       if (op->nargs >= 0)
-        {
-          args = period - *type;
-          assert(op->nargs == args);
-        }
-
-      if (star)
-        {
-          /* Kleene closure only allowed with varargs; must be followed by . */
-          assert(star > *type);
-          assert(star + 1 == period);
-          assert(op->nargs < 0);
-        }
-
-      static const char allowed[] = "fnsvlktyxo123456789S";
-      for (const char *p = *type; p < (star ? star : period); ++p)
-        assert(strchr(allowed, *p));
-
-      if (period[1])
-        assert(strchr(allowed, period[1]));
+        assert(op->nargs == argc);
     }
+}
 
- no_types:
+void runtime_define(const struct primitive_ext *op)
+{
+  assert(op->nargs <= MAX_PRIMITIVE_ARGS);
+
+  validate_typing(op);
 
   if (binops)
     {
+      char bname[MAXNAME];
       bname[MAXNAME - 1] = '\0';
       strncpy(bname, op->name, MAXNAME - 1);
       fwrite(bname, MAXNAME, 1, binops);
     }
 
+  struct primitive *prim;
   if (op->seclevel > 0)
     {
       prim = alloc_secure(op_count++, op);
@@ -192,10 +202,10 @@ void runtime_define(const struct primitive_ext *op)
 }
 
 #ifdef MUDLLE_INTERRUPT
-static int interrupted = FALSE;
+static bool interrupted = false;
 
 void check_interrupt(void)
-/* Effects: Causes a user_interrupt runtime error if interrupted is TRUE
+/* Effects: Causes a user_interrupt runtime error if interrupted is true
      (user caused SIGINT or SIGQUIT)
 */
 {
@@ -204,30 +214,31 @@ void check_interrupt(void)
 #endif
   if (interrupted)
     {
-      interrupted = FALSE;
+      interrupted = false;
       runtime_error(error_user_interrupt);
     }
 }
 
-void catchint(int sig)
+static void catchint(int sig)
 {
   xcount = 1;
-  interrupted = TRUE;
+  interrupted = true;
 }
-#endif
+#endif  /* MUDLLE_INTERRUPT */
 
 #if defined(i386) && !defined(NOCOMPILER)
 
-#ifdef SA_SIGINFO
-#include <asm/ucontext.h>
-#else
-#if !defined(__GLIBC__) || __GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
+#    ifdef SA_SIGINFO
+#        include <asm/ucontext.h>
+#    else
+#        if !defined(__GLIBC__) || __GLIBC__ < 2 || \
+                (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
 #    define sigcontext sigcontext_struct
 #    include <asm/sigcontext.h>
-#elif (__GLIBC__ != 2 && __GLIBC_MINOR__ != 2)
+#        elif (__GLIBC__ != 2 && __GLIBC_MINOR__ != 2)
 #    include <sigcontext.h>
-#endif
-#endif
+#        endif
+#    endif
 
 #include <stddef.h>
 #include "builtins.h"
@@ -239,12 +250,11 @@ static struct sigaction oldsegact;
 static struct primitive *get_ref_primitive(void)
 {
   static int nenv;
-  struct primitive *prim;
 
   if (nenv == 0)
     nenv = global_lookup("ref");
 
-  prim = GVAR(nenv);
+  struct primitive *prim = GVAR(nenv);
   assert(TYPE(prim, type_primitive));
   return prim;
 }
@@ -252,12 +262,11 @@ static struct primitive *get_ref_primitive(void)
 static struct primitive *get_set_primitive(void)
 {
   static int nenv;
-  struct primitive *prim;
 
   if (nenv == 0)
     nenv = global_lookup("set!");
 
-  prim = GVAR(nenv);
+  struct primitive *prim = GVAR(nenv);
   assert(TYPE(prim, type_primitive));
   return prim;
 }
@@ -292,7 +301,8 @@ static INLINE void check_segv(int sig, struct sigcontext *scp)
       if (eip  >= gcblock && eip < gcblock + gcblocksize)
 	{
 	  ccontext.frame_end_sp = (ulong *)scp->esp;
-	  ccontext.frame_end_sp[-1] = 0; /* This sometimes contains a mudlle value */
+          /* sometimes contains a mudlle value */
+	  ccontext.frame_end_sp[-1] = 0;
 	  ccontext.frame_end_bp = (ulong *)scp->ebp;
 	  ccontext.retadr = (ulong)eip + 4; /* retadr points to next instr. */
 	  runtime_error(error_bad_type);
@@ -418,7 +428,8 @@ void catchsegv(int sig, siginfo_t *sip, ucontext_t *uap)
   if ((trapins & ~(31 << 14)) == (3 << 30 | 3 << 25 | 2 << 19 | 1 << 13 | 4))
     cause_error(error_bad_type, uap);
   /* or a function check (ie: lduh [x+4],l0) */
-  else if ((trapins & ~(31 << 14)) == (3 << 30 | 16 << 25 | 2 << 19 | 1 << 13 | 4))
+  else if ((trapins & ~(31 << 14)) == (3 << 30 | 16 << 25 | 2 << 19
+                                       | 1 << 13 | 4))
     cause_error(error_bad_function, uap);
 
   abort(); /* Really an illegal instruction */
@@ -464,7 +475,8 @@ void catchsegv(int sig, int code, struct sigcontext *scp, char *addr)
       cause_error(error_bad_type, scp);
     }
   /* or a function check (ie: lduh [x+4],l0) */
-  else if ((trapins & ~(31 << 14)) == (3 << 30 | 16 << 25 | 2 << 19 | 1 << 13 | 4))
+  else if ((trapins & ~(31 << 14)) == (3 << 30 | 16 << 25 | 2 << 19
+                                       | 1 << 13 | 4))
     {
       /* Yes ... */
       /* reset handler */
@@ -483,7 +495,7 @@ void runtime_init(void)
   binops = fopen("mudlle-primitives", "w+");
   op_count = 0;
   system_module = alloc_string("system");
-  staticpro((value *)&system_module);
+  staticpro(&system_module);
 
 #ifdef MUDLLE_INTERRUPT
 #ifdef __SVR4

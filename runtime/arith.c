@@ -20,6 +20,7 @@
  */
 
 #include <math.h>
+#include <stdlib.h>
 
 #include "runtime/runtime.h"
 #include "stringops.h"
@@ -35,28 +36,30 @@ TYPEDOP(sqrt, 0, "`n1 -> `n2. Returns the truncated square root of the"
   return makeint((long)sqrt((double)x));
 }
 
-TYPEDOP(isinteger, "integer?", "`x -> `b. TRUE if `x is an integer", 1, (value x),
+TYPEDOP(isinteger, "integer?", "`x -> `b. TRUE if `x is an integer",
+        1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(integerp(x));
 }
 
-OPERATION(plus, "+", "`n1 `n2 -> `n. `n = `n1 + `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOESCAPE)
+static const typing plus_tset = { "nn.n", "ss.s", NULL };
+FULLOP(plus, "+", "`n1 `n2 -> `n. `n = `n1 + `n2", 2, (value v1, value v2),
+       0, OP_LEAF | OP_NOESCAPE, plus_tset, static)
 {
-  if (integerp(v1) && integerp(v2)) return ((value)((long)v1 + (long)v2 - 1));
-  else if (TYPE(v1, type_string) && TYPE(v2, type_string))
+  if (integerp(v1) && integerp(v2))
+    return ((value)((long)v1 + (long)v2 - 1));
+  if (TYPE(v1, type_string) && TYPE(v2, type_string))
     return string_append(v1, v2);
-  else runtime_error(error_bad_type);
-  NOTREACHED;
+  runtime_error(error_bad_type);
 }
 
-OPERATION(minus, "-", "`n1 `n2 -> `n. `n = `n1 - `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(minus, "-", "`n1 `n2 -> `n. `n = `n1 - `n2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
-  if (integerp(v1) && integerp(v2)) return ((value)((long)v1 - (long)v2 + 1));
-  else runtime_error(error_bad_type);
-  NOTREACHED;
+  if (integerp(v1) && integerp(v2))
+    return ((value)((long)v1 - (long)v2 + 1));
+  runtime_error(error_bad_type);
 }
 
 TYPEDOP(negate, 0, "`n1 -> `n2. `n2 = -`n1", 1, (value v),
@@ -67,16 +70,16 @@ TYPEDOP(negate, 0, "`n1 -> `n2. `n2 = -`n1", 1, (value v),
   NOTREACHED;
 }
 
-OPERATION(times, "*", "`n1 `n2 -> `n. `n = `n1 * `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(times, "*", "`n1 `n2 -> `n. `n = `n1 * `n2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makeint(intval(v1) * intval(v2)));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(divide, "/", "`n1 `n2 -> `n. `n = `n1 / `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(divide, "/", "`n1 `n2 -> `n. `n = `n1 / `n2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2))
     {
@@ -87,10 +90,10 @@ OPERATION(divide, "/", "`n1 `n2 -> `n. `n = `n1 / `n2", 2, (value v1, value v2),
   NOTREACHED;
 }
 
-OPERATION(remainder, "%",
-          "`n1 `n2 -> `n. `n = remainder of division of `n1 by n2",
-	  2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(remainder, "%",
+        "`n1 `n2 -> `n. `n = remainder of division of `n1 by n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2))
     {
@@ -102,7 +105,7 @@ OPERATION(remainder, "%",
 }
 
 TYPEDOP(modulo, 0, "`n1 `n2 -> `n. `n = `n1 mod `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2))
     {
@@ -111,39 +114,44 @@ TYPEDOP(modulo, 0, "`n1 `n2 -> `n. `n = `n1 mod `n2", 2, (value v1, value v2),
       if (p2 == 0) runtime_error(error_divide_by_zero);
     
       result = p1 % p2;
-      if (((p1 < 0 && p2 > 0) || (p1 > 0 && p2 < 0)) && result != 0) result += p2;
+      if (((p1 < 0 && p2 > 0) || (p1 > 0 && p2 < 0)) && result != 0)
+        result += p2;
       return (makeint(result));
     }
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(smaller, "<", "`n1 `n2 -> `b. TRUE if `n1 < `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(smaller, "<", "`n1 `n2 -> `b. TRUE if `n1 < `n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 < (long)v2));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(smaller_equal, "<=", "`n1 `n2 -> `b. TRUE if `n1 <= `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(smaller_equal, "<=", "`n1 `n2 -> `b. TRUE if `n1 <= `n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 <= (long)v2));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(greater, ">", "`n1 `n2 -> `b. TRUE if `n1 > `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(greater, ">", "`n1 `n2 -> `b. TRUE if `n1 > `n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 > (long)v2));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(greater_equal, ">=", "`n1 `n2 -> `b. TRUE if `n1 >= `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(greater_equal, ">=", "`n1 `n2 -> `b. TRUE if `n1 >= `n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makebool((long)v1 >= (long)v2));
   else runtime_error(error_bad_type);
@@ -188,88 +196,97 @@ TYPEDOP(abs, 0, "`n1 -> `n2. `n2 = |`n1|", 1, (value v),
   return (v);
 }
 
-OPERATION(bitor, "|", "`n1 `n2 -> `n. `n = `n1 | `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(bitor, "|", "`n1 `n2 -> `n. `n = `n1 | `n2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return ((value)((long)v1 | (long)v2));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(bitxor, "^", "`n1 `n2 -> `n. `n = `n1 ^ `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(bitxor, "^", "`n1 `n2 -> `n. `n = `n1 ^ `n2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return ((value)(((long)v1 ^ (long) v2) | 1));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(bitand, "&", "`n1 `n2 -> `n. `n = `n1 & `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(bitand, "&", "`n1 `n2 -> `n. `n = `n1 & `n2", 2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return ((value)((long)v1 & (long)v2));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(shift_left, "<<", "`n1 `n2 -> `n. `n = `n1 << `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(shift_left, "<<", "`n1 `n2 -> `n. `n = `n1 << `n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makeint(intval(v1) << intval(v2)));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(rotate_left, "rol", "`n1 `n2 -> `n. `n = `n1 rotate left `n2", 2,
-	  (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(rotate_left, "rol", "`n1 `n2 -> `n. `n = `n1 rotate left `n2", 2,
+        (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
-  unsigned long l1;
-  long l2;
-
   if (!integerp(v1) || !integerp(v2))
     runtime_error(error_bad_type);
 
-  l1 = uintval(v1);
-  l2 = intval(v2);
+  unsigned long l1 = uintval(v1);
+  long l2 = intval(v2);
   l2 %= 31;
 
   return makeint((l1 << l2) | (l1 >> (31 - l2)));
 }
 
-OPERATION(rotate_right, "ror", "`n1 `n2 -> `n. `n = `n1 rotate right `n2", 2,
-	  (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(rotate_right, "ror", "`n1 `n2 -> `n. `n = `n1 rotate right `n2", 2,
+        (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
-  unsigned long l1;
-  long l2;
-
   if (!integerp(v1) || !integerp(v2))
     runtime_error(error_bad_type);
 
-  l1 = uintval(v1);
-  l2 = intval(v2);
+  unsigned long l1 = uintval(v1);
+  long l2 = intval(v2);
   l2 %= 31;
 
   return makeint((l1 >> l2) | (l1 << (31 - l2)));
 }
 
-OPERATION(shift_right, ">>", "`n1 `n2 -> `n. `n = `n1 >> `n2", 2, (value v1, value v2),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(shift_right, ">>", "`n1 `n2 -> `n. `n = `n1 >> `n2",
+        2, (value v1, value v2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
 {
   if (integerp(v1) && integerp(v2)) return (makeint(intval(v1) >> intval(v2)));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
-OPERATION(bitnot, "~", "`n1 -> `n2. `n2 = ~`n1", 1, (value v),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+TYPEDOP(bitnot, "~", "`n1 -> `n2. `n2 = ~`n1", 1, (value v),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.n")
 {
   if (integerp(v)) return ((value)(~(long)v | 1));
   else runtime_error(error_bad_type);
   NOTREACHED;
 }
 
+TYPEDOP(random, 0,
+	"`n1 `n2 -> `n. Returns a uniform random number between `n1 and `n2"
+        " (inclusive). Cf. `frandom().",
+	2, (value n1, value n2),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "nn.n")
+{
+  long min = GETINT(n1);
+  long max = GETINT(n2);
+  if (min > max) runtime_error(error_bad_value);
+
+  double d = random() / (RAND_MAX + 1.0);
+  return makeint(min + (int)(((double)max - min + 1) * d));
+}
 
 void arith_init(void)
 {
@@ -299,6 +316,7 @@ void arith_init(void)
   DEFINE(rotate_right);
 
   DEFINE(sqrt);
+  DEFINE(random);
 
   system_define("MAXINT", makeint(MAX_TAGGED_INT));
   system_define("MININT", makeint(MIN_TAGGED_INT));

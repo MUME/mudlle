@@ -54,10 +54,10 @@ static int in_glist(ulong n, glist l, int do_mark)
       {
 	if (do_mark)
 	  l->used = 1;
-	return TRUE;
+	return true;
       }
 
-  return FALSE;
+  return false;
 }
 
 static glist readable;
@@ -116,7 +116,7 @@ int mstart(block_t heap, mfile f, int seclev)
      - setup information for mrecall/massign/mexecute
 
      Sends error/warning messages.
-   Returns: TRUE if compilation can proceed
+   Returns: true if compilation can proceed
 */
 {
   vlist mods, reads, writes, defines;
@@ -127,10 +127,10 @@ int mstart(block_t heap, mfile f, int seclev)
     {
       if (module_status(f->name) == module_loaded &&
 	  module_seclevel(f->name) > seclev)
-	return FALSE;
+	return false;
 	
       if (!module_unload(f->name))
-	return FALSE;
+	return false;
 
       module_set(f->name, module_loading, seclev);
     }
@@ -148,7 +148,7 @@ int mstart(block_t heap, mfile f, int seclev)
 	    log_error("failed to load %s", mods->var);
 	  if (f->name)
 	    module_set(f->name, module_error, seclev);
-	  return FALSE;
+	  return false;
 	}
       lmodules = new_mlist(heap, mods->var, mstatus, lmodules);
     }
@@ -198,7 +198,7 @@ int mstart(block_t heap, mfile f, int seclev)
   for (reads = f->reads; reads; reads = reads->next)
     readable = new_glist(heap, global_lookup(reads->var), readable);
 
-  return TRUE;
+  return true;
 }
 
 void mrecall(ulong n, const char *name, fncode fn)
@@ -357,5 +357,5 @@ void mwarn_module(const char *name)
 
 void mcompile_init(void)
 {
-  staticpro((value *)&this_module);
+  staticpro(&this_module);
 }

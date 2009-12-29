@@ -34,7 +34,7 @@ struct env *stack;
 void stack_init(void)
 {
   stack_clear();
-  staticpro((value *)&stack);
+  staticpro(&stack);
 }
 
 void stack_clear(void)

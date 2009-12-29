@@ -76,8 +76,8 @@ static ulong add_position;
 int table_lookup_len(struct table *table, const char *name, size_t nlength,
                      struct symbol **sym)
 /* Effects: Looks for name in the symbol table table.
-   Returns: TRUE if name is found. *pos is set to name's data.
-     Otherwise, returns FALSE. table_add_fast can be called immediately
+   Returns: true if name is found. *pos is set to name's data.
+     Otherwise, returns false. table_add_fast can be called immediately
      if you wish to add an entry to name to the symbol table (but no intervening
      call to the module should be made).
 */
@@ -93,13 +93,13 @@ int table_lookup_len(struct table *table, const char *name, size_t nlength,
     if (!*bucket) 
       {
 	add_position = scan;
-	return FALSE;
+	return false;
       }
     if (string_len((*bucket)->name) == nlength
         && mem8icmp(name, (*bucket)->name->str, nlength) == 0)
       {
 	*sym = *bucket;
-	return TRUE;
+	return true;
       }
     scan++;
     bucket++;
@@ -114,8 +114,8 @@ int table_lookup_len(struct table *table, const char *name, size_t nlength,
 
 int table_lookup(struct table *table, const char *name, struct symbol **sym)
 /* Effects: Looks for name in the symbol table table.
-   Returns: TRUE if name is found. *pos is set to name's data.
-     Otherwise, returns FALSE. table_add_fast can be called immediately
+   Returns: true if name is found. *pos is set to name's data.
+     Otherwise, returns false. table_add_fast can be called immediately
      if you wish to add an entry to name to the symbol table (but no intervening
      call to the module should be made).
 */
@@ -131,7 +131,7 @@ int table_remove(struct table *table, const char *name)
 int table_remove_len(struct table *table, const char *name, size_t nlength)
 /* Effects: Removes table[name] from data. Rehashes nescessary values.
    Modifies: table
-   Returns: FALSE if the entry wasn't found
+   Returns: false if the entry wasn't found
 */
 {
   struct symbol **bucket;
@@ -142,7 +142,7 @@ int table_remove_len(struct table *table, const char *name, size_t nlength)
 
   do {
     if (!*bucket) 
-      return FALSE;
+      return false;
     if (string_len((*bucket)->name) == nlength
         && mem8icmp(name, (*bucket)->name->str, nlength) == 0)
       {
@@ -182,7 +182,7 @@ int table_remove_len(struct table *table, const char *name, size_t nlength)
 	      }
 	  }
 	table->used = (value)((long)table->used - 2);
-	return TRUE;
+	return true;
       }
     scan++;
     bucket++;
@@ -203,14 +203,14 @@ int table_set_len(struct table *table, const char *name, size_t nlength,
                   value data)
 /* Effects: Sets table[name] to data, adds it if not already present
    Modifies: table
-   Returns: FALSE if entry name was readonly
+   Returns: false if entry name was readonly
 */
 {
   struct symbol *sym;
 
   if (table_lookup_len(table, name, nlength, &sym)) 
     {
-      if (sym->o.flags & OBJ_READONLY) return FALSE;
+      if (sym->o.flags & OBJ_READONLY) return false;
       sym->data = data;
     }
   else if (data)
@@ -224,7 +224,7 @@ int table_set_len(struct table *table, const char *name, size_t nlength,
       UNGCPRO();
       table_add_fast(table, s, data);
     }
-  return TRUE;
+  return true;
 }
 
 struct symbol *table_add(struct table *table, struct string *name, value data)
@@ -338,13 +338,13 @@ struct list *table_list(struct table *table)
 }
 
 static int prefixp(struct string *s1, struct string *s2)
-/* Returns: TRUE if s1 is a prefix of s2
+/* Returns: true if s1 is a prefix of s2
 */
 {
   ulong l1 = string_len(s1), l2 = string_len(s2);
   const char *t1 = s1->str, *t2 = s2->str;
 
-  if (l1 > l2) return FALSE;
+  if (l1 > l2) return false;
   
   return mem8icmp(t1, t2, l1) == 0;
 }

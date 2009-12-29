@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef MUDLLE_FLOAT_H
-#define MUDLLE_FLOAT_H
+#ifndef RUNTIME_MUDLLE_FLOAT_H
+#define RUNTIME_MUDLLE_FLOAT_H
 
 void float_init(void);
 
@@ -41,4 +41,4 @@ static INLINE value makefloat(double d)
   return (value)alloc_mudlle_float(d);
 }
 
-#endif /* !MUDLLE_FLOAT_H */
+#endif /* !RUNTIME_MUDLLE_FLOAT_H */

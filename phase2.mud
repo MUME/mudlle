@@ -278,10 +278,12 @@ writes mc:this_function, mc:lineno
 	  var = c[mc:c_asymbol];
 
 	  // check global writes (except top-level defines)
-	  if (var[mc:v_class] == mc:v_global &&
-	      !assq(var[mc:v_goffset], mc:this_module[mc:m_defines]))
-	    mc:ins_trap(fcode, mc:trap_global_write, error_variable_read_only,
-			list(var));
+	  if (var[mc:v_class] == mc:v_global
+              && !lexists?(fn (v) v[mc:mv_gidx] == var[mc:v_goffset],
+                           mc:this_module[mc:m_defines]))
+            mc:ins_trap(fcode, mc:trap_global_write,
+                        error_variable_read_only,
+                        list(var));
 
 	  mc:ins_assign(fcode, var, gen_clist(fcode, c[mc:c_avalue]));
 	  var

@@ -46,21 +46,26 @@ foreach $file (@ARGV) {
     open(FILE, "<$file") or die "Failed opening $file: $!";
     print($line, "  /* $file */\n");
     $line = "\n";
+    my $found = 0;
     while (<FILE>) {
 	s!end mudlle const.*?start mudlle const!!gs;
 	s!end mudlle const.*!!gs;
 	s!/\*.*?\*/!!gs;
 	while (/^\#[ \t]*define[ \t]+(\w+)[ \t]+(\S+)/gm) {
+            $found = 1;
 	    printf("  DEF(%s),\n", $1, $1);
 	}
 	
 	while (/enum\s+(\w+\s+)?{([^}]*)}/gm) {
             $enum = $2;
             while ($enum =~ /(\w+)\s*(=\s*[^,]*)?\s*(,|$)/g) {
+                $found = 1;
                 printf("  DEF(%s),\n", $1, $1);
             }
         }
     }
+    print STDERR "${file}:0: warning: no constants found\n"
+        unless $found;
 }
 
 print "\n  { NULL }\n";

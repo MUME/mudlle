@@ -152,14 +152,14 @@ static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
     {
       varlist *closure;
       ulong coffset;
-      int found = FALSE;
+      int found = false;
 
       /* Is <class,pos> already in closure ? */
       for (coffset = 0, closure = &subenv->closure; *closure;
 	   coffset++, closure = &(*closure)->next)
 	if (vclass == (*closure)->vclass && pos == (*closure)->offset) /* Yes ! */
 	  {
-	    found = TRUE;
+	    found = true;
 	    break;
 	  }
       if (!found)
@@ -178,28 +178,27 @@ static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
 variable_class env_lookup(const char *name, ulong *offset,
 			  int do_read, int do_write)
 {
-  struct env_stack *env;
-
   if (strncasecmp(name, GLOBAL_ENV_PREFIX, strlen(GLOBAL_ENV_PREFIX)) == 0)
     name += strlen(GLOBAL_ENV_PREFIX);
   else
-    for (env = env_stack; env; env = env->next)
+    for (struct env_stack *env = env_stack; env; env = env->next)
       {
 	/* Look for variable in environment env */
-	vlist vars;
-	struct locals_list *scope;
-	ulong pos;
-	
-	for (scope = env->locals; scope; scope = scope->next)
-	  for (pos = scope->index, vars = scope->locals; vars; pos++, vars = vars->next)
-	    if (strcmp(name, vars->var) == 0)
-	      {
-		if (do_read)
-		  vars->was_read = 1;
-		if (do_write)
-		  vars->was_written = 1;
-		return env_close(env, pos, offset);
-	      }
+	for (struct locals_list *scope = env->locals;
+             scope;
+             scope = scope->next)
+          {
+            ulong pos = scope->index;
+            for (vlist vars = scope->locals; vars; pos++, vars = vars->next)
+              if (strcasecmp(name, vars->var) == 0)
+                {
+                  if (do_read)
+                    vars->was_read = true;
+                  if (do_write)
+                    vars->was_written = true;
+                  return env_close(env, pos, offset);
+                }
+          }
       }
   
   /* Not found, is global */

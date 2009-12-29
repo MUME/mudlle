@@ -42,4 +42,4 @@ ulong stack_depth(void);
 
 void print_stack(struct oport *f);
 
-#endif
+#endif /* STACK_H */

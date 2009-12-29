@@ -109,34 +109,35 @@ mc:i_return = 6;
  mc:i_rtype = 2;
 
 // branch ops
-mc:branch_never = 0; // simplifies constant folding
-mc:branch_always = 1;
-mc:branch_true = 2;
-mc:branch_false = 3;
-mc:branch_or = 4;
-mc:branch_nor = 5;
-mc:branch_and = 6;
-mc:branch_nand = 7;
-mc:branch_eq = 8;
-mc:branch_ne = 9;
-mc:branch_lt = 10;
-mc:branch_ge = 11;
-mc:branch_le = 12;
-mc:branch_gt = 13;
-mc:branch_immutable = 14;
-mc:branch_mutable = 15;
-mc:branch_readonly = 16;
-mc:branch_writable = 17;
-mc:branch_type? = 18;
-mc:branch_ntype? = mc:branch_type? + last_synthetic_type;
+mc:branch_never      = 0; // simplifies constant folding
+mc:branch_always     = 1;
+mc:branch_true       = 2;
+mc:branch_false      = 3;
+mc:branch_or         = 4;
+mc:branch_nor        = 5;
+mc:branch_and        = 6;
+mc:branch_nand       = 7;
+mc:branch_eq         = 8;
+mc:branch_ne         = 9;
+mc:branch_lt         = 10;
+mc:branch_ge         = 11;
+mc:branch_le         = 12;
+mc:branch_gt         = 13;
+mc:branch_immutable  = 14;
+mc:branch_mutable    = 15;
+mc:branch_readonly   = 16;
+mc:branch_writable   = 17;
+mc:branch_type?      = 18;
+mc:branch_ntype?     = mc:branch_type? + last_synthetic_type;
 
 // traps
-mc:trap_never = 0; // simplifies constant folding
-mc:trap_always = 1;
-mc:trap_argcheck = 2;
-mc:trap_loop = 3; // check for infinite loops (implicit at function entry)
-mc:trap_type = 4; // arg1 is value, arg2 is type (constant)
-mc:trap_global_write = 5; // check that arg1 is not readonly (arg1 is global)
+mc:trap_never         = 0; // simplifies constant folding
+mc:trap_always        = 1;
+mc:trap_argcheck      = 2;
+mc:trap_loop          = 3; // check for infinite loops (implicit at
+                           // function entry)
+mc:trap_type          = 4; // arg1 is value, arg2 is type (constant)
+mc:trap_global_write  = 5; // check that arg1 is not readonly (arg1 is global)
 
 // memory ops
 mc:memory_read = 1;
@@ -145,97 +146,97 @@ mc:memory_write_safe = 3; // write with check for read-only
 
 // An instruction list is a list of the following vectors:
 
-mc:il_label = 0; // label of this instruction, or false
-mc:il_ins = 1; // the actual instruction
-mc:il_node = 2; // the basic block to which this instruction belongs
-mc:il_number = 3; // a unique number (for display)
-mc:il_lineno = 4; // line number of this instruction
-mc:il_defined_var = 5; // number of variable defined here (or false)
-mc:il_arguments = 6; // varset of arguments used
+mc:il_label        = 0; // label of this instruction, or false
+mc:il_ins          = 1; // the actual instruction
+mc:il_node         = 2; // the basic block to which this instruction belongs
+mc:il_number       = 3; // a unique number (for display)
+mc:il_lineno       = 4; // line number of this instruction
+mc:il_defined_var  = 5; // number of variable defined here (or false)
+mc:il_arguments    = 6; // varset of arguments used
 
-mc:il_live_in = 5; // data-flow information
-mc:il_live_out = 6;
+mc:il_live_in      = 5; // data-flow information
+mc:il_live_out     = 6;
 
 
 // labels:
 
-mc:l_ins = 0; // instruction pointed to
-mc:l_alias = 1; // we are an alias to this label
-mc:l_number = 2; // unique number (for display)
-mc:l_mclabel = 3; // corresponding machine code label
+mc:l_ins      = 0;      // instruction pointed to
+mc:l_alias    = 1;      // we are an alias to this label
+mc:l_number   = 2;      // unique number (for display)
+mc:l_mclabel  = 3;      // corresponding machine code label
 
-itype_none = 0;		// no type
+itype_none      = 0;	// no type
 
-itype_function = 1;
-itype_integer = 2;
-itype_string = 4;
-itype_vector = 8;
-itype_null = 16;
-itype_symbol = 32;
-itype_table = 64;
-itype_pair = 128;
-itype_other = 256;
+itype_function  = 1;
+itype_integer   = 2;
+itype_string    = 4;
+itype_vector    = 8;
+itype_null      = 16;
+itype_symbol    = 32;
+itype_table     = 64;
+itype_pair      = 128;
+itype_other     = 256;
 
-itype_any = 511;		// "any" type
+itype_any       = 511;	// "any" type
 
 itype_names = '[ "function" "integer" "string" "vector" "null" "symbol" "table"
                  "pair" "\"other\"" ];
 
 mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
-  (itype_other,	// type_code
-   itype_function,	// type_closure
-   itype_other,	// type_variable
-   itype_other,	// type_internal
-   itype_function,	// type_primitive
-   itype_function,	// type_varargs
-   itype_function,	// type_secure
-   itype_integer,	// type_integer
-   itype_string,	// type_string
-   itype_vector,	// type_vector
-   itype_pair,	// type_pair
-   itype_symbol,	// type_symbol
-   itype_table,	// type_table
-   itype_other,	// type_private
-   itype_other,	// type_object
-   itype_other,	// type_character
-   itype_other,	// type_gone
-   itype_other,	// type_outputport
-   itype_other,	// type_mcode
-   itype_other,	// type_float
-   itype_other,	// type_bigint
-   itype_null,	// type_null
-   itype_none,	// stype_none
-   itype_any,		// stype_any
-   itype_function,	// stype_function
-   itype_pair | itype_null);	// stype_list
+  (itype_other,                 // type_code
+   itype_function,              // type_closure
+   itype_other,                 // type_variable
+   itype_other,                 // type_internal
+   itype_function,              // type_primitive
+   itype_function,              // type_varargs
+   itype_function,              // type_secure
+   itype_integer,               // type_integer
+   itype_string,                // type_string
+   itype_vector,                // type_vector
+   itype_pair,                  // type_pair
+   itype_symbol,                // type_symbol
+   itype_table,                 // type_table
+   itype_other,                 // type_private
+   itype_other,                 // type_object
+   itype_other,                 // type_character
+   itype_other,                 // type_gone
+   itype_other,                 // type_outputport
+   itype_other,                 // type_mcode
+   itype_other,                 // type_float
+   itype_other,                 // type_bigint
+   itype_null,                  // type_null
+   itype_none,                  // stype_none
+   itype_any,                   // stype_any
+   itype_function,              // stype_function
+   itype_pair | itype_null);    // stype_list
 assert(vlength(mc:itypemap) == last_synthetic_type);
 
 mc:itypemap_inverse = sequence // map from type_xxx/stype_xxx -> itype typesets
-  (itype_any,		                      // type_code
-   itype_any,		                      // type_closure
-   itype_any,		                      // type_variable
-   itype_any,		                      // type_internal
-   itype_any,		                      // type_primitive
-   itype_any,		                      // type_varargs
-   itype_any,		                      // type_secure
-   itype_any & ~itype_integer,	      // type_integer
-   itype_any & ~itype_string,	              // type_string
-   itype_any & ~itype_vector,	              // type_vector
-   itype_any & ~itype_pair,	              // type_pair
-   itype_any & ~itype_symbol,	              // type_symbol
-   itype_any & ~itype_table,	              // type_table
-   itype_any,	                              // type_private
-   itype_any,	                              // type_object
-   itype_any,	                              // type_character
-   itype_any,	                              // type_gone
-   itype_any,	                              // type_outputport
-   itype_any,	                              // type_mcode
-   itype_any,	                              // type_float
-   itype_any,	                              // type_bigint
-   itype_any & ~itype_null,	              // type_null
-   itype_any,	                              // stype_none
-   itype_none,		              // stype_any
-   itype_any & ~itype_function,	      // stype_function
+  (itype_any,		        // type_code
+   itype_any,		        // type_closure
+   itype_any,		        // type_variable
+   itype_any,		        // type_internal
+   itype_any,		        // type_primitive
+   itype_any,		        // type_varargs
+   itype_any,		        // type_secure
+   itype_any & ~itype_integer,  // type_integer
+   itype_any & ~itype_string,	// type_string
+   itype_any & ~itype_vector,	// type_vector
+   itype_any & ~itype_pair,	// type_pair
+   itype_any & ~itype_symbol,	// type_symbol
+   itype_any & ~itype_table,	// type_table
+   itype_any,	                // type_private
+   itype_any,	                // type_object
+   itype_any,	                // type_character
+   itype_any,	                // type_gone
+   itype_any,	                // type_outputport
+   itype_any,	                // type_mcode
+   itype_any,	                // type_float
+   itype_any,	                // type_bigint
+   itype_any & ~itype_null,	// type_null
+   itype_any,	                // stype_none
+   itype_none,                  // stype_any
+   itype_any & ~itype_function, // stype_function
    itype_any & ~(itype_pair | itype_null)); // stype_list
 assert(vlength(mc:itypemap) == last_synthetic_type);
 

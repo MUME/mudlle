@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef DEBUG_H
-#define DEBUG_H
+#ifndef RUNTIME_DEBUG_H
+#define RUNTIME_DEBUG_H
 
 void debug_init(void);
 
-#endif
+#endif /* RUNTIME_DEBUG_H */

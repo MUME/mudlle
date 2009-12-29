@@ -37,4 +37,4 @@ typedef struct oport *Mio;
 #define mflush pflush
 #define mprint output_value
 
-#endif
+#endif /* MUDIO_H */

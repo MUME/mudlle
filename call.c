@@ -366,33 +366,33 @@ int seclevel_violator(value c)
     case type_mcode:
       return ((struct mcode *)o)->seclevel < minlevel;
     default:
-      return FALSE;
+      return false;
     }
 }
 
 int callablep(value c, int nargs)
-/* Returns: FALSE if c is not something that can be called with
+/* Returns: false if c is not something that can be called with
      nargs arguments.
 */
 {
   struct obj *o = c;
 
   if (!pointerp(c))
-    return FALSE;
+    return false;
 
   switch (o->type)
     {
-    case type_closure: return TRUE;
+    case type_closure: return true;
     case type_secure:
     case type_primitive: 
       if (nargs < 0 || ((struct primitive *)o)->op->nargs == nargs)
-	return TRUE;
-      return FALSE;
-    case type_varargs: return TRUE;
+	return true;
+      return false;
+    case type_varargs: return true;
     default:
       break;
     }
-  return FALSE;
+  return false;
 }
 
 void callable(value c, int nargs)
@@ -423,7 +423,7 @@ void callable(value c, int nargs)
   runtime_error(error_bad_function);
 }
 
-INLINE value call0(value c)
+value call0(value c)
 /* Effects: Calls c with no arguments
    Returns: c's result
    Requires: callable(c, 0) does not fail.
@@ -682,12 +682,9 @@ value call1plus(value c, value arg, struct vector *args)
 */
 {
   struct obj *o = c;
-  struct gcpro gcpro1, gcpro2;
-  int i, nargs;
-  const struct primitive_ext *op;
   value result = NULL;
 
-  nargs = 1 + vector_len(args);
+  int nargs = 1 + vector_len(args);
   switch (o->type)
     {
     case type_closure:
@@ -698,9 +695,10 @@ value call1plus(value c, value arg, struct vector *args)
 	  return invoke1plus(cl, arg, args);
 	else
 	  {
+            struct gcpro gcpro1, gcpro2;
 	    GCPRO2(cl, args);
 	    stack_push(arg);
-	    for (i = 0; i < nargs - 1; i++) stack_push(args->data[i]);
+	    for (int i = 0; i < nargs - 1; i++) stack_push(args->data[i]);
 	    UNGCPRO();
 
 	    do_interpret(cl, nargs);
@@ -709,8 +707,10 @@ value call1plus(value c, value arg, struct vector *args)
       }
 
     case type_secure: case type_primitive:
-      ((struct primitive *)o)->call_count++;
-      op = ((struct primitive *)o)->op;
+      {
+        struct primitive *prim = (struct primitive *)o;
+        prim->call_count++;
+        const struct primitive_ext *const op = prim->op;
       switch (nargs)
 	{
 	case 1:
@@ -733,19 +733,23 @@ value call1plus(value c, value arg, struct vector *args)
 	  assert(0);
 	}
       return result;
+      }
 
     case type_varargs:
       {
 	struct vector *real_args;
+	struct primitive *prim = (struct primitive *)o;
 
-	((struct primitive *)o)->call_count++;
+        prim->call_count++;
+
+        struct gcpro gcpro1;
 	GCPRO1(arg);
 	real_args = (struct vector *)unsafe_allocate_record(type_vector, nargs);
 	real_args->data[0] = arg;
 	memcpy(real_args->data + 1, args->data, (nargs - 1) * sizeof(value));
 	UNGCPRO();
-	result = ((struct primitive *)o)->op->op(args, nargs);
-	return result;
+
+	return prim->op->op(args, nargs);
       }
     default: break;
     }
@@ -759,12 +763,8 @@ value call(value c, struct vector *args)
 */
 {
   struct obj *o = c;
-  struct gcpro gcpro1, gcpro2;
-  int i, nargs;
-  const struct primitive_ext *op;
-  value result = NULL;
+  int nargs = vector_len(args);
 
-  nargs = vector_len(args);
   switch (o->type)
     {
     case type_closure:
@@ -775,8 +775,9 @@ value call(value c, struct vector *args)
 	  return invoke(cl, args);
 	else
 	  {
+            struct gcpro gcpro1, gcpro2;
 	    GCPRO2(cl, args);
-	    for (i = 0; i < nargs; i++) stack_push(args->data[i]);
+	    for (int i = 0; i < nargs; i++) stack_push(args->data[i]);
 	    UNGCPRO();
 
 	    do_interpret(cl, nargs);
@@ -785,8 +786,12 @@ value call(value c, struct vector *args)
       }
 
     case type_secure: case type_primitive:
-      ((struct primitive *)o)->call_count++;
-      op = ((struct primitive *)o)->op;
+      {
+        struct primitive *prim = (struct primitive *)o;
+        prim->call_count++;
+        const struct primitive_ext *op = prim->op;
+        value result;
+
       switch (nargs)
 	{
 	case 0:
@@ -802,21 +807,24 @@ value call(value c, struct vector *args)
 	  result = op->op(args->data[0], args->data[1], args->data[2]);
 	  break;
 	case 4:
-	  result = op->op(args->data[0], args->data[1], args->data[2], args->data[3]);
+	  result = op->op(args->data[0], args->data[1], args->data[2],
+                          args->data[3]);
 	  break;
 	case 5:
-	  result = op->op(args->data[0], args->data[1], args->data[2], args->data[3],
-			  args->data[4]);
+	  result = op->op(args->data[0], args->data[1], args->data[2],
+                          args->data[3], args->data[4]);
 	  break;
 	default:
 	  assert(0);
 	}
       return result;
-
+      }
     case type_varargs:
-      ((struct primitive *)o)->call_count++;
-      result = ((struct primitive *)o)->op->op(args, nargs);
-      return result;
+      {
+        struct primitive *prim = (struct primitive *)o;
+        prim->call_count++;
+        return prim->op->op(args, nargs);
+      }
 
     default: break;
     }

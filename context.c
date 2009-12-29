@@ -101,13 +101,13 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
       assert(extra_depth >= 0);
       while (extra_depth--) stack_pop();
 
-      ok = FALSE;
+      ok = false;
     }
   else 
     {
       fn(x);
       exception_signal = 0;
-      ok = TRUE;
+      ok = true;
       assert(call_stack == context.old_call_stack);
     }
 
@@ -127,7 +127,7 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
       case SIGNAL_LONGJMP:
         if (exception_context != &context)
           mthrow(exception_signal, exception_value);
-        ok = TRUE;
+        ok = true;
         break;
       case 0:
         break;
@@ -157,7 +157,7 @@ value mjmpbuf(void)
   return catch_context->_mjmpbuf;
 }
 
-int is_mjmpbuf(value buf)
+bool is_mjmpbuf(value buf)
 {
   struct mjmpbuf *mbuf = buf;
   return (TYPE(mbuf, type_private)
@@ -264,6 +264,6 @@ void remove_call_trace(value v)
 void context_init(void)
 {
   staticpro(&exception_value);
-  staticpro((value *)&mudcalltrace);
+  staticpro(&mudcalltrace);
   reset_context();
 }

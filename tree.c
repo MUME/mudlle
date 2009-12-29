@@ -55,7 +55,7 @@ function new_function(block_t heap, mtype type, str_and_len_t help, vlist args,
   newp->type = type;
   newp->help = help;
   newp->args = args;
-  newp->varargs = FALSE;
+  newp->varargs = false;
   newp->value = avalue;
   newp->lineno = lineno;
   newp->filename = filename;
@@ -74,7 +74,7 @@ function new_vfunction(block_t heap, mtype type, str_and_len_t help,
   newp->help = help;
   /* using type_vector implies a useless type check */
   newp->args = new_vlist(heap, arg, stype_any, NULL);
-  newp->varargs = TRUE;
+  newp->varargs = true;
   newp->value = avalue;
   newp->lineno = lineno;
   newp->filename = filename;
@@ -123,7 +123,7 @@ vlist new_vlist(block_t heap, const char *var, mtype type, vlist next)
   newp->next = next;
   newp->var = var;
   newp->type = type;
-  newp->was_read = newp->was_written = 0;
+  newp->was_read = newp->was_written = false;
 
   return newp;
 }
@@ -171,7 +171,7 @@ constant new_constant(block_t heap, enum constant_class vclass, ...)
   return newp;
 }
 
-str_and_len_t *cstlist_has_symbol(cstlist list, str_and_len_t needle)
+str_and_len_t *cstlist_find_symbol(cstlist list, str_and_len_t needle)
 {
   while (list)
     {
@@ -321,19 +321,6 @@ matchnode new_match_node(block_t heap, pattern pat, component cond,
   return nd;
 }
 
-clist append_clist(clist l1, clist l2)
-{
-  clist last;
-
-  if (!l1) return l2;
-  if (!l2) return l1;
-
-  for (last = l1; last->next; last = last->next) ;
-  last->next = l2;
-
-  return l1;
-}
-
 clist reverse_clist(clist l)
 {
   clist prev = NULL;
@@ -364,20 +351,7 @@ cstlist reverse_cstlist(cstlist l)
   return prev;
 }
 
-vlist append_vlist(vlist l1, vlist l2)
-{
-  vlist last;
-
-  if (!l1) return l2;
-  if (!l2) return l1;
-
-  for (last = l1; last->next; last = last->next) ;
-  last->next = l2;
-
-  return l1;
-}
-
-vlist reverse_vlist(vlist l)
+static vlist reverse_vlist(vlist l)
 {
   vlist prev = NULL;
 
@@ -528,7 +502,7 @@ value mudlle_parse(block_t heap, mfile f)
   cbody->lineno = f->lineno;
 
   SET_VECTOR(file, 0, makeint(f->vclass));
-  SET_VECTOR(file, 1, f->name ? alloc_string(f->name) : makebool(FALSE));
+  SET_VECTOR(file, 1, f->name ? alloc_string(f->name) : makebool(false));
   SET_VECTOR(file, 2, mudlle_vlist(f->imports));
   SET_VECTOR(file, 3, mudlle_vlist(f->defines));
   SET_VECTOR(file, 4, mudlle_vlist(f->reads));
@@ -545,26 +519,26 @@ static void print_constant(FILE *f, constant c);
 
 static void print_list(FILE *f, cstlist l, int has_tail)
 {
-  int first = TRUE;
+  bool first = true;
 
   while (l)
     {
       if (!first) fprintf(f, " ");
       print_constant(f, l->cst);
       if (first) fprintf(f, " .");
-      first = FALSE;
+      first = false;
       l = l->next;
     }
 }
 
 static void print_vlist(FILE *f, vlist l)
 {
-  int first = TRUE;
+  int first = true;
 
   while (l)
     {
       if (!first) fprintf(f, ", ");
-      first = FALSE;
+      first = false;
       if (l->type != stype_any) fprintf(f, "%d ", l->type);
       fputs(l->var, f);
       l = l->next;
@@ -759,9 +733,10 @@ static component build_string_component(const char *s) UNUSED;
 
 static component build_string_component(const char *s)
 {
-  str_and_len_t sl;
-  sl.str = (char *)s;
-  sl.len = strlen(s);
+  str_and_len_t sl = {
+    .str = (char *)s,
+    .len = strlen(s)
+  };
   return new_component(build_heap, c_constant,
 		       new_constant(build_heap, cst_string, sl));
 }
@@ -988,7 +963,7 @@ static component build_match_block(pattern pat, component e,
       component check, getcdr;
       clist code;
       char buf[16], *tmpname;
-      int first = TRUE;
+      int first = true;
 
       if (pat->u.l.patlist == NULL)
 	{
@@ -1042,7 +1017,7 @@ static component build_match_block(pattern pat, component e,
 	      level + 1));
 	  
 	  if (first)
-	    first = FALSE;
+	    first = false;
 	  else
 	    {
 	      component movecdr;
@@ -1071,7 +1046,7 @@ static component build_match_block(pattern pat, component e,
   return res;
 }
 
-static component build_error(int error)
+static component build_error(runtime_errors error)
 {
   return build_exec(build_recall(GLOBAL_ENV_PREFIX "error"), 1, 
 		    build_int_component(error));
@@ -1079,20 +1054,16 @@ static component build_error(int error)
 
 component new_pattern_component(block_t heap, pattern pat, component e)
 {
-  component res;
-
   build_heap = heap;
   apc_symcount = 0;
   apc_symbols = NULL;
 
-  /* 
-   *  Warning: if the match fails, this might leave only some of the variables 
-   *  in the pattern filled. But it's a feature, right?
-   */
-  res = new_component(build_heap, c_builtin, b_if, 2,
-		      new_component(build_heap, c_builtin, b_not, 1,
-                                    build_match_block(pat, e, 0)),
-		      build_error(error_no_match));
+  /* Warning: if the match fails, this might leave only some of the variables
+   * in the pattern filled. But it's a feature, right? */
+  component res = new_component(build_heap, c_builtin, b_if, 2,
+                                new_component(build_heap, c_builtin, b_not, 1,
+                                              build_match_block(pat, e, 0)),
+                                build_error(error_no_match));
   res->lineno = pat->lineno;
   return res;
 }

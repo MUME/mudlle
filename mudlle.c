@@ -38,7 +38,7 @@
 #  include <readline/history.h>
 #  include <readline/readline.h>
 
-#  define HISTORY_FILE (char *)".mudlle-history"
+#  define HISTORY_FILE ".mudlle-history"
 #endif
 
 extern FILE *yyin;
@@ -65,7 +65,7 @@ static void execute(char *line)
   value result;
 
   read_from_string(line, NULL);
-  if (interpret(&result, 1, TRUE))
+  if (interpret(&result, 1, true))
     {
       printf("Result: ");
       mprint(mudout, prt_print, result);
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     perror("atexit(history_exit)");
 #endif
 
-  out = make_file_outputport(stdout);
+  out = make_file_oport(stdout);
   session_start(&context, 0, 0, out, out);
   for (;;)
     {

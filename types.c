@@ -28,7 +28,7 @@
 
 const char *const mtypenames[] = {
   "code",   "closure", "variable", "internal",  "primitive", "varargs",     
-  "secure", "integer", "string",   "vector",    "list",      "symbol",      
+  "secure", "integer", "string",   "vector",    "pair",      "symbol",      
   "table",  "private", "object",   "character", "gone",      "output-port", 
   "mcode",  "float",   "bigint",   "null",      
   "none",   "any",     "function", "list"
@@ -248,7 +248,6 @@ struct closure *unsafe_alloc_closure(ulong nb_variables)
 
 struct closure *alloc_closure0(struct code *code)
 {
-  struct closure *newp;
   struct gcpro gcpro1;
 
   GCPRO1(code);
@@ -257,7 +256,7 @@ struct closure *alloc_closure0(struct code *code)
   record_allocation(&closure_alloc_stats, sizeof(struct obj) + sizeof(value));
 #endif
 
-  newp = (struct closure *)allocate_record(type_closure, 1);
+  struct closure *newp = (struct closure *)allocate_record(type_closure, 1);
   newp->code = code;
   newp->o.flags |= OBJ_READONLY;
   UNGCPRO();
@@ -265,34 +264,47 @@ struct closure *alloc_closure0(struct code *code)
   return newp;
 }
 
+/* allocate uninitialized string for 'len' characters */
+struct string *alloc_empty_string(size_t len)
+{
+  struct string *result = (struct string *)allocate_string(type_string,
+                                                           len + 1);
+  result->str[len] = 0;
+  return result;
+}
+
 struct string *alloc_string(const char *s)
 {
-  struct string *newp;
-
   if (!s) s = "(null)";
-  newp = (struct string *)allocate_string(type_string, strlen(s) + 1);
-
-  strcpy(newp->str, s);
-
+  size_t l = strlen(s);
+  struct string *newp = (struct string *)allocate_string(type_string, l + 1);
+  memcpy(newp->str, s, l + 1);
   return newp;
 }
 
 struct string *alloc_string_length(const char *str, size_t len)
 {
-  struct string *newp;
-
   if (!str)
     {
       str = "(null)";
       len = 6;
     }
 
-  newp = (struct string *)allocate_string(type_string, len + 1);
-
+  struct string *newp = alloc_empty_string(len);
   memcpy(newp->str, str, len);
-  newp->str[len] = 0;
 
   return newp;
+}
+
+struct string *mudlle_string_copy(struct string *s)
+{
+  struct gcpro gcpro1;
+  GCPRO1(s);
+  size_t len = string_len(s);
+  struct string *result = alloc_empty_string(len);
+  memcpy(result->str, s->str, len);
+  UNGCPRO();
+  return result;
 }
 
 struct string *safe_alloc_string(const char *s)

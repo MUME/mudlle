@@ -140,7 +140,7 @@ struct dynpro *protect(value v);
 value unprotect(struct dynpro *pro);
 
 /* Protection of global variables */
-void _staticpro(value *pro, const char *desc, const char *file, int line);
+void _staticpro(void *pro, const char *desc, const char *file, int line);
 #define staticpro(ptr) _staticpro(ptr, #ptr, __FILE__, __LINE__)
 
 struct vector *get_staticpro_data(void);
@@ -177,14 +177,14 @@ struct vector *get_staticpro_data(void);
 #define INCREASE_A 14
 #define INCREASE_B 10
 
-struct grecord *allocate_record(ubyte type, ulong entries);
+struct grecord *allocate_record(mtype type, ulong entries);
 
 /* Do not call this function if you don't understand how the gc works !! */
-struct grecord *unsafe_allocate_record(ubyte type, ulong entries);
+struct grecord *unsafe_allocate_record(mtype type, ulong entries);
 
-struct gstring *allocate_string(ubyte type, ulong bytes);
-struct gpermanent *allocate_permanent(ubyte type, ulong nb, void *ext);
-struct gtemp *allocate_temp(ubyte type, void *ext);
+struct gstring *allocate_string(mtype type, ulong bytes);
+struct gpermanent *allocate_permanent(mtype type, ulong nb, void *ext);
+struct gtemp *allocate_temp(mtype type, void *ext);
 struct vector *allocate_locals(ulong n);
 /* Effect: Allocate a vector of local variables in an optimised fashion.
 */
@@ -273,7 +273,7 @@ void garbage_collect(long n);
 void push_registers(void);
 void pop_registers(void);
 extern struct vector *activation_stack;
-extern int registers_valid;		/* TRUE if static area is being used */
+extern int registers_valid;		/* true if static area is being used */
 #endif
 
 #ifdef i386

@@ -263,20 +263,20 @@ int main(int argc, char **argv)
 {
   extern char *optarg;
   extern int optind;
-  int primitives = FALSE, mudlle = FALSE, unused = FALSE, c;
+  int primitives = false, mudlle = false, unused = false, c;
   int sort_method = 1;
 
   while ((c = getopt(argc, argv, "pmu123")) != -1)
     switch (c)
       {
       case 'p': 
-	primitives = TRUE;
+	primitives = true;
 	break;
       case 'm':
-	mudlle = TRUE;
+	mudlle = true;
 	break;
       case 'u':
-	unused = TRUE;
+	unused = true;
 	break;
       case '1': case '2': case '3':
 	sort_method = c - '0';
@@ -286,7 +286,7 @@ int main(int argc, char **argv)
 	return 2;
       }
 
-  if (!primitives && !mudlle) primitives = mudlle = TRUE;
+  if (!primitives && !mudlle) primitives = mudlle = true;
 
   load_profile_data();
 

@@ -136,20 +136,17 @@ OPERATION(ftobi, 0, "`f -> `bi. Truncates `f into a bigint",
 OPERATION(bitoa, 0, "`bi -> `s. Return a string representation for `bi", 
 	  1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 {
-  char *buf;
-
   m = get_bigint(m);
-  buf = alloca(mpz_sizeinbase(m->mpz, 10) + 2);
+  char buf[mpz_sizeinbase(m->mpz, 10) + 2];
   mpz_get_str(buf, 10, m->mpz);
 
   return alloc_string(buf);
 }
 
-OPERATION(bitoa_base, 0, "`bi `n -> `s. Return a string representation for `bi, "
-	  "base `n (2 - 32)",
+OPERATION(bitoa_base, 0, "`bi `n -> `s. Return a string representation for `bi,"
+	  " base `n (2 - 32)",
 	  2, (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE)
 {
-  char *buf;
   long n;
 
   ISINT(v);
@@ -157,7 +154,7 @@ OPERATION(bitoa_base, 0, "`bi `n -> `s. Return a string representation for `bi, 
   if ((n = intval(v)) <= 1 || n > 32)
     runtime_error(error_bad_value);
 
-  buf = alloca(mpz_sizeinbase(m->mpz, n) + 2);
+  char buf[mpz_sizeinbase(m->mpz, n) + 2];
   mpz_get_str(buf, n, m->mpz);
 
   return alloc_string(buf);
@@ -211,7 +208,8 @@ OPERATION(bitoi, 0, "`bi -> `i. Return `bi as an integer (error if overflow)",
   return makeint(mpz_get_si(m->mpz));
 }
 
-OPERATION(bisgn, 0, "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0, or 1 if `bi > 0",
+OPERATION(bisgn, 0, "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0, or 1"
+          " if `bi > 0",
 	  1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
 {
   bi = get_bigint(bi);
@@ -225,7 +223,8 @@ OPERATION(bitof, 0, "`bi -> `f. Return `bi as a float",
   return makefloat(d);
 }
 
-OPERATION(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2, 0 if `bi1 == `bi2, "
+OPERATION(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
+          " 0 if `bi1 == `bi2, "
 	  "and > 0 if `bi1 > `bi2", 2, (struct bigint *m1, struct bigint *m2),
 	  OP_LEAF | OP_NOESCAPE)
 {
@@ -379,8 +378,8 @@ UNIMPLEMENTED(ftobi, 0, "`f -> `bi. Truncates `f into a bigint",
 UNIMPLEMENTED(bitoa, 0, "`bi -> `s. Return a string representation for `bi", 
 	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
-UNIMPLEMENTED(bitoa_base, 0, "`bi `n -> `s. Return a string representation for `bi, "
-	      "base `n (2 - 32)",
+UNIMPLEMENTED(bitoa_base, 0, "`bi `n -> `s. Return a string representation"
+              " for `bi, base `n (2 - 32)",
 	      2, (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(atobi, 0, "`s -> `bi. Return the number in `s as a bigint", 
@@ -390,17 +389,20 @@ UNIMPLEMENTED(atobi_base, 0, "`s `n -> `bi. Return the number in `s, encoded in"
 	      " base `n (2 <= `n <= 32), as a bigint", 
 	      2, (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE)
 
-UNIMPLEMENTED(bitoi, 0, "`bi -> `i. Return `bi as an integer (error if overflow)", 
+UNIMPLEMENTED(bitoi, 0, "`bi -> `i. Return `bi as an integer"
+              " (error if overflow)", 
 	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
-UNIMPLEMENTED(bisgn, 0, "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0, or 1 if `bi > 0",
+UNIMPLEMENTED(bisgn, 0, "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0,"
+              " or 1 if `bi > 0",
 	      1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bitof, 0, "`bi -> `f. Return `bi as a float", 
 	      1, (struct bigint *m), OP_LEAF | OP_NOESCAPE)
 
-UNIMPLEMENTED(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2, 0 if `bi1 == `bi2, "
-	      "and > 0 if `bi1 > `bi2", 2, (struct bigint *m1, struct bigint *m2),
+UNIMPLEMENTED(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2, 0"
+              " if `bi1 == `bi2, and > 0 if `bi1 > `bi2",
+              2, (struct bigint *m1, struct bigint *m2),
 	      OP_LEAF | OP_NOESCAPE)
 
 UNIMPLEMENTED(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n",
@@ -431,13 +433,13 @@ BIUNOP(com, "binot", "~`bi")
 BIUNOP(neg, "bineg", "-`bi")
 BIUNOP(abs, "biabs", "|`bi|")
 
-BIBINOP(add,    "biadd", +, 0)
-BIBINOP(sub,    "bisub", -, 0)
-BIBINOP(mul,    "bimul", *, 0)
-BIBINOP(tdiv_q, "bidiv", /, 1)
-BIBINOP(tdiv_r, "bimod", %, 1)
-BIBINOP(and,    "biand", &, 0)
-BIBINOP(ior,    "bior",  |, 0)
+BIBINOP(add,    "biadd", +, false)
+BIBINOP(sub,    "bisub", -, false)
+BIBINOP(mul,    "bimul", *, false)
+BIBINOP(tdiv_q, "bidiv", /, true)
+BIBINOP(tdiv_r, "bimod", %, true)
+BIBINOP(and,    "biand", &, false)
+BIBINOP(ior,    "bior",  |, false)
 
 void bigint_init(void)
 {

@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef LIST_H
-#define LIST_H
+#ifndef RUNTIME_LIST_H
+#define RUNTIME_LIST_H
 
 void list_init(void);
 
-#endif
+#endif /* RUNTIME_LIST_H */

@@ -352,7 +352,7 @@
 
 library inference // type inference
 requires graph, dlist, compiler, vars, flow, optimise, ins3, sequences, misc
-defines mc:infer_types, mc:show_type_info, mc:constant?
+defines mc:infer_types, mc:show_type_info, mc:constant?, mc:global_call_count
 reads mc:verbose, mc:this_module
 writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 [
@@ -362,8 +362,8 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
     typeset_union!, extract_types, show_typesets, showset, show_constraints,
     show_constraint, show_c, show_condition, generate_branch_constraints,
     simple_itypes, infer_typeof, describe_itype, describe_tsig, concat_comma,
-    tsig_minargs, tsig_argc, verify_call_types, verify_compute_types,
-    var_type, type_typesets |
+    tsig_has_args?, tsig_minargs, tsig_argc, verify_call_types,
+    verify_compute_types, var_type, type_typesets, handle_apply |
 
   op_types =          // indexed by mc:b_xxx
     '[("xx.n")        // or
@@ -434,6 +434,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
   typesets[?s] = itype_string;
   typesets[?v] = itype_vector;
   typesets[?l] = itype_pair | itype_null;
+  typesets[?u] = itype_null;
   typesets[?k] = itype_pair;
   typesets[?t] = itype_table;
   typesets[?y] = itype_symbol;
@@ -460,11 +461,13 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
            sequence(type_integer   . ?n,
                     type_string    . ?s,
                     type_vector    . ?v,
-                    type_pair      . ?p,
+                    type_pair      . ?k,
                     type_symbol    . ?y,
                     type_table     . ?t,
                     stype_function . ?f,
                     stype_list     . ?l));
+
+  mc:global_call_count = make_table();
 
   concat_comma = fn (l, last)
     if (l == null)
@@ -473,7 +476,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       car(l)
     else
       [
-        | prefix, result |
+        | result |
         result = car(l);
         loop
           [
@@ -582,7 +585,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       sargs = args;
       while (i < nargs)
 	[
-	  | arg, tsets |
+	  | arg |
 
 	  arg = car(sargs);
 	  type = template[ti];
@@ -696,7 +699,40 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       
       sequence(il, vars, cl)
     ];
-  
+
+  handle_apply = fn (args, types, dest)
+    [
+      | f |
+      assert(equal?(types, '("fv.x")));
+      f = car(args);
+      if (f[mc:v_class] == mc:v_global_constant)
+	[
+	  | gval |
+	  gval = global_value(f[mc:v_goffset]);
+	  if (primitive?(gval)
+	      || secure?(gval)
+	      || varargs?(gval))
+	    [
+	      | ftypes |
+	      ftypes = primitive_type(gval);
+	      if (ftypes != null)
+		exit<function>
+		  lmap(fn (sig) [
+		    if (cdigit?(sig[-1]))
+		      sig = "fv.x"
+		    else if (sig[-1] == ?.)
+		      sig = "fv."
+		    else
+		      sig = "fv." + string_tail(sig, -1);
+		    instantiate_constraint(sig, args, dest)
+		  ], ftypes);
+	    ];
+	];
+
+      lmap(fn (sig) instantiate_constraint(sig, args, dest),
+	   types)
+    ];
+
   generate_constraints = fn (il, ambiguous, constraints)
     // Types: il: instruction
     // Returns: (constraints for instruction il) . constraints
@@ -739,8 +775,13 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
               | types |
               
               if ((types = primitive_type(prim)) != null)
-                new = lmap(fn (sig) instantiate_constraint(sig, args, dest),
-                           types)
+		[
+		  if (prim == apply)
+		    new = handle_apply(args, types, dest)
+		  else
+		    new = lmap(fn (sig) instantiate_constraint(sig, args, dest),
+			       types)
+		]
               else
                 new = sequence(null, ndest, make_condition0(itype_any)) . null;
               if (primitive_flags(prim) & OP_NOESCAPE) escapes = FALSE;
@@ -776,6 +817,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
                    closure?(clos = global_value(f[mc:v_goffset])))
             [
               | t |
+
               t = mc:itypemap[closure_return_type(clos)];
               new = sequence(null, ndest, make_condition0(t)) . null
             ]
@@ -1018,6 +1060,17 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
         n
     ];
 
+  // true if `sig allows for `argc arguments
+  tsig_has_args? = fn (sig, argc)
+    [
+      | n |
+      n = tsig_argc(sig);
+      if (n < 0)
+        argc >= -(n + 1)
+      else
+        argc == n
+    ];
+
   verify_call_types = fn (ins, typeset)
     [
       | f, args, nargs, minargs, fclass, fval |
@@ -1041,13 +1094,23 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       else if (fclass == mc:v_global_define)
         [
           // cannot check our own defines
-          if (lexists?(fn (def) car(def) == f[mc:v_goffset],
+          if (lexists?(fn (def) def[mc:mv_gidx] == f[mc:v_goffset],
                        mc:this_module[mc:m_defines]))
             exit<function> null;
           fval = global_value(f[mc:v_goffset])
         ]
       else
         exit<function> null;
+
+      if (fclass != mc:v_constant)
+        [
+          | name |
+          name = global_name(f[mc:v_goffset]);
+          if (mc:global_call_count[name] == null)
+            mc:global_call_count[name] = 1
+          else
+            mc:global_call_count[name]++;
+        ];
 
       if (!function?(fval))
         mc:warning("call of non-function (%s)", type_names[typeof(fval)])
@@ -1072,15 +1135,61 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
             ]
           else if (varargs?(fval))
             [
-              | atleast |
               desc = "vararg primitive";
               ftypes = primitive_type(fval);
               if (ftypes != null)
                 [
-                  minargs = lreduce(fn (t, x) min(tsig_minargs(t), x), MAXINT, ftypes);
-                  if (nargs < minargs)
+                  if (!lexists?(fn (t) tsig_has_args?(t, nargs), ftypes))
                     [
-                      bad_nargs(format("at least %s", minargs));
+                      | allowed |
+                      // list of N or -(N + 1) for N+
+                      allowed = lmap(tsig_argc, ftypes);
+
+                      // sort according to N
+                      allowed = lqsort(fn (a, b) [
+                        if (a < 0) a = -(a + 1);
+                        if (b < 0) b = -(b + 1);
+                        a < b;
+                      ], allowed);
+
+                      // filter out "mergable" options
+                      for (|a|a = allowed; cdr(a) != null; )
+                        [
+                          if (car(a) < 0)
+                            [
+                              // if this is N+, then the rest do not matter
+                              set_cdr!(a, null);
+                              exit<break> null;
+                            ];
+                          if (car(a) == cadr(a))
+                            [
+                              // merge N and N
+                              set_car!(a, cddr(a));
+                            ]
+                          else if (car(a) == -(cadr(a) + 1))
+                            [
+                              // merge N and N+
+                              set_car!(a, cadr(a));
+                              set_cdr!(a, cddr(a));
+                            ]
+                          else if (car(a) + 1 == -(cadr(a) + 1))
+                            [
+                              // merge N and (N + 1)+ to N+
+                              set_car!(a, cadr(a) + 1);
+                              set_cdr!(a, cddr(a));
+                            ]
+                          else
+                            a = cdr(a);
+                        ];
+
+                      // "pretty"-print
+                      allowed = lmap!(fn (n) [
+                        if (n >= 0)
+                          itoa(n)
+                        else
+                          format("at least %s", -(n + 1))
+                      ], allowed);
+                      bad_nargs(concat_comma(allowed, " or "));
                       ftypes = null
                     ]
                 ]

@@ -33,8 +33,8 @@ int table_lookup(struct table *table, const char *name, struct symbol **sym);
 int table_lookup_len(struct table *table, const char *name, size_t nlength,
                      struct symbol **sym);
 /* Effects: Looks for name in the symbol table table (case insensitive).
-   Returns: TRUE if name is found. *pos is set to name's data.
-     Otherwise, returns FALSE. table_add_fast can be called immediately
+   Returns: true if name is found. *pos is set to name's data.
+     Otherwise, returns false. table_add_fast can be called immediately
      if you wish to add an entry to name to the symbol table (but no intervening
      call to the module should be made).
 */
@@ -43,7 +43,7 @@ int table_remove(struct table *table, const char *name);
 int table_remove_len(struct table *table, const char *name, size_t nlength);
 /* Effects: Removes table[name] from data. Rehashes nescessary values.
    Modifies: table
-   Returns: FALSE if the entry wasn't found
+   Returns: false if the entry wasn't found
 */
 
 int table_set(struct table *table, const char *name, value data);
@@ -51,7 +51,7 @@ int table_set_len(struct table *table, const char *name, size_t nlength,
                   value data);
 /* Effects: Sets table[name] to data, adds it if not already present
    Modifies: table
-   Returns: FALSE if entry name was readonly
+   Returns: false if entry name was readonly
 */
 
 struct symbol *table_add(struct table *table, struct string *name, value data);
@@ -88,4 +88,4 @@ int table_entries(struct table *table);
 
 #define DEF_TABLE_SIZE 8	/* Convenient initial size */
 
-#endif
+#endif /* TABLE_H */

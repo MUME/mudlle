@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef BITSET_H
-#define BITSET_H
+#ifndef RUNTIME_BITSET_H
+#define RUNTIME_BITSET_H
 
 void bitset_init(void);
 
-#endif
+#endif /* RUNTIME_BITSET_H */

@@ -47,7 +47,9 @@ defines mc:c_class, mc:c_lineno, mc:c_assign, mc:c_asymbol, mc:c_avalue,
   mc:a_builtins, mc:a_constants, mc:a_subfns, mc:a_globals, mc:a_kglobals, 
   mc:a_primitives, mc:a_linenos, mc:a_rel_primitives,
 
-  mc:fname, mc:error, mc:warning, mc:sort_messages
+  mc:fname, mc:error, mc:warning, mc:sort_messages,
+
+  mc:mv_gidx, mc:mv_name, mc:mv_used, mc:muse_read, mc:muse_write
 
 reads mc:this_module, mc:this_function, mc:lineno
 writes mc:erred
@@ -67,12 +69,22 @@ writes mc:erred
    mc:m_library = 2;		// a full library
   
   mc:m_name = 1;		// module name (string or false)
-  mc:m_imports = 2;		// imported modules (list of (string . type)) (type meaningless)
-  mc:m_defines = 3;		// defined variables (list of (string . type))
-  mc:m_reads = 4;		// read variables (list of (string . type))
-  mc:m_writes = 5;		// written variables (list of (string . type))
+  mc:m_imports = 2;		// imported modules
+  mc:m_defines = 3;		// defined variables
+  mc:m_reads = 4;		// read variables
+  mc:m_writes = 5;		// written variables
   mc:m_body = 6;		// module body (component)
   mc:m_filename = 7;            // module file name
+
+  // the variable lists above are lists of (name . type) from mudlle_parse,
+  // and vector(gidx, name, used) after mstart()
+  mc:mv_gidx = 0;
+  mc:mv_name = 1;
+  mc:mv_used = 2;
+
+  // flags in mc:mv_used
+  mc:muse_read  = 1;
+  mc:muse_write = 2;
 
   // Component structure:
   //   It is a vector whose first element is one of mc:c_assign, c_recall, etc

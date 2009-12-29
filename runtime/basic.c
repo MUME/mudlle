@@ -148,7 +148,7 @@ TYPEDOP(error, 0, "`n -> . Causes error `n", 1, (value errn),
 }
 
 TYPEDOP(compiledp, "compiled?",
-        " -> `b. Returns true if called from compiled code (ignoring"
+        " -> `b. Returns true if called from compiled code, ignoring"
         " levels of primitives.",
         0, (void), OP_LEAF | OP_NOESCAPE | OP_NOALLOC, ".n")
 {
@@ -335,7 +335,7 @@ UNSAFEOP(session, 0, "`f -> . Calls `f() in it's own session",
   return aresult;
 }
 
-static const typing tref = { "vn.x", "sn.n", "ts.x", "os.x", "ns.x", NULL };
+static const typing tref = { "vn.x", "sn.n", "[ton]s.x", NULL };
 
 FULLOP(ref, 0, "`x1 `x2 -> `x3. Generic interface to lookup operations:"
        " `x1[`x2] -> `x3",
@@ -356,9 +356,7 @@ FULLOP(ref, 0, "`x1 `x2 -> `x3. Generic interface to lookup operations:"
   NOTREACHED;
 }
 
-static const typing tset = {
-  "vnx.3", "snn.n", "tsx.3", "osx.3", "nsx.3", NULL
-};
+static const typing tset = { "vnx.3", "snn.n", "[ton]sx.3", NULL };
 
 FULLOP(set, "set!",
        "`x1 `x2 `x3 -> . Generic interface to set operations: `x1[`x2] = `x3",
@@ -386,37 +384,33 @@ FULLOP(set, "set!",
 
 #define OBJ_MAGIC 0x871f54ab
 
-UNSAFEOP(obj_save, "save_data", "`s `x -> . Writes mudlle value `x to file `s",
-	 2, (struct string *file, value x), 
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(save_data, 0, "`s `x -> . Writes mudlle value `x to file `s",
+          2, (struct string *file, value x), 
+          OP_LEAF | OP_NOESCAPE, "sx.")
 {
-  int fd, ok;
   struct gcpro gcpro1;
-  void *data;
-  unsigned long size, magic, nsize;
-  char tmp_file[PATH_MAX];
-
 
   TYPEIS(file, type_string);
 
 
   GCPRO1(file);
-  data = gc_save(x, &size);
+  ulong size;
+  void *data = gc_save(x, &size);
   UNGCPRO();
 
+  char tmp_file[PATH_MAX];
   snprintf(tmp_file, sizeof tmp_file, "%s.%d.%ld", 
 	   file->str, getpid(), time(NULL));
 
-  fd = creat(tmp_file, 0666);
-
+  int fd = creat(tmp_file, 0666);
   if (fd < 0)
     goto failed;
 
-  magic = htonl(OBJ_MAGIC);
-  nsize = htonl(size);
-  ok = (write(fd, &magic, sizeof magic) == sizeof magic &&
-	write(fd, &nsize, sizeof nsize) == sizeof nsize &&
-	write(fd, data, size) == size);
+  ulong magic = htonl(OBJ_MAGIC);
+  ulong nsize = htonl(size);
+  bool ok = (write(fd, &magic, sizeof magic) == sizeof magic &&
+             write(fd, &nsize, sizeof nsize) == sizeof nsize &&
+             write(fd, data, size) == size);
 
   close(fd);
   
@@ -438,7 +432,6 @@ static value _load_data(value (*fgc_load)(void *_load, unsigned long size),
 {
   int fd;
   unsigned long magic, size;
-  void *data;
 
 
   TYPEIS(file, type_string);
@@ -453,7 +446,7 @@ static value _load_data(value (*fgc_load)(void *_load, unsigned long size),
       read(fd, &size, sizeof size) == sizeof size)
     {
       size = ntohl(size);
-      data = alloca(size);
+      char data[size];
       if (read(fd, data, size) == size)
 	{
 	  value res;
@@ -473,9 +466,9 @@ failed:
   
 }
 
-UNSAFEOP(load_data, 0, "`s -> `x. Loads a value from a mudlle save file",
-	 1, (struct string *file),
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(load_data, 0, "`s -> `x. Loads a value from a mudlle save file",
+          1, (struct string *file),
+          OP_LEAF | OP_NOESCAPE, "s.x")
 {
   return _load_data(gc_load, file);
 }
@@ -490,11 +483,11 @@ UNSAFEOP(load_data_debug, 0,
 }
 #endif
 
-OPERATION(size_data, 0,
-          "`x -> (`n1 . `n2) Returns object's size `n1 (in bytes),"
-	  " of which `n2 mutable bytes",
-	  1, (value x),
-	  OP_LEAF | OP_NOESCAPE)
+TYPEDOP(size_data, 0,
+        "`x -> (`n1 . `n2) Returns object's size `n1 (in bytes),"
+        " of which `n2 mutable bytes",
+        1, (value x),
+        OP_LEAF | OP_NOESCAPE, "x.k")
 {
   unsigned long size, mutble;
 
@@ -502,8 +495,8 @@ OPERATION(size_data, 0,
   return alloc_list(makeint(size), makeint(mutble));
 }
 
-UNSAFEOP(staticpro_data, 0, " -> `v. Returns a vector of all statically "
-	 "protected data", 0, (void), OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(staticpro_data, 0, " -> `v. Returns a vector of all statically "
+          "protected data", 0, (void), OP_LEAF | OP_NOESCAPE, ".v")
 {
   return get_staticpro_data();
 }
@@ -648,7 +641,7 @@ void basic_init(void)
 
   DEFINE(size_data);
   DEFINE(staticpro_data);
-  DEFINE(obj_save);
+  DEFINE(save_data);
   DEFINE(load_data);
 
 #ifndef GCDEBUG

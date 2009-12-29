@@ -37,9 +37,10 @@
 static int cc_length = 0;	/* statistics */
 #endif
 
-OPERATION(mudlle_parse, 0, "`s -> `v. Parses mudlle expression `s and"
-          " returns a parse tree",
-          1, (struct string *code), OP_LEAF | OP_NOESCAPE)
+TYPEDOP(mudlle_parse, 0, "`s -> `v. Parses mudlle expression `s and"
+        " returns a parse tree, or false if unsuccessful",
+        1, (struct string *code), OP_LEAF | OP_NOESCAPE,
+        "s.[vn]")
 {
   mfile f;
   value parsed;
@@ -52,17 +53,18 @@ OPERATION(mudlle_parse, 0, "`s -> `v. Parses mudlle expression `s and"
   if ((f = parse(memory)))
     parsed = mudlle_parse(memory, f);
   else
-    parsed = makebool(FALSE);
+    parsed = makebool(false);
 
   free_block(memory);
 
   return parsed;
 }
 
-UNSAFEOP(mudlle_parse_file, 0, "`s1 `s2 -> `v. Parses a file s (nice name `s2)"
-         " and returns its parse tree",
-	 2, (struct string *name, struct string *nicename),
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(mudlle_parse_file, 0,
+          "`s1 `s2 -> `v. Parses a file s (nice name `s2)"
+          " and returns its parse tree, or false if unsuccessful",
+          2, (struct string *name, struct string *nicename),
+          OP_LEAF | OP_NOESCAPE, "ss.[vn]")
 {
   FILE *f;
   value parsed;
@@ -73,13 +75,13 @@ UNSAFEOP(mudlle_parse_file, 0, "`s1 `s2 -> `v. Parses a file s (nice name `s2)"
 
   TYPEIS(name, type_string);
   TYPEIS(nicename, type_string);
-  if (!(f = fopen(name->str, "r"))) return makebool(FALSE);
+  if (!(f = fopen(name->str, "r"))) return makebool(false);
 
   c = fgetc(f);
   if (c == '*' || c == EOF) {
     /* empty or commented-out file */
     fclose(f);
-    return makebool(FALSE);
+    return makebool(false);
   }
   
   rewind(f);
@@ -91,7 +93,7 @@ UNSAFEOP(mudlle_parse_file, 0, "`s1 `s2 -> `v. Parses a file s (nice name `s2)"
   if ((mf = parse(memory)))
     parsed = mudlle_parse(memory, mf);
   else
-    parsed = makebool(FALSE);
+    parsed = makebool(false);
 
   free_block(memory);
   fclose(f);
@@ -316,7 +318,8 @@ static int check_primitives(struct list *scan)
 }
 #endif /* ! NOCOMPILER */
 
-VAROP(link, 0, "`s1 `n1 `s2 `s3 `s4 `n2 `l1 `l2 `l3 `l4 `l5 `n3 `s5 `s6 -> `code."
+VAROP(link, 0,
+      "`s1 `n1 `s2 `s3 `s4 `n2 `l1 `l2 `l3 `l4 `l5 `n3 `s5 `s6 -> `code."
       " Builds a code object from:" EOL
       "its machine code `s1," EOL
       "security level `n1, help string `s2, varname `s3, filename `s4,"
@@ -717,7 +720,7 @@ VAROP(link, 0, "`s1 `n1 `s2 `s3 `s4 `n2 `l1 `l2 `l3 `l4 `l5 `n3 `s5 `s6 -> `code
     {
       struct list *builtin;
       ulong baddress, *callins;
-      int k;
+      int k = 0;
       uword offset;
 
       assert(TYPE(scan_builtins, type_pair));
@@ -877,38 +880,66 @@ TYPEDOP(primitive_flags, 0, "`primitive -> `n. Returns flags of primitive",
   return makeint(p->op->flags);
 }
 
+static void recurse_typing(char *start, size_t size,
+                           const char *from, char *to, struct list **l)
+{
+  for (;;)
+    {
+      if (*from == '[')
+        {
+          const char *end = strchr(from, ']');
+          assert(end != NULL);
+          for (++from; from < end; ++from)
+            {
+              *to = *from;
+              recurse_typing(start, size, end + 1, to + 1, l);
+            }
+          return;
+        }
+
+      *to++ = *from;
+      if (*from == 0)
+        {
+          assert(to - start <= size);
+          struct string *s = alloc_string(start);
+          *l = alloc_list(s, *l);
+          return;
+        }
+      ++from;
+    }
+}
+
 TYPEDOP(primitive_type, 0, "`primitive -> `l. Returns type of primitive",
 	1, (struct primitive *p),
 	OP_LEAF | OP_NOESCAPE, "f.l")
 {
-  struct list *l = NULL;
-  const char *const *atyping;
-  struct gcpro gcpro1;
-
   if (!TYPE(p, type_primitive) &&
       !TYPE(p, type_secure) &&
       !TYPE(p, type_varargs))
     runtime_error(error_bad_type);
 
-  atyping = p->op->type;
-  if (atyping)
-    {
-      GCPRO1(l);
-      while (*atyping)
-	{
-	  struct string *sig = alloc_string(*atyping++);
+  const char *const *atyping = p->op->type;
+  if (atyping == NULL)
+    return NULL;
 
-	  l = alloc_list(sig, l);
-	}
-      UNGCPRO();
+  struct list *l = NULL;
+  struct gcpro gcpro1;
+  GCPRO1(l);
+  for (; *atyping; ++atyping)
+    {
+      size_t size = strlen(*atyping) + 1;
+      char t[size];
+      recurse_typing(t, size, *atyping, t, &l);
     }
+  UNGCPRO();
   return l;	
 }
 
 TYPEDOP(closure_arguments, 0, "`c -> `s. Returns a string of type information"
         " for `c's arguments (`type_xxx or `stype_xxx constants). Returns"
         " null for vararg functions.",
-        1, (struct closure *c), OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "f.x")
+        1, (struct closure *c), OP_LEAF | OP_NOESCAPE | OP_NOALLOC,
+        "f.[su]")
 {
   TYPEIS(c, type_closure);
   if (TYPE(c->code, type_code))
@@ -1207,9 +1238,9 @@ void support_init(void)
 
   /* C options information */
 #ifdef GCDEBUG
-  system_define("OPTION_GCDEBUG", makebool(TRUE));
+  system_define("OPTION_GCDEBUG", makebool(true));
 #else
-  system_define("OPTION_GCDEBUG", makebool(FALSE));
+  system_define("OPTION_GCDEBUG", makebool(false));
 #endif
   
 #ifdef i386

@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef VALUES_H
-#define VALUES_H
+#ifndef MVALUES_H
+#define MVALUES_H
 
 #include <stddef.h>
 #include "types.h"
@@ -62,13 +62,13 @@
 struct gstring
 {
   struct obj o;
-  char data[1];
+  char data[];
 };
 
 struct grecord
 {
   struct obj o;
-  struct obj *data[1];		/* Pointers to other objects */
+  struct obj *data[];		/* Pointers to other objects */
 };
 
 struct gforwarded
@@ -121,7 +121,7 @@ struct code
   ubyte magic_dispatch[7];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
-  struct obj *constants[1/*nb_constants*/];
+  struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
@@ -142,7 +142,7 @@ struct mcode /* machine-language code object */
   ubyte *myself;		/* Self address, for relocation */
   ubyte magic[8];		/* A magic pattern that doesn't occur in code. 
 				   Offset must be multiple of 4 */
-  ubyte mcode[1/*code_length*/];
+  ubyte mcode[/*code_length*/];
   /* following the machine code:
        - nb_constants offsets of contants in mcode
        - nb_rel relative addresses of C functions in mcode
@@ -151,7 +151,7 @@ struct mcode /* machine-language code object */
 
 CASSERT(mdispatch, (offsetof(struct mcode, mcode)
                     == offsetof(struct code, magic_dispatch)));
-#endif
+#endif  /* i386 && !NOCOMPILER */
 
 #ifdef sparc
 struct code
@@ -172,7 +172,7 @@ struct code
   ubyte magic_dispatch[16];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
-  struct obj *constants[1/*nb_constants*/];
+  struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
@@ -189,11 +189,11 @@ struct mcode /* machine-language code object */
   void *filler;
   ubyte *myself;		/* Self address, for relocation */
   ubyte magic[8];		/* magic pattern that doesn't occur in code */
-  ulong mcode[1];               /* really of size code_length */
+  ulong mcode[];                /* really of size code_length */
   /* the constant's offsets follow the machine code (they are word
      offsets, not byte offsets) */
 };
-#endif
+#endif  /* sparc */
 
 #ifdef AMIGA
 struct code
@@ -212,7 +212,7 @@ struct code
 				   This is at the same offset as mcode
 				   in struct mcode */
   uword lineno;
-  struct obj *constants[1/*nb_constants*/];
+  struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
@@ -227,10 +227,10 @@ struct mcode /* machine-language code object */
   struct string *varname;
   struct string *help;
   ubyte magic[8];		/* magic pattern that doesn't occur in code */
-  ulong mcode[1];               /* really of size code_length */
+  ulong mcode[];                /* really of size code_length */
   /* the constant's offsets follow the machine code */
 };
-#endif
+#endif  /* AMIGA */
 
 #ifdef NOCOMPILER
 struct code
@@ -249,7 +249,7 @@ struct code
   struct string *help;
   struct string *lineno_data;
   struct string *arg_types;
-  struct obj *constants[1/*nb_constants*/];
+  struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
@@ -264,9 +264,8 @@ struct mcode /* machine-language code object */
   uword lineno;
   mtype return_type : 16;
   uword seclevel;
-  ubyte mcode[1];
+  ubyte mcode[];
 };
-#endif
+#endif  /* NOCOMPILER */
 
-
-#endif
+#endif  /* MVALUES_H */

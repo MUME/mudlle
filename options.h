@@ -78,7 +78,7 @@
 #define GLOBAL_SIZE 512
 #define DEFAULT_SECLEVEL 0
 #define MUDLLE_INTERRUPT
-#define PRINT_CODE
+#undef PRINT_CODE
 
 #ifdef HAVE_MEMMOVE
 #  undef HAVE_MEMMOVE

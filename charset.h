@@ -23,9 +23,10 @@
  * Support routines for different charsets
  */
 
-#ifndef UTILS_CHARSET_H
-#define UTILS_CHARSET_H
+#ifndef CHARSET_H
+#define CHARSET_H
 
+#include <stdbool.h>
 #include <string.h>
 
 typedef enum {
@@ -53,7 +54,7 @@ extern const unsigned char latin1_char_class[256];
 extern const unsigned char latin1_to_upper[256];
 extern const unsigned char latin1_to_lower[256];
 
-int str_is8bit(const char *str);
+bool str_is8bit(const char *str);
 int str8icmp(const char *s1, const char *s2);
 int mem8icmp(const void *_s1, const void *_s2, size_t n);
 int str8nicmp(const char *s1, const char *s2, int n);
@@ -62,4 +63,4 @@ void str8lwr(char *str);
 void str7lwr(char *str);
 char *str8cap(char *str);
 
-#endif // UTILS_CHARSET_H
+#endif  /* CHARSET_H */

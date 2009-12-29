@@ -45,7 +45,7 @@ void warning(const char *msg, ...);
 void warning_line(const char *fname, int line, const char *msg, ...);
 
 #if (!HAVE_MEMMOVE)
-void memmove(char *to, const char *from, int n);
+void *memmove(void *dest, const void *src, size_t n);
 #endif
 
 /* The only standard tag ... */

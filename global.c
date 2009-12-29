@@ -37,15 +37,15 @@ void global_init(void)
 */
 {
   environment = alloc_env(GLOBAL_SIZE);
-  staticpro((value *)&environment);
+  staticpro(&environment);
   env_values = environment->values;
-  staticpro((value *)&env_values);
+  staticpro(&env_values);
   global = alloc_table(GLOBAL_SIZE);
-  staticpro((value *)&global);
+  staticpro(&global);
   mvars = alloc_vector(GLOBAL_SIZE);
-  staticpro((value *)&mvars);
+  staticpro(&mvars);
   global_names = alloc_vector(GLOBAL_SIZE);
-  staticpro((value *)&global_names);
+  staticpro(&global_names);
 }
 
 static ulong global_add(struct string *name, value val)
@@ -115,22 +115,17 @@ ulong mglobal_lookup(struct string *name)
 */
 {
   struct symbol *pos;
-  struct string *tname;
-
   if (table_lookup(global, name->str, &pos))
     return intval(pos->data);
 
+  struct string *tname;
   if (name->o.flags & OBJ_READONLY)
     tname = name;
   else
     {
       /* create read-only copy */
-      struct gcpro gcpro1;
-      GCPRO1(name);
-      tname = (struct string *)allocate_string(type_string, string_len(name) + 1);
-      strcpy(tname->str, name->str);
+      tname = mudlle_string_copy(name);
       tname->o.flags |= OBJ_READONLY;
-      UNGCPRO();
     }
 
   return global_add(tname, NULL);

@@ -1508,74 +1508,74 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
     //   reversed: if typeof(arg) != type goto dest
     //   typeset is inferred type information on arg
     [
-      if ((mc:itypemap[type] & typeset) == itype_none)
+      | success, commit, abort, fail, abort_notptr, usedfail, r |
+      
+      fail = x86:new_label(code);
+      usedfail = false;
+      
+      // Handle the 3 cases that arise in positive/negative typechecks:
+      //   - value *not* of type (abort)
+      //     flow of control must not proceed (eg not pointer)
+      //   - value *of* type (success)
+      //   - end of type check, final test (commit)
+      if (reversed)
 	[
-          // is not of given type
-	  if (reversed) x86:jmp(code, dest)
-	]
-      else if ((mc:itypemap_inverse[type] & typeset) == itype_none)
-	[
-          // is of given type
-	  if (!reversed) x86:jmp(code, dest)
+	  commit = fn (cc) 
+	    x86:jcc(code, rev_x86relop(cc), dest);
+	  
+	  success = fn (cc)
+	    [
+	      x86:jcc(code, cc, fail);
+	      usedfail = true;
+	    ];
+	  
+	  abort = fn (cc)
+	    x86:jcc(code, cc, dest);
 	]
       else
 	[
-	  | success, commit, abort, fail, abort_notptr, usedfail |
+	  commit = fn (cc) 
+	    x86:jcc(code, cc, dest);
 	  
-	  fail = x86:new_label(code);
-	  usedfail = false;
+	  success = fn (cc)
+	    x86:jcc(code, cc, dest);
 	  
-	  // Handle the 3 cases that arise in positive/negative typechecks:
-	  //   - value *not* of type (abort)
-	  //     flow of control must not proceed (eg not pointer)
-	  //   - value *of* type (success)
-	  //   - end of type check, final test (commit)
-	  if (reversed)
+	  abort = fn (cc)
 	    [
-	      commit = fn (cc) 
-		x86:jcc(code, rev_x86relop(cc), dest);
-	      
-	      success = fn (cc)
-		[
-		  x86:jcc(code, cc, fail);
-		  usedfail = true;
-		];
-	      
-	      abort = fn (cc)
-		x86:jcc(code, cc, dest);
-	    ]
-	  else
-	    [
-	      commit = fn (cc) 
-		x86:jcc(code, cc, dest);
-	      
-	      success = fn (cc)
-		x86:jcc(code, cc, dest);
-	      
-	      abort = fn (cc)
-		[
-		  x86:jcc(code, cc, fail);
-		  usedfail = true;
-		];
+	      x86:jcc(code, cc, fail);
+	      usedfail = true;
 	    ];
+	];
 
-	  // checks can now assume the !reversed case
-	  
-	  abort_notptr = fn (r, typeset)
+      // checks can now assume the !reversed case
+      
+      abort_notptr = fn (r, typeset)
+	[
+	  if (typeset & itype_integer)
 	    [
-	      if (typeset & itype_integer)
-		[
-		  x86:test(code, x86:limm, 3, x86:lreg, r);
-		  abort(x86:bne);
-		];
-	      if (typeset & itype_null)
-		[
-		  x86:test(code, x86:lreg, r, x86:lreg, r);
-		  abort(x86:be);
-		];
+	      x86:test(code, x86:limm, 3, x86:lreg, r);
+	      abort(x86:bne);
 	    ];
-	  
-	  if (type == type_integer)
+	  if (typeset & itype_null)
+	    [
+	      x86:test(code, x86:lreg, r, x86:lreg, r);
+	      abort(x86:be);
+	    ];
+	];
+
+      for (;;)
+	[
+	  if ((mc:itypemap[type] & typeset) == itype_none)
+	    [
+	      // is not of given type
+	      if (reversed) x86:jmp(code, dest)
+	    ]
+	  else if ((mc:itypemap_inverse[type] & typeset) == itype_none)
+	    [
+	      // is of given type
+	      if (!reversed) x86:jmp(code, dest)
+	    ]
+	  else if (type == type_integer)
 	    [
 	      x86:test(code, x86:limm, 1, x86:lvar, arg);
 	      commit(x86:bne);
@@ -1585,17 +1585,55 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      x86:cmp(code, x86:limm, 0, x86:lvar, arg);
 	      commit(x86:be);
 	    ]
+	  else if (type == stype_list)
+	    [
+	      if (r == null)
+		r = fetch1(code, arg);
+
+	      // if null or int are possible, check for those and try
+	      // again
+	      if (typeset & (itype_null | itype_integer))
+		[
+		  // Note: success for null...
+		  if (typeset & itype_null)
+		    [
+		      x86:test(code, x86:lreg, r, x86:lreg, r);
+		      success(x86:be);
+		    ];
+		  if (typeset & itype_integer)
+		    [
+		      x86:test(code, x86:limm, 3, x86:lreg, r);
+		      abort(x86:bne);
+		    ];
+		  // stype_list becomes type_pair as we now know it's
+		  // not null
+		  type = type_pair;
+		  typeset &= ~(itype_null | itype_integer);
+		  exit<continue> null;
+		];
+
+	      x86:cmpbyte(code, x86:limm, type_pair,
+			  x86:lidx, r . x86:object_type);
+	      commit(x86:be);
+	    ]
+	  else if (typeset & (itype_null | itype_integer))
+	    [
+	      // if null or int are possible, check for those and try
+	      // again
+	      if (r == null)
+		r = fetch1(code, arg);
+	      abort_notptr(r, typeset);
+	      typeset &= ~(itype_null | itype_integer);
+	      exit<continue> null;
+	    ]
 	  else if (type == stype_function)
 	    [
-	      | r |
-
-	      r = fetch1(code, arg);
-	      abort_notptr(r, typeset);
-
+	      if (r == null)
+		r = fetch1(code, arg);
 	      x86:movzxbyte(code, x86:lidx, r . x86:object_type,
-                            x86:lreg, reg_scratch);
-              x86:cmpbyte(code, x86:limm, type_closure,
-                          x86:lreg, reg_scratch);
+			    x86:lreg, reg_scratch);
+	      x86:cmpbyte(code, x86:limm, type_closure,
+			  x86:lreg, reg_scratch);
 	      success(x86:be);
 	      // primitive, varargs & secure are contiguous
 	      x86:cmpbyte(code, x86:limm, type_primitive,
@@ -1605,40 +1643,17 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 			  x86:lreg, reg_scratch);
 	      commit(x86:bbe);
 	    ]
-	  else if (type == stype_list)
-	    [
-	      | r |
-
-	      r = fetch1(code, arg);
-
-	      // Note: success for null...
-	      if (typeset & itype_null)
-		[
-		  x86:test(code, x86:lreg, r, x86:lreg, r);
-		  success(x86:be);
-		];
-	      if (typeset & itype_integer)
-		[
-		  x86:test(code, x86:limm, 3, x86:lreg, r);
-		  abort(x86:bne);
-		];
-
-	      x86:cmpbyte(code, x86:limm, type_pair,
-			  x86:lidx, r . x86:object_type);
-	      commit(x86:be);
-	    ]
 	  else			// generic type check
 	    [
-	      | r |
-
-	      r = fetch1(code, arg);
-	      abort_notptr(r, typeset);
+	      if (r == null)
+		r = fetch1(code, arg);
 	      x86:cmpbyte(code, x86:limm, type, x86:lidx, r . x86:object_type);
 	      commit(x86:be);
 	    ];
-	  
-	  if (usedfail) x86:label(code, fail);
+	  exit<break> null;
 	];
+
+      if (usedfail) x86:label(code, fail);
     ];
 
   type_trap = fn (code, type, var, typeset)

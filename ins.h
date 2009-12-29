@@ -104,6 +104,8 @@ struct code *generate_fncode(fncode fn,
 			     struct string *varname,
 			     struct string *afilename,
 			     int alineno,
+                             struct string *arg_types,
+                             mtype return_type,
 			     int seclev);
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
@@ -137,7 +139,7 @@ void end_block(fncode fn);
 int exit_block(const char *name, fncode fn);
 /* Effects: Generates code to exit from specified named block
      (pop stack, jump to block exit label)
-   Returns: FALSE if the named block doesn't exist
+   Returns: false if the named block doesn't exist
    Modifies: fn
 */
 

@@ -104,7 +104,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 \/\/.*\n  { lineno++; }
 \/\*     { /* start of multi-line comment */
 	   /* find end of comment */
-	   int depth = 1, c, star = FALSE, slash = FALSE;
+	   int depth = 1, c, star = false, slash = false;
 
 #ifndef __cplusplus
 #define yyinput input
@@ -248,17 +248,15 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 	}
 
 {GLOBAL_PREFIX}?{SYMBOL_NAME} { 
-          int i, global;
-          
-          for (i = 0; i < NKEYWORDS; i++)
+          for (int i = 0; i < NKEYWORDS; i++)
             if (stricmp(yytext, keywords[i].name) == 0)
               return keywords[i].value;
-          
-          yylval.symbol = allocate(parser_memory,
-                                   strlen(yytext) + 1);
-          strlwr(strcpy(yylval.symbol, yytext));
-          global = strncmp(yytext, GLOBAL_ENV_PREFIX,
-                           strlen(GLOBAL_ENV_PREFIX)) == 0;
+
+          size_t size = strlen(yytext) + 1;
+          yylval.symbol = allocate(parser_memory, size);
+          memcpy(yylval.symbol, yytext, size);
+          bool global = strncmp(yytext, GLOBAL_ENV_PREFIX,
+                                strlen(GLOBAL_ENV_PREFIX)) == 0;
           return global ? GLOBAL_SYMBOL : SYMBOL;
         }
 
@@ -302,7 +300,7 @@ void read_from_file(FILE *f, const char *name)
       
     }
 
-  line_read = FALSE;
+  line_read = false;
   lineno = 1;
   filename = name;
 }
@@ -318,7 +316,7 @@ void read_from_string(const char *str, const char *name)
     yyrestart(stdin);
 
   yy_switch_to_buffer(mbuf);
-  line_read = TRUE;
+  line_read = true;
   line = str;
   length = strlen(line);
   lineno = 0;

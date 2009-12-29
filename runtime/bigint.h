@@ -19,10 +19,10 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef BIGINT_H
-#define BIGINT_H
+#ifndef RUNTIME_BIGINT_H
+#define RUNTIME_BIGINT_H
 
 void bigint_init(void);
 void free_mpz_temps(void);
 
-#endif
+#endif /* RUNTIME_BIGINT_H */

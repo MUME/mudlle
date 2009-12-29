@@ -29,6 +29,14 @@
 
 struct oport;
 
+struct oport_stat {
+  enum {
+    oport_type_string,
+    oport_type_file,
+  } type;
+  size_t size;
+};
+
 /* Methods for the oport class */
 struct oport_methods
 {
@@ -37,6 +45,7 @@ struct oport_methods
   void (*write)(struct oport *p, const char *data, int nchars);
   void (*swrite)(struct oport *p, struct string *s, int from, int nchars);
   void (*flush)(struct oport *p);
+  void (*stat)(struct oport *p, struct oport_stat *buf);
 };
 
 struct oport /* A generic output port */
@@ -46,7 +55,7 @@ struct oport /* A generic output port */
   /* Each type of output port has specific information after this point */
 };
 
-value make_string_outputport(void);
+value make_string_oport(void);
 /* Returns: A new string-type output port, with nothing in it.
 */
 
@@ -54,12 +63,18 @@ value make_string_7bit_outputport(void);
 /* Returns: A new 7 bit string-type output port, with nothing in it.
 */
 
-value make_file_outputport(FILE *f);
+value make_file_oport(FILE *f);
 /* Returns: A new file-type output port on file f.
    Note: As there is no finalization, you are responsible for closing f,
      either by closing the port or by closing f.
      Also there is no report of any errors that may occur on f
 */
+
+typedef struct {
+  void (*write)(const char *str, size_t len, value data);
+  void (*stat)(struct oport_stat *buf, value data);
+} line_oport_methods_t;
+value make_line_oport(const line_oport_methods_t *methods, value data);
 
 struct string *port_string(struct oport *p);
 /* Returns: A mudlle string representing all the data send to port p.
@@ -79,11 +94,19 @@ int port_empty(struct oport *p);
 
 void empty_string_oport(struct oport *_p);
 
+ssize_t string_port_search(struct oport *p, int c);
+
 
 void port_append(struct oport *p1, struct oport *p2);
 /* Effects: The characters of port p2 are appended to the end of port p1.
    Modifies: p1
    Requires: p2 be a string-type output port
+*/
+
+void port_append_escape(struct oport *p1, struct oport *p2, int esc);
+/* Effects: The characters of port p2 are appended to the end of port
+   p1, and all 'esc' characters are doubled.  Modifies: p1 Requires:
+   p2 be a string-type output port
 */
 
 /* C-like I/O routines for ports */
@@ -97,6 +120,9 @@ void port_append(struct oport *p1, struct oport *p2);
 
 #define opwrite(op, s, n) \
   do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->write((op), (s), (n))); } while (0)
+
+#define opstat(op, buf)                                                     \
+  do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->stat(op, buf)); } while (0)
 
 #define pswrite(op, s, f, n) \
   do { if ((op) && (op)->methods) (((struct oport_methods *)(op)->methods->external)->swrite((op), (s), (f), (n))); } while (0)
@@ -115,20 +141,20 @@ void vpprintf(struct oport *p, const char *fmt, va_list args);
 struct string *msprintf(const char *s, ...);
 
 size_t string_port_length(struct oport *oport);
-int is_string_port(struct oport *oport);
+bool is_string_port(struct oport *oport);
 
 /* integers are 31 bits long, in base 2 this makes 31 characters +
    sign + null byte + 1 for luck */
 #define INTSTRLEN 34
 
-char *int2str(char *str, int base, ulong n, int is_signed);
+char *int2str(char *str, int base, ulong n, bool is_signed);
 /* Requires: base be 2, 8, 10 or 16. str be at least INTSTRLEN characters long.
    Effects: Prints the ASCII representation of n in base base to the
      string str.
-     If signed is TRUE, n is actually a signed long
+     If signed is true, n is actually a signed long
    Returns: A pointer to the start of the result.
 */
-char *int2str_wide(char *str, ulong n, int is_signed);
+char *int2str_wide(char *str, ulong n, bool is_signed);
 
 void ports_init(void);
 

@@ -65,10 +65,20 @@ writes mc:this_function, mc:lineno
     env_lookup, env_enter_function, env_leave_function, env_enter_block, 
     env_leave_block, mstart, mcleanup, mlookup, imported?, all_readable,
     all_writable, readable, writable, definable, imported_modules, import,
-    env_toplevel?, import_protected, env_global_prefix |
+    env_toplevel?, import_protected, env_global_prefix, assv,
+    warn_bad_module_variables |
 
   comp_null = list(vector(mc:c_recall, -1, mc:var_make_constant(null)));
     
+  // find vector v in l, for which v[0] == n
+  assv = fn (n, l)
+    loop
+      [
+        if (l == null) exit false;
+        if (car(l)[0] == n) exit car(l);
+        l = cdr(l);
+      ];
+
   // environment handling
 
   env_init = fn ()
@@ -274,7 +284,7 @@ writes mc:this_function, mc:lineno
 	   else if (status == var_write)
 	     mc:warning("%s is writable", name);
 
-	   n . name
+	   vector(n, name, 0)
 	 ],
 	 m[mc:m_defines]);
 
@@ -288,17 +298,20 @@ writes mc:this_function, mc:lineno
 	   n = global_lookup(name);
 	   status = module_vstatus(n);
 
-	   if (assq(n, definable))
+	   if (assv(n, definable))
 	     mc:error("cannot write and define %s", name)
 	   else if (string?(status))
 	     mc:warning("cannot write %s: belongs to module %s", name, status);
 
-	   n . name
+	   vector(n, name, 0)
 	 ],
 	 m[mc:m_writes]);
 
       /* reads */
-      readable = lmap(fn (var) global_lookup(car(var)) . car(var), m[mc:m_reads]);
+      readable = lmap(fn (var) vector(global_lookup(car(var)),
+                                      car(var),
+                                      0),
+                      m[mc:m_reads]);
 
       m[mc:m_imports] = imported_modules;
       m[mc:m_defines] = definable;
@@ -354,19 +367,22 @@ writes mc:this_function, mc:lineno
     // Effects: Checks read/write accesses to global name for validity
     // Returns: an appropriate variable
     [
-      | vstatus, n |
+      | vstatus, n, vent |
 
       n = global_lookup(name);
       if (!write)
 	[
 	  // now: name is not imported
-	  if (assq(n, definable))
+	  if (assv(n, definable))
 	    [
 	      // local define, a dglobal except at top-level
 	      if (!env_toplevel?())
 		exit<function> mc:var_make_dglobal(name, n);
 	    ]
-	  else if (!assq(n, readable) && !assq(n, writable)) // !ok
+	  else if ((vent = assv(n, readable))
+                   || (vent = assv(n, writable)))
+            vent[mc:mv_used] |= mc:muse_read
+          else
 	    [
 	      vstatus = module_vstatus(n);
 	      if (string?(vstatus))
@@ -378,28 +394,33 @@ writes mc:this_function, mc:lineno
 		    exit<function> import_protected(name, n, vstatus);
 		  
 		  if (imported?(vstatus) == module_loaded)
-		    exit<function> import(mc:var_make_dglobal(name, n), vstatus);
+		    exit<function> import(mc:var_make_dglobal(name, n),
+                                          vstatus);
 		  if (!all_readable)
 		    mc:error("read of global %s (module %s)", name, vstatus)
 		]
 	      else if (!all_readable)
 		mc:error("read of global %s", name);
-	    ];
+	    ]
 	]
       else
 	[
-	  if (assq(n, definable))
+	  if (vent = assv(n, definable))
 	    [
+              vent[mc:mv_used] |= mc:muse_write;
 	      if (!env_toplevel?())
 		mc:error("define of %s not at top level", name);
 	    ]
-	  else if (!assq(n, writable))
+	  else if (vent = assv(n, writable))
+            vent[mc:mv_used] |= mc:muse_write
+          else
 	    [
 	      vstatus = module_vstatus(n);
 	      if (all_writable)
 		[
 		  if (string?(vstatus))
-		    mc:warning("write of global %s (module %s)", name, vstatus);
+		    mc:warning("write of global %s (module %s)",
+                               name, vstatus);
 		]
 	      else
 		[
@@ -512,6 +533,27 @@ writes mc:this_function, mc:lineno
       result
     ];
   
+  warn_bad_module_variables = fn ()
+    [
+      lforeach(fn (var) [
+        if (~var[mc:mv_used] & mc:muse_read)
+          mc:warning("readable global %s was never %s",
+                     var[mc:mv_name],
+                     if (var[mc:mv_used]) "read" else "used")
+      ], readable);
+      lforeach(fn (var) [
+        if (~var[mc:mv_used] & mc:muse_write)
+          mc:warning("writable global %s was never %s",
+                     var[mc:mv_name],
+                     if (var[mc:mv_used]) "written" else "used")
+      ], writable);
+      table_foreach(fn (imp) [
+        if (cdr(symbol_get(imp)) == null)
+          mc:warning("symbols from required module %s were never used",
+                     symbol_name(imp));
+      ], imported_modules);
+    ];
+
   mc:phase1 = fn (m)
     [
       | components, fname, top_var |
@@ -534,8 +576,9 @@ writes mc:this_function, mc:lineno
 				top_var));      // variable name
       components = resolve_component(m[mc:m_body]);
       env_leave_function();
+      warn_bad_module_variables();
       mcleanup();
-      
+
       // make a top-level function
       m[mc:m_body] = 
 	vector(mc:c_closure, -1,

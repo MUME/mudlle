@@ -55,27 +55,15 @@ CASSERT_VLEN(mudlle_errors, last_runtime_error);
 
 int suppress_extra_calltrace;
 
-static void print_error(int error)
-{
-  if (error < last_runtime_error && error >= 0)
-    mprintf(muderr, "%s" EOL, mudlle_errors[error]);
-  else
-    mprintf(muderr, "error %d" EOL, error);
-  mprintf(muderr, "Call trace is:" EOL);
-}
-
-static void print_bytecode_frame(struct call_stack *frame, int onstack)
+static void print_bytecode_frame(struct call_stack *frame, bool onstack)
 {
   struct code *fcode = frame->u.mudlle.fn->code;
   struct gcpro gcpro1;
-  int i;
 
   GCPRO1(fcode);
 
   if (fcode->filename->str[0])
     {
-      int offset;
-
       if (fcode->varname)
 	mprint(muderr, prt_display, fcode->varname);
       else
@@ -85,7 +73,7 @@ static void print_bytecode_frame(struct call_stack *frame, int onstack)
 
       /* Warning: This is somewhat intimate with the
 	 implementation of the compiler */
-      for (i = 0; i < frame->u.mudlle.nargs; i++)
+      for (int i = 0; i < frame->u.mudlle.nargs; i++)
 	{
 	  value v;
 
@@ -105,9 +93,11 @@ static void print_bytecode_frame(struct call_stack *frame, int onstack)
 
       mputs(") at ", muderr);
       mprint(muderr, prt_display, fcode->filename);
-      offset = (frame->u.mudlle.offset - 1 -
-		((instruction *)(&frame->u.mudlle.code->constants[frame->u.mudlle.code->nb_constants]) -
-		 (instruction *)frame->u.mudlle.code));
+      
+      struct code *code = frame->u.mudlle.code;
+      int offset = (frame->u.mudlle.offset - 1 -
+                    ((instruction *)(&code->constants[code->nb_constants]) -
+                     (instruction *)code));
       mprintf(muderr, ":%d" EOL, get_code_line_number(fcode, offset));
     }
 
@@ -148,11 +138,9 @@ static void print_c_frame(struct call_stack *frame)
 
 static void print_c_frame_stack(struct call_stack *frame)
 {
-  int i;
-
   mprintf(muderr, "%s(", frame->u.c.prim->op->name);
 
-  for (i = 0; i < frame->u.c.nargs; i++)
+  for (int i = 0; i < frame->u.c.nargs; i++)
     {
       if (i > 0) mputs(", ", muderr);
       mprint(muderr, prt_print, stack_get(frame->u.c.nargs - i - 1));
@@ -286,7 +274,7 @@ static int find_mcode(ulong _pc, void (*func)(struct mcode *, ulong ofs))
 
   /* Check for moving code */
   if (!((ubyte *)pc >= gcblock && (ubyte *)pc < gcblock + gcblocksize))
-    return FALSE;
+    return false;
 
   /* We have found a code object.
      First find where it begins by locating its
@@ -299,7 +287,7 @@ static int find_mcode(ulong _pc, void (*func)(struct mcode *, ulong ofs))
   func((struct mcode *)((char *)pc - offsetof(struct mcode, mcode)),
        _pc - (ulong)pc);
 
-  return TRUE;
+  return true;
 }
 
 static struct ccontext *iterate_cc_frame(struct ccontext *cc,
@@ -377,20 +365,23 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 }
 #endif
 
-static void basic_error(runtime_errors error, int onstack) NORETURN;
-
-static void print_call_trace(runtime_errors error, int onstack)
+static void print_call_trace(runtime_errors error, bool onstack)
 {
   struct catch_context *catch_ctxt = catch_context;
-  struct call_stack *scan;
   int count = 0;
 #ifndef NOCOMPILER
   struct ccontext *cc = &ccontext;
 #endif
 
-  print_error(error);
+  if (error == error_none)
+    ;
+  else if (error < last_runtime_error && error >= 0)
+    mprintf(muderr, "%s" EOL, mudlle_errors[error]);
+  else
+    mprintf(muderr, "error %d" EOL, error);
+  mprintf(muderr, "Call trace is:" EOL);
 
-  for (scan = call_stack; scan; scan = scan->next)
+  for (struct call_stack *scan = call_stack; scan; scan = scan->next)
     {
       /* not sure if 'while' is necessary here... */
       while (catch_ctxt && scan == catch_ctxt->old_call_stack)
@@ -403,14 +394,16 @@ static void print_call_trace(runtime_errors error, int onstack)
       if (count++ == BEFORE_SKIP_FRAMES)
 	{
 	  struct call_stack *scans[AFTER_SKIP_FRAMES];
-	  int i;
 
-	  for (i = 0; i < AFTER_SKIP_FRAMES && scan; ++i, scan = scan->next)
+	  for (int i = 0;
+               i < AFTER_SKIP_FRAMES && scan;
+               ++i, scan = scan->next)
 	    scans[i] = scan;
 	  if (scan == NULL)
 	    scan = scans[0];
 	  else
 	    {
+              int i;
 	      for (i = 0; scan; scan = scan->next)
 		scans[i++ % AFTER_SKIP_FRAMES] = scan;
 	      mprintf(muderr, "   *** %d frame%s skipped ***" EOL, i,
@@ -437,7 +430,7 @@ static void print_call_trace(runtime_errors error, int onstack)
 #endif
 	}
       /* Only the first frame can be on the stack */
-      onstack = FALSE;
+      onstack = false;
     }
 }	
 
@@ -458,17 +451,13 @@ static void get_cc_stack_trace(struct mcode *mcode, ulong ofs)
 
 struct vector *get_mudlle_call_trace(void)
 {
-  struct gcpro gcpro1;
-  
-  struct call_stack *scan;
-
 #ifndef NOCOMPILER
   struct ccontext *cc = &ccontext;
 #endif
 
   stack_depth_count = 0;
 
-  for (scan = call_stack; scan; scan = scan->next)
+  for (struct call_stack *scan = call_stack; scan; scan = scan->next)
 #ifndef NOCOMPILER
     if (scan->type == call_compiled)
       cc = iterate_cc_frame(cc, count_stack_depth);
@@ -477,6 +466,8 @@ struct vector *get_mudlle_call_trace(void)
       ++stack_depth_count;
 
   stack_trace_res = alloc_vector(stack_depth_count);
+
+  struct gcpro gcpro1;
   GCPRO1(stack_trace_res);
 
 #ifndef NOCOMPILER
@@ -484,7 +475,7 @@ struct vector *get_mudlle_call_trace(void)
 #endif
 
   stack_depth_count = 0;
-  for (scan = call_stack; scan; scan = scan->next)
+  for (struct call_stack *scan = call_stack; scan; scan = scan->next)
     {
       switch (scan->type)
 	{
@@ -508,14 +499,16 @@ struct vector *get_mudlle_call_trace(void)
   return stack_trace_res;
 }
 
-static void basic_error(runtime_errors error, int onstack)
+/* call f(e, data) for all error observers e (port or character), with
+   muderr set to the appropriate value */
+static void for_all_muderr(void (*f)(value e, void *data), void *data)
 {
-  int seen = 0;
+  bool seen = false;
   if (catch_context->call_trace_mode != call_trace_off && muderr)
     {
       if (mudout) mflush(mudout);
-      print_call_trace(error, onstack);
-      seen = 1;
+      f(muderr, data);
+      seen = true;
     }
 
   if (mudcalltrace && (!seen || !suppress_extra_calltrace))
@@ -554,8 +547,7 @@ static void basic_error(runtime_errors error, int onstack)
 	  if (istrue(elem->cdr) && (seen || omuderr))
 	    goto nevermind;
 
-	  print_call_trace(error, onstack);
-	  mputs(EOL, muderr);
+          f(elem->car, data);
 	  pflush(muderr);
 
 	  prev = l;
@@ -567,8 +559,41 @@ static void basic_error(runtime_errors error, int onstack)
       muderr = omuderr;
       UNGCPRO();
     }
+}
 
-  mthrow(SIGNAL_ERROR, makeint(error));
+struct basic_error_info {
+  runtime_errors error;
+  bool onstack;
+  const char *message;
+};
+
+static void basic_error_print(value e, void *data)
+{
+  struct basic_error_info *info = data;
+
+  if (info->message)
+    mprintf(muderr, "%s" EOL, info->message);
+  print_call_trace(info->error, info->onstack);
+  if (TYPE(e, type_character))
+    mputs(EOL, muderr);
+}
+
+static void basic_error(runtime_errors error, bool onstack, const char *msg)
+{
+  struct basic_error_info info = {
+    .error   = error,
+    .onstack = onstack,
+    .message = msg
+  };
+  for_all_muderr(basic_error_print, &info);
+}
+
+void runtime_warning(const char *msg)
+{
+#ifdef MUDLLE_INTERRUPT
+  check_interrupt();
+#endif
+  basic_error(error_none, false, msg);
 }
 
 void runtime_error(runtime_errors error)
@@ -581,7 +606,8 @@ void runtime_error(runtime_errors error)
 #ifdef MUDLLE_INTERRUPT
   check_interrupt();
 #endif
-  basic_error(error, FALSE);
+  basic_error(error, false, NULL);
+  mthrow(SIGNAL_ERROR, makeint(error));
 }
 
 void early_runtime_error(runtime_errors error)
@@ -594,7 +620,8 @@ void early_runtime_error(runtime_errors error)
    Note: Never returns
 */
 {
-  basic_error(error, TRUE);
+  basic_error(error, true, NULL);
+  mthrow(SIGNAL_ERROR, makeint(error));
 }
 
 void error_init(void)

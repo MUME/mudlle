@@ -28,16 +28,13 @@ TYPEDOP(new_bitset, 0,
 	1, (value n),
 	OP_LEAF | OP_NOESCAPE, "n.s")
 {
-  long size;
-  struct string *newp;
-
-  if ((size = GETINT(n)) < 0)
+  long size = GETINT(n);
+  if (size < 0)
     runtime_error(error_bad_value);
 
   size = (size + 7) >> 3;
-  newp = (struct string *)allocate_string(type_string, size + 1);
-  newp->str[size] = '\0';
-  
+  struct string *newp = alloc_empty_string(size);
+  memset(newp->str, 0, size);
   return newp;
 }
 
@@ -45,19 +42,8 @@ TYPEDOP(bcopy, 0, "`bitset1 -> `bitset2. Makes a copy of `bitset1",
 	1, (struct string *b),
 	OP_LEAF | OP_NOESCAPE, "s.s")
 {
-  struct string *newp;
-  struct gcpro gcpro1;
-  long l;
-  
   TYPEIS(b, type_string);
-  
-  GCPRO1(b);
-  l = string_len(b) + 1;
-  newp = (struct string *)allocate_string(type_string, l);
-  memcpy(newp->str, b->str, l);
-  UNGCPRO();
-  
-  return newp;
+  return mudlle_string_copy(b);
 }
 
 TYPEDOP(bclear, 0,
@@ -74,12 +60,10 @@ TYPEDOP(set_bitb, "set_bit!", "`bitset `n -> . Sets bit `n in `bitset",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
 {
-  long n, i;
-  
   TYPEIS(b, type_string);
-  n = GETINT(_n);
+  long n = GETINT(_n);
   
-  i = n >> 3;
+  long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   b->str[i] |= 1 << (n & 7);
   
@@ -91,12 +75,10 @@ TYPEDOP(clear_bitb, "clear_bit!",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
 {
-  long n, i;
-  
   TYPEIS(b, type_string);
-  n = GETINT(_n);
+  long n = GETINT(_n);
   
-  i = n >> 3;
+  long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   b->str[i] &= ~(1 << (n & 7));
   
@@ -107,11 +89,9 @@ TYPEDOP(bit_setp, "bit_set?", "`bitset `n -> `b. True if bit `n is set",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
 {
-  long n, i;
-  
   TYPEIS(b, type_string);
-  n = GETINT(_n);
-  i = n >> 3;
+  long n = GETINT(_n);
+  long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   
   return makeint(b->str[i] & 1 << (n & 7));
@@ -122,42 +102,59 @@ TYPEDOP(bit_clearp, "bit_clear?",
 	2, (struct string *b, value _n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
 {
-  long n, i;
-  
   TYPEIS(b, type_string);
-  n = GETINT(_n);
-  i = n >> 3;
+  long n = GETINT(_n);
+  long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   
   return makebool(!(b->str[i] & 1 << (n & 7)));
 }
 
 /* All binary ops expect same-sized bitsets */
+static struct string *bitset_binop(struct string *b1, struct string *b2,
+                                   bool alloc_new,
+                                   void (*op)(const char *s1, const char *s2,
+                                              char *to, size_t length))
+{
+  TYPEIS(b1, type_string);
+  TYPEIS(b2, type_string);
+  long l = string_len(b1);
+  if (l != string_len(b2)) runtime_error(error_bad_value);
+
+  struct string *result;
+  if (alloc_new)
+    {
+      struct gcpro gcpro1, gcpro2;
+      GCPRO2(b1, b2);
+      result = alloc_empty_string(l);
+      UNGCPRO();
+    }
+  else
+    result = b1;
+
+  op(b1->str, b2->str, result->str, l);
+  return result;
+}
+
+static void bunion_op(const char *s1, const char *s2, char *to, size_t length)
+{
+  while (length--)
+    *to++ = *s1++ | *s2++;
+}
 
 TYPEDOP(bunion, 0,
         "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 U `bitset2",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
-  struct string *b3;
-  char *sb1, *sb2, *sb3;
-  long l;
-  struct gcpro gcpro1, gcpro2;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  l = l + 1;
-  
-  GCPRO2(b1, b2);
-  b3 = (struct string *)allocate_string(type_string, l);
-  UNGCPRO();
-  
-  sb1 = b1->str; sb2 = b2->str; sb3 = b3->str;
-  while (--l >= 0) *sb3++ = *sb1++ | *sb2++;
-  
-  return b3;
+  return bitset_binop(b1, b2, true, bunion_op);
+}
+
+static void bintersection_op(const char *s1, const char *s2, char *to,
+                             size_t length)
+{
+  while (length--)
+    *to++ = *s1++ & *s2++;
 }
 
 TYPEDOP(bintersection, 0,
@@ -165,25 +162,14 @@ TYPEDOP(bintersection, 0,
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
-  struct string *b3;
-  char *sb1, *sb2, *sb3;
-  long l;
-  struct gcpro gcpro1, gcpro2;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  l = l + 1;
-  
-  GCPRO2(b1, b2);
-  b3 = (struct string *)allocate_string(type_string, l);
-  UNGCPRO();
-  
-  sb1 = b1->str; sb2 = b2->str; sb3 = b3->str;
-  while (--l >= 0) *sb3++ = *sb1++ & *sb2++;
-  
-  return b3;
+  return bitset_binop(b1, b2, true, bintersection_op);
+}
+
+static void bdifference_op(const char *s1, const char *s2, char *to,
+                           size_t length)
+{
+  while (length--)
+    *to++ = *s1++ & ~*s2++;
 }
 
 TYPEDOP(bdifference, 0,
@@ -191,25 +177,7 @@ TYPEDOP(bdifference, 0,
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOESCAPE, "ss.s")
 {
-  struct string *b3;
-  char *sb1, *sb2, *sb3;
-  long l;
-  struct gcpro gcpro1, gcpro2;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  l = l + 1;
-  
-  GCPRO2(b1, b2);
-  b3 = (struct string *)allocate_string(type_string, l);
-  UNGCPRO();
-  
-  sb1 = b1->str; sb2 = b2->str; sb3 = b3->str;
-  while (--l >= 0) *sb3++ = *sb1++ & ~*sb2++;
-  
-  return b3;
+  return bitset_binop(b1, b2, true, bdifference_op);
 }
 
 TYPEDOP(bunionb, "bunion!",
@@ -217,18 +185,7 @@ TYPEDOP(bunionb, "bunion!",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
-  char *sb1, *sb2;
-  long l;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  
-  sb1 = b1->str; sb2 = b2->str;
-  while (l-- > 0) *sb1++ |= *sb2++;
-  
-  return b1;
+  return bitset_binop(b1, b2, false, bunion_op);
 }
 
 TYPEDOP(bintersectionb, "bintersection!",
@@ -236,18 +193,7 @@ TYPEDOP(bintersectionb, "bintersection!",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
-  char *sb1, *sb2;
-  long l;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  
-  sb1 = b1->str; sb2 = b2->str;
-  while (l-- > 0) *sb1++ &= *sb2++;
-  
-  return b1;
+  return bitset_binop(b1, b2, false, bintersection_op);
 }
 
 TYPEDOP(bdifferenceb, "bdifference!",
@@ -255,18 +201,14 @@ TYPEDOP(bdifferenceb, "bdifference!",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
-  char *sb1, *sb2;
-  long l;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  
-  sb1 = b1->str; sb2 = b2->str;
-  while (l-- > 0) *sb1++ &= ~*sb2++;
-  
-  return b1;
+  return bitset_binop(b1, b2, false, bdifference_op);
+}
+
+static void bassign_op(const char *s1, const char *s2, char *to,
+                       size_t length)
+{
+  while (length--)
+    *to++ = *s2++;
 }
 
 TYPEDOP(bassignb, "bassign!",
@@ -274,16 +216,7 @@ TYPEDOP(bassignb, "bassign!",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
-  long l;
-  
-  TYPEIS(b1, type_string);
-  TYPEIS(b2, type_string);
-  l = string_len(b1);
-  if (l != string_len(b2)) runtime_error(error_bad_value);
-  
-  memcpy(b1->str, b2->str, l);
-  
-  return b1;
+  return bitset_binop(b1, b2, false, bassign_op);
 }
 
 TYPEDOP(bitset_inp, "bitset_in?",
@@ -291,18 +224,15 @@ TYPEDOP(bitset_inp, "bitset_in?",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
-  char *sb1, *sb2;
-  long l;
-  
   TYPEIS(b1, type_string);
   TYPEIS(b2, type_string);
-  l = string_len(b1);
+  long l = string_len(b1);
   if (l != string_len(b2)) runtime_error(error_bad_value);
   
-  sb1 = b1->str; sb2 = b2->str;
-  while (l-- >= 0) if (*sb1++ & ~*sb2++) return makebool(FALSE);
+  const char *sb1 = b1->str, *sb2 = b2->str;
+  while (l-- >= 0) if (*sb1++ & ~*sb2++) return makebool(false);
   
-  return makebool(TRUE);
+  return makebool(true);
 }
 
 TYPEDOP(bitset_eqp, "bitset_eq?",
@@ -310,11 +240,9 @@ TYPEDOP(bitset_eqp, "bitset_eq?",
 	2, (struct string *b1, struct string *b2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
 {
-  long l;
-  
   TYPEIS(b1, type_string);
   TYPEIS(b2, type_string);
-  l = string_len(b1);
+  long l = string_len(b1);
   if (l != string_len(b2)) runtime_error(error_bad_value);
   
   return makebool(memcmp(b1->str, b2->str, l) == 0);
@@ -325,37 +253,32 @@ TYPEDOP(bemptyp, "bempty?",
 	1, (struct string *b),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
-  long l;
-  char *sb;
-  
   TYPEIS(b, type_string);
   
-  l = string_len(b);
-  sb = b->str;
+  long l = string_len(b);
+  const char *sb = b->str;
   while (l-- > 0)
-    if (*sb++) return makebool(FALSE);
+    if (*sb++) return makebool(false);
   
-  return makebool(TRUE);
+  return makebool(true);
 }
 
 TYPEDOP(bcount, 0, "`bitset -> `n. Returns the number of bits set in `bitset",
 	1, (struct string *b),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
-  long l, n;
-  char bi, *sb;
   static const char count[16] = {
     0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
- };
+  };
   
   TYPEIS(b, type_string);
-  l = string_len(b);
-  sb = b->str;
-  n = 0;
+  long l = string_len(b);
+  const char *sb = b->str;
+  long n = 0;
   while (l-- > 0)
     {
-      bi = *sb++;
-      n = n + count[bi & 15] + count[(bi >> 4) & 15];
+      char bi = *sb++;
+      n += count[bi & 15] + count[(bi >> 4) & 15];
     }
   return makeint(n);
 }

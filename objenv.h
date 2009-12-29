@@ -58,6 +58,4 @@ ulong env_add_entry(struct env *env, value v);
       } \
   } while(0)
 
-void print_env(struct oport *f, struct env *env);
-
 #endif

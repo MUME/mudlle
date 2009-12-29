@@ -39,9 +39,9 @@ static void show_function(struct closure *c);
 
 #  define HELP_PREFIX ""
 
-OPERATION(help, HELP_PREFIX "help",
-          "`f -> . Provides help on function `f", 1, (value v),
-	  OP_LEAF)
+TYPEDOP(help, HELP_PREFIX "help",
+        "`f -> . Prints help on function `f", 1, (value v),
+        OP_LEAF, "x.")
 {
   if (TYPE(v, type_primitive) || TYPE(v, type_varargs))
     {
@@ -63,7 +63,7 @@ OPERATION(help, HELP_PREFIX "help",
 
 TYPEDOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
 	1, (value v),
-	OP_LEAF | OP_NOESCAPE, "f.x")
+	OP_LEAF | OP_NOESCAPE, "f.[su]")
 {
   if (TYPE(v, type_primitive) || TYPE(v, type_varargs) || TYPE(v, type_secure))
     {
@@ -85,10 +85,10 @@ TYPEDOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
   NOTREACHED;
 }
 
-OPERATION(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
-          " [`filename, `lineno].",
-          1, (value fn),
-          OP_LEAF | OP_NOESCAPE)
+TYPEDOP(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
+        " [`filename, `lineno].",
+        1, (value fn),
+        OP_LEAF | OP_NOESCAPE, "[fo].v")
 {
   struct gcpro gcpro1;
   struct vector *v;
@@ -152,9 +152,9 @@ UNSAFEOP(closure_variables, 0,
   return res;
 }
 
-OPERATION(variable_value, 0, "`v -> `x. Returns the value in variable `v",
-	  1, (struct variable *v),
-	  OP_LEAF)
+TYPEDOP(variable_value, 0, "`v -> `x. Returns the value in variable `v",
+        1, (struct variable *v),
+        OP_LEAF, "o.x")
 {
   TYPEIS(v, type_variable);
   return v->vvalue;
@@ -186,7 +186,7 @@ TYPEDOP(function_seclevel, 0, "`f -> `n. Returns the security level of the"
 TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
         " otherwise",
 	1, (value fn),
-	OP_LEAF | OP_NOESCAPE, "x.S")
+	OP_LEAF | OP_NOESCAPE, "[fo].S")
 {
   struct string *name = NULL;
 
@@ -228,7 +228,7 @@ TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
   NOTREACHED;
 
 got_name:
-  return name ? name : makebool(FALSE);
+  return name ? name : makebool(false);
 }
 
 static void show_function(struct closure *c)
@@ -258,33 +258,25 @@ static void show_function(struct closure *c)
   else code_help(c->code);
 }
 
-OPERATION(profile, 0, "`f -> `x. Returns profiling information for `f:"
-          " cons(#`calls, #`instructions) for mudlle functions, #`calls for"
-          " primitives",
-	  1, (value fn),
-	  OP_LEAF)
+TYPEDOP(profile, 0, "`f -> `x. Returns profiling information for `f:"
+        " cons(#`calls, #`instructions) for mudlle functions, #`calls for"
+        " primitives",
+        1, (value fn),
+        OP_LEAF, "[fo].[kn]")
 {
-  struct gcpro gcpro1;
-  struct list *tmp;
-
   if (TYPE(fn, type_closure)) fn = ((struct closure *)fn)->code;
 
   if (TYPE(fn, type_code))
     {
       struct code *c = fn;
-
-      GCPRO1(c);
-      tmp = alloc_list(makeint(c->instruction_count), NULL);
-      tmp = alloc_list(makeint(c->call_count), tmp);
-      UNGCPRO();
-
-      return tmp;
+      return alloc_list(makeint(c->call_count),
+                        makeint(c->instruction_count));
     }
-  else if (TYPE(fn, type_primitive)
-           || TYPE(fn, type_secure)
-           || TYPE(fn, type_varargs))
+  if (TYPE(fn, type_primitive)
+      || TYPE(fn, type_secure)
+      || TYPE(fn, type_varargs))
     return makeint(((struct primitive *)fn)->call_count);
-  else runtime_error(error_bad_type);
+  runtime_error(error_bad_type);
   NOTREACHED;
 }
 
@@ -303,17 +295,17 @@ static int instr(char *s1, char *in)
       char *s = s1, *ins = in;
 
       while (*s && tolower(*s) == tolower(*ins)) { s++; ins++; }
-      if (!*s) return TRUE;
+      if (!*s) return true;
       in++;
     }
-  return FALSE;
+  return false;
 }
 
-OPERATION(apropos, HELP_PREFIX "apropos",
-          "`s -> . Finds all global variables whose name contains"
-          " the substring `s and prints them (with help)",
-	  1, (struct string *s),
-	  OP_LEAF)
+TYPEDOP(apropos, HELP_PREFIX "apropos",
+        "`s -> . Finds all global variables whose name contains"
+        " the substring `s and prints them (with help)",
+        1, (struct string *s),
+        OP_LEAF, "s.")
 {
   struct list *globals;
   struct gcpro gcpro1, gcpro2;
@@ -361,18 +353,25 @@ OPERATION(apropos, HELP_PREFIX "apropos",
   undefined();
 }
 
-OPERATION(debug, 0, "`n -> . Set debug level (0 = no debug)", 1, (value c),
-	  OP_LEAF | OP_NOALLOC)
+TYPEDOP(debug, 0, "`n -> . Set debug level (0 = no debug)", 1, (value c),
+        OP_LEAF | OP_NOALLOC, "n.")
 {
-  ISINT(c);
-  debug_level = intval(c);
+  debug_level = GETINT(c);
   undefined();
 }
 
-OPERATION(quit, 0, " -> . Exit mudlle", 0, (void),
-	  0)
+static const typing quit_tset = { "n.", ".", NULL };
+FULLOP(quit, 0, "[`n] -> . Exit mudlle, optionally with exit code `n.",
+       -1, (struct vector *args, ulong nargs), 0, 0, quit_tset, static)
 {
-  exit(0);
+  int code;
+  if (nargs == 0)
+    code = EXIT_SUCCESS;
+  else if (nargs == 1)
+    code = GETINT(args->data[0]);
+  else
+    runtime_error(error_wrong_parameters);
+  exit(code);
 }
 
 #ifdef GCSTATS

@@ -19,6 +19,9 @@
 # "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
 # PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
+# disable built-in rules
+.SUFFIXES:
+
 OBJS=  basic.o arith.o bool.o symbol.o runtime.o io.o string.o	 \
        list.o vector.o support.o bitset.o debug.o files.o float.o \
        bigint.o pattern.o mudllecst.o xml.o

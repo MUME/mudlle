@@ -19,9 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef PATTERN_H
-#define PATTERN_H
+#ifndef RUNTIME_PATTERN_H
+#define RUNTIME_PATTERN_H
 
 void pattern_init(void);
 
-#endif
+#endif /* RUNTIME_PATTERN_H */

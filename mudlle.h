@@ -47,6 +47,7 @@ typedef char mp_limb_t;
 #endif
 
 #  include <assert.h>
+#  include <stdbool.h>
 
 #ifdef HAVE_ALLOCA_H
 #  include <alloca.h>
@@ -68,14 +69,6 @@ typedef char mp_limb_t;
 extern int debug_level;
 
 #define DEBUG(n, stmt) do { if (debug_level >= n) stmt; } while (0)
-
-#ifndef FALSE
-#define FALSE 0
-#endif
-
-#ifndef TRUE
-#define TRUE 1
-#endif
 
 int load_file(const char *name, const char *nicename, int seclev, int reload);
 
