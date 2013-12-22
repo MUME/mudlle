@@ -2,6 +2,7 @@ load("regression/test.mud");
 load("regression/branch.mud");
 load("regression/calls.mud");
 load("regression/compute.mud");
+load("regression/equal.mud");
 load("regression/gc.mud");
 load("regression/misc.mud");
 load("regression/prologs.mud");

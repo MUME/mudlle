@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -74,7 +74,6 @@ void free_block(block_t b)
 /* Effect: Free all memory allocated in block b.
 */
 {
-#if 1
     struct memblock *blk = *b;
 
     while (blk)
@@ -84,8 +83,7 @@ void free_block(block_t b)
 	free(blk);
 	blk = prev;
     }
-    free(b); /* A good idea, 9 years late. */
-#endif
+    free(b);
 }
 
 void *allocate(block_t b, unsigned long size)
@@ -100,7 +98,7 @@ void *allocate(block_t b, unsigned long size)
     void *result;
 
     /* This could depend on the machine */
-    size = ALIGN(size, sizeof(long));
+    size = MUDLLE_ALIGN(size, sizeof(long));
 
     result = blk->pos;
     if ((blk->pos += size) >= blk->end)

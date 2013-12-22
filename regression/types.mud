@@ -9,7 +9,7 @@ regress1branch = fn (name, a1, op, exptruth)
 		format("if ((%s) || vdummy) 33 else 22", op),
 		if (exptruth) 33 else 22);
   ];
-					   
+
 
 regress1branch("integer?1", 7, "integer?(arg1)", true);
 regress1branch("integer?2", null, "integer?(arg1)", false);
@@ -71,4 +71,3 @@ regresstypetrap("function4", (fn () 1), "function", true);
 regresstypetrap("function5", remove, "function", true);
 regresstypetrap("function6", sequence, "function", true);
 regresstypetrap("function7", string_length, "function", true);
-

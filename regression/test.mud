@@ -5,9 +5,9 @@
 */
 
 regress = fn (name, x, expected)
-  display(format("%s: got %s, expected %s: %s%n",
+  dformat("%s: got %s, expected %s: %s%n",
 		 name, x, expected,
-		 if (equal?(x, expected)) "passed" else "FAILED"));
+		 if (equal?(x, expected)) "passed" else "FAILED");
 
 unparse = fn (x)
   [
@@ -30,28 +30,28 @@ regresseval = fn (name, x, expected)
     eval("resvar1 = (" + x + ")");
     eval("resvar2 = id(" + x + ")");
     eval("resvar3 = [ | tmp | tmp = " + x + "; dummy(); tmp]");
-    display(format("%sv1: got %s, expected %s: %s%n",
+    dformat("%sv1: got %s, expected %s: %s%n",
 		   name, resvar1, expected,
-		   if (equal?(resvar1, expected)) "passed" else "FAILED"));
-    display(format("%sv2: got %s, expected %s: %s%n",
+		   if (equal?(resvar1, expected)) "passed" else "FAILED");
+    dformat("%sv2: got %s, expected %s: %s%n",
 		   name, resvar2, expected,
-		   if (equal?(resvar2, expected)) "passed" else "FAILED"));
-    display(format("%sv3: got %s, expected %s: %s%n",
+		   if (equal?(resvar2, expected)) "passed" else "FAILED");
+    dformat("%sv3: got %s, expected %s: %s%n",
 		   name, resvar3, expected,
-		   if (equal?(resvar3, expected)) "passed" else "FAILED"));
+		   if (equal?(resvar3, expected)) "passed" else "FAILED");
   ];
 
 regressfail = fn (name, failingfn)
   handle_error(fn () [ failingfn();
-		       display(format("%s FAILED to fail%n", name));
+		       dformat("%s FAILED to fail%n", name);
 		     ],
-	       fn (err) display(format("%s passed%n", name)));
+	       fn (err) dformat("%s passed%n", name));
 
 regresspass = fn (name, failingfn)
   handle_error(fn () [ failingfn();
-		       display(format("%s passed%n", name));
+		       dformat("%s passed%n", name);
 		     ],
-	       fn (err) display(format("%s FAILED%n", name)));
+	       fn (err) dformat("%s FAILED%n", name));
 
 regressqfail = fn (name, failstr)
   [
@@ -124,7 +124,7 @@ regress1arg = fn (name, a1, x, expected)
       [
 	s1 = unparse(a1); v1 = a1;
       ];
-    arg1 = v1; 
+    arg1 = v1;
     regresseval(name + "_g", // global
 		x, expected);
     regresseval(name + "_l1", // local1
@@ -136,4 +136,3 @@ regress1arg = fn (name, a1, x, expected)
 		       s1, x),
 		expected);
   ];
-

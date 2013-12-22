@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -27,12 +27,17 @@
 #include <unistd.h>
 #include <string.h>
 
-#include "runtime/runtime.h"
-#include "runtime/basic.h"
-#include "global.h"
-#include "alloc.h"
-#include "interpret.h"
-#include "context.h"
+#include "basic.h"
+#include "runtime.h"
+
+#include "../alloc.h"
+#include "../context.h"
+#include "../global.h"
+#include "../interpret.h"
+#include "../ports.h"
+#include "../print.h"
+#include "../strbuf.h"
+#include "../utils.h"
 
 
 static void show_function(struct closure *c);
@@ -41,23 +46,21 @@ static void show_function(struct closure *c);
 
 TYPEDOP(help, HELP_PREFIX "help",
         "`f -> . Prints help on function `f", 1, (value v),
-        OP_LEAF, "x.")
+        OP_LEAF | OP_NOESCAPE, "x.")
 {
   if (TYPE(v, type_primitive) || TYPE(v, type_varargs))
     {
       struct primitive *op = v;
-
-      mputs(op->op->help, mudout);
+      pputs(op->op->help, mudout);
     }
   else if (TYPE(v, type_secure))
     {
       struct primitive *op = v;
-
-      mprintf(mudout, "Secure %d: %s", op->op->seclevel, op->op->help);
+      pprintf(mudout, "Secure %d: %s", op->op->seclevel, op->op->help);
     }
   else if (TYPE(v, type_closure)) show_function(v);
-  else mprintf(mudout, "This variable isn't executable" EOL);
-  mputs(EOL, mudout);
+  else pprintf(mudout, "This variable isn't executable\n");
+  pputc('\n', mudout);
   undefined();
 }
 
@@ -69,64 +72,85 @@ TYPEDOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
     {
       struct primitive *op = v;
 
+      if (op->op->flags & OP_CONST)
+        {
+          size_t len = strlen(op->op->help);
+          strbuf_t sb = sb_initf(
+            "%s%s%s",
+            op->op->help,
+            (len == 0
+             ? ""
+             : op->op->help[len - 1] == '.' ? "\n" : ".\n"),
+            "May be evaluated at compile-time.");
+          struct string *s = alloc_string(sb_str(&sb));
+          sb_free(&sb);
+          return s;
+        }
       return alloc_string(op->op->help);
     }
-  if (TYPE(v, type_closure)) 
+  if (TYPE(v, type_closure))
     {
       struct closure *c = v;
-
-      if (c->code->o.type == type_code)
-        return c->code->help;
-      if (c->code->o.type == type_mcode)
-        return ((struct mcode *)c->code)->help;
-      return alloc_string(((struct primitive *)c->code)->op->help);
+      return c->code->help;
     }
   runtime_error(error_bad_type);
-  NOTREACHED;
 }
 
 TYPEDOP(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
-        " [`filename, `lineno].",
+        " [`nicename, `lineno, `filename].",
         1, (value fn),
         OP_LEAF | OP_NOESCAPE, "[fo].v")
 {
-  struct gcpro gcpro1;
   struct vector *v;
-  struct string *filename;
+  struct string *filename, *nicename;
   uword lineno;
 
-  if (TYPE(fn, type_closure)) 
+  if (TYPE(fn, type_closure))
     fn = ((struct closure *)fn)->code;
 
-  if (TYPE(fn, type_code))
+  if (TYPE(fn, type_code) || TYPE(fn, type_mcode))
     {
       struct code *code = fn;
+      nicename = code->nicename;
       filename = code->filename;
       lineno   = code->lineno;
-    }
-  else if (TYPE(fn, type_mcode))
-    {
-      struct mcode *mcode = fn;
-      filename = mcode->filename;
-      lineno   = mcode->lineno;
     }
   else if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
 	   TYPE(fn, type_secure))
     {
       struct primitive *prim = fn;
-      filename = alloc_string(prim->op->filename);
+      nicename = filename = alloc_string(prim->op->filename);
       lineno   = prim->op->lineno;
     }
   else
     runtime_error(error_bad_type);
 
   GCPRO1(filename);
-  v = alloc_vector(2);
+  v = alloc_vector(3);
   UNGCPRO();
-  v->data[0] = filename;
+  v->data[0] = nicename;
   v->data[1] = makeint(lineno);
+  v->data[2] = filename;
 
   return v;
+}
+
+TYPEDOP(set_use_nicename, "set_use_nicename!",
+        "`b -> . Set whether to (only) use nicenames for call traces and"
+        " compiler messages. Cf. `use_nicename().",
+        1, (value enable),
+        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "x.")
+{
+  use_nicename = istrue(enable);
+  undefined();
+}
+
+TYPEDOP(use_nicename, 0, "-> `b. True if (only) nicenames will be used"
+        " in call traces and compiler messages. Cf. `set_use_nicename!().",
+        0, (void),
+        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, ".n")
+{
+  return makebool(use_nicename);
 }
 
 UNSAFEOP(closure_variables, 0,
@@ -136,13 +160,12 @@ UNSAFEOP(closure_variables, 0,
 	 OP_LEAF | OP_NOESCAPE)
 {
   ulong nbvar, i;
-  struct gcpro gcpro1;
   struct vector *res;
 
   TYPEIS(fn, type_closure);
 
   nbvar = (fn->o.size - offsetof(struct closure, variables)) / sizeof(value);
-  
+
   GCPRO1(fn);
   res = alloc_vector(nbvar);
   for (i = 0; i < nbvar; ++i)
@@ -154,7 +177,7 @@ UNSAFEOP(closure_variables, 0,
 
 TYPEDOP(variable_value, 0, "`v -> `x. Returns the value in variable `v",
         1, (struct variable *v),
-        OP_LEAF, "o.x")
+        OP_LEAF | OP_NOESCAPE, "o.x")
 {
   TYPEIS(v, type_variable);
   return v->vvalue;
@@ -173,14 +196,10 @@ TYPEDOP(function_seclevel, 0, "`f -> `n. Returns the security level of the"
   if (TYPE(fn, type_closure))
     {
       struct closure *c = fn;
-      if (TYPE(c->code, type_code))
-	return makeint(((struct code *)c->code)->seclevel);
-      if (TYPE(c->code, type_mcode))
-	return makeint(((struct mcode *)c->code)->seclevel);
+      return makeint(c->code->seclevel);
     }
 
   runtime_error(error_bad_type);
-  NOTREACHED;
 }
 
 TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
@@ -190,13 +209,7 @@ TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
 {
   struct string *name = NULL;
 
-  if (TYPE(fn, type_mcode))
-    {
-      name = ((struct mcode *)fn)->varname;
-      goto got_name;
-    }
-
-  if (TYPE(fn, type_code))
+  if (TYPE(fn, type_mcode) || TYPE(fn, type_code))
     {
       name = ((struct code *)fn)->varname;
       goto got_name;
@@ -209,23 +222,13 @@ TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
       return alloc_string(op->op->name);
     }
 
-  if (TYPE(fn, type_closure)) 
+  if (TYPE(fn, type_closure))
     {
       struct closure *c = fn;
-
-      if (c->code->o.type == type_code) 
-	name = c->code->varname;
-      else if (c->code->o.type == type_mcode)
-	{
-	  struct mcode *code = (struct mcode *)c->code;
-
-	  name = code->varname;
-	}
-
+      name = c->code->varname;
       goto got_name;
     }
   runtime_error(error_bad_type);
-  NOTREACHED;
 
 got_name:
   return name ? name : makebool(false);
@@ -233,42 +236,26 @@ got_name:
 
 static void show_function(struct closure *c)
 {
-  if (c->code->o.type == type_mcode)
-    {
-      struct mcode *code = (struct mcode *)c->code;
-
-      if (code->help) mprint(mudout, prt_display, code->help);
-      else mputs("undocumented", mudout);
-      mputs(" [", mudout);
-      mprint(mudout, prt_display, code->filename);
-      mprintf(mudout, ":%d", code->lineno);
-      mputs("]", mudout);
-    }
-  else if (c->code->o.type == type_code)
-    {
-      struct code *code = c->code;
-
-      if (code->help) mprint(mudout, prt_display, code->help);
-      else mputs("undocumented", mudout);
-      mputs(" [", mudout);
-      mprint(mudout, prt_display, code->filename);
-      mprintf(mudout, ":%d", code->lineno);
-      mputs("]", mudout);
-    }
-  else code_help(c->code);
+  struct code *code = c->code;
+  if (code->help) output_value(mudout, prt_display, false, code->help);
+  else pputs("undocumented", mudout);
+  pputs(" [", mudout);
+  output_value(mudout, prt_display, false, code->nicename);
+  pprintf(mudout, ":%d", code->lineno);
+  pputc(']', mudout);
 }
 
 TYPEDOP(profile, 0, "`f -> `x. Returns profiling information for `f:"
         " cons(#`calls, #`instructions) for mudlle functions, #`calls for"
         " primitives",
         1, (value fn),
-        OP_LEAF, "[fo].[kn]")
+        OP_LEAF | OP_NOESCAPE, "[fo].[kn]")
 {
   if (TYPE(fn, type_closure)) fn = ((struct closure *)fn)->code;
 
   if (TYPE(fn, type_code))
     {
-      struct code *c = fn;
+      struct icode *c = fn;
       return alloc_list(makeint(c->call_count),
                         makeint(c->instruction_count));
     }
@@ -277,12 +264,11 @@ TYPEDOP(profile, 0, "`f -> `x. Returns profiling information for `f:"
       || TYPE(fn, type_varargs))
     return makeint(((struct primitive *)fn)->call_count);
   runtime_error(error_bad_type);
-  NOTREACHED;
 }
 
 UNSAFEOP(dump_memory, 0, " -> . Dumps GC memory (for use by profiler)",
 	 0, (void),
-	 OP_LEAF)
+	 OP_LEAF | OP_NOESCAPE)
 {
   dump_memory();
   undefined();
@@ -305,16 +291,13 @@ TYPEDOP(apropos, HELP_PREFIX "apropos",
         "`s -> . Finds all global variables whose name contains"
         " the substring `s and prints them (with help)",
         1, (struct string *s),
-        OP_LEAF, "s.")
+        OP_LEAF | OP_NOESCAPE, "s.")
 {
-  struct list *globals;
-  struct gcpro gcpro1, gcpro2;
-
   TYPEIS(s, type_string);
 
-  GCPRO1(s);
+  struct list *globals = NULL;
+  GCPRO2(s, globals);
   globals = global_list();
-  GCPRO(gcpro2, globals);
   while (globals)
     {
       struct symbol *sym = globals->car;
@@ -325,27 +308,26 @@ TYPEDOP(apropos, HELP_PREFIX "apropos",
 	  struct gcpro gcpro3;
 
 	  GCPRO(gcpro3, v);
-	  mprint(mudout, prt_display, sym->name);
-	  mputs(EOL "  ", mudout);
+	  output_value(mudout, prt_display, false, sym->name);
+	  pputs("\n  ", mudout);
 	  if (TYPE(v, type_primitive)
               || TYPE(v, type_secure)
               || TYPE(v, type_varargs))
 	    {
 	      struct primitive *op = v;
 
-	      if (op->op->help) 
-		mprintf(mudout, "Primitive: %s" EOL, op->op->help);
-	      else mputs("Undocumented primitive" EOL, mudout);
+	      if (op->op->help)
+		pprintf(mudout, "Primitive: %s\n", op->op->help);
+	      else pputs("Undocumented primitive\n", mudout);
 	    }
 	  else if (TYPE(v, type_closure))
 	    {
-	      mputs("Function: ", mudout);
+	      pputs("Function: ", mudout);
 	      show_function(v);
-	      mputs(EOL, mudout);
+	      pputc('\n', mudout);
 	    }
-	  else mprintf(mudout, "Variable" EOL);
+	  else pprintf(mudout, "Variable\n");
 	  UNGCPRO1(gcpro3);
-	  
 	}
       globals = globals->cdr;
     }
@@ -354,7 +336,7 @@ TYPEDOP(apropos, HELP_PREFIX "apropos",
 }
 
 TYPEDOP(debug, 0, "`n -> . Set debug level (0 = no debug)", 1, (value c),
-        OP_LEAF | OP_NOALLOC, "n.")
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.")
 {
   debug_level = GETINT(c);
   undefined();
@@ -362,7 +344,7 @@ TYPEDOP(debug, 0, "`n -> . Set debug level (0 = no debug)", 1, (value c),
 
 static const typing quit_tset = { "n.", ".", NULL };
 FULLOP(quit, 0, "[`n] -> . Exit mudlle, optionally with exit code `n.",
-       -1, (struct vector *args, ulong nargs), 0, 0, quit_tset, static)
+       NVARARGS, (struct vector *args, ulong nargs), 0, 0, quit_tset, static)
 {
   int code;
   if (nargs == 0)
@@ -378,12 +360,11 @@ FULLOP(quit, 0, "[`n] -> . Exit mudlle, optionally with exit code `n.",
 TYPEDOP(gcstats, 0, " -> `v. Returns GC statistics: vector(`minor_count,"
         " `major_count, `size, `usage_minor, `usage_major, last gc sizes,"
         " gen0 gc sizes, gen1 gc sizes). The sizes vectors are as"
-        " that of `short_gcstats()", 0, (void), OP_LEAF, ".v")
+        " that of `short_gcstats()", 0, (void), OP_LEAF | OP_NOESCAPE, ".v")
 {
   struct gcstats stats;
   struct vector *gen0, *gen1 = NULL, *last = NULL, *v;
   int i;
-  struct gcpro gcpro1, gcpro2, gcpro3;
 
   stats = gcstats;
 
@@ -417,23 +398,22 @@ TYPEDOP(gcstats, 0, " -> `v. Returns GC statistics: vector(`minor_count,"
 
 OPERATION(reset_gcstats, "reset_gcstats!", " -> . Reset short GC statistics",
           0, (void),
-	  OP_LEAF | OP_NOALLOC)
+	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
 {
   memset(gcstats.anb, 0, sizeof gcstats.anb);
   memset(gcstats.asizes, 0, sizeof gcstats.asizes);
   undefined();
 }
 
-OPERATION(short_gcstats, 0, " -> `v. Returns short GC statistics. `v[2*`n] is"
-          " the number of allocations for type `n, and `v[2*`n+1] is total"
-          " bytes of allocation for type `n", 0, (void),
-	  OP_LEAF)
+TYPEDOP(short_gcstats, 0, " -> `v. Returns short GC statistics. `v[2*`n] is"
+        " the number of allocations for type `n, and `v[2*`n+1] is total"
+        " bytes of allocation for type `n", 0, (void),
+        OP_LEAF | OP_NOESCAPE, ".v")
 {
   struct gcstats stats = gcstats;
   struct vector *v = alloc_vector(2 * last_type);
-  int i;
 
-  for (i = 0; i < last_type; ++i)
+  for (int i = 0; i < last_type; ++i)
     {
       v->data[2 * i] = makeint(stats.anb[i]);
       v->data[2 * i + 1] = makeint(stats.asizes[i]);
@@ -480,7 +460,7 @@ UNSAFEOP(garbage_collect, 0, "`n -> . Does a forced garbage collection,"
 	 " asserting room for `n bytes of allocations before another"
 	 " garbage collection has to be done.",
 	 1, (value n),
-	 OP_LEAF)
+	 OP_LEAF | OP_NOESCAPE)
 {
   ISINT(n);
 
@@ -494,6 +474,8 @@ void debug_init(void)
   DEFINE(help);
   DEFINE(help_string);
   DEFINE(defined_in);
+  DEFINE(set_use_nicename);
+  DEFINE(use_nicename);
   DEFINE(closure_variables);
   DEFINE(variable_value);
   DEFINE(function_name);

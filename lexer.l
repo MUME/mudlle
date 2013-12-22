@@ -1,17 +1,17 @@
 /*                                                                    -*- c -*-
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -24,17 +24,24 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include "mudlle.h"
-#include "utils.h"
-#include "mparser.h"
-#include "lexer.h"
+
+#include "charset.h"
 #include "env.h"
+#include "lexer.h"
+#include "mparser.h"
+#include "mudlle.h"
+#include "tokens.h"
+#include "utils.h"
 
 /* We never wrap into another file */
 #define YY_SKIP_YYWRAP
 #define yywrap() (1)
 
 #define YY_USE_PROTOS
+
+#define YY_USER_ACTION do {                             \
+  yylloc.first_line = yylloc.last_line = yylineno;      \
+} while (0);
 
 #undef YY_INPUT
 #define YY_INPUT(buf, result, max_size) do {            \
@@ -45,13 +52,14 @@
 } while (0)
 
 static int string_read(char *buf, int max_size);
+static bool convert_escape_char(const char **textp, char *result);
 
 static YY_BUFFER_STATE mbuf;
 static int line_read;
 static const char *line;
 static int length;
-int lineno;
-const char *filename;
+const char *lexer_filename;
+const char *lexer_nicename;
 
 struct lkeyword {
   const char *name;
@@ -59,34 +67,34 @@ struct lkeyword {
 };
 
 static const struct lkeyword keywords[] = {
- { "fn",       FUNCTION }, 
-  { "if",       IF },       
-  { "else",     ELSE },     
-  { "while",    WHILE },    
-  { "or",       OR },       
-  { "and",      AND },      
-  { "not",      NOT },      
-  { "exit",     MEXIT },    
-  { "loop",     LOOP },     
-  { "for",      FOR },      
-  { "match",    MATCH },    
+  { "fn",       FUNCTION },
+  { "if",       IF },
+  { "else",     ELSE },
+  { "while",    WHILE },
+  { "exit",     MEXIT },
+  { "loop",     LOOP },
+  { "for",      FOR },
+  { "match",    MATCH },
 
-  { "library",  LIBRARY },  
-  { "module",   MODULE },   
-  { "requires", IMPORTS },  
-  { "reads",    READS },    
-  { "writes",   WRITES },   
+  { "library",  LIBRARY },
+  { "module",   MODULE },
+  { "requires", IMPORTS },
+  { "reads",    READS },
+  { "writes",   WRITES },
   { "defines",  DEFINES }
 };
 #define NKEYWORDS (sizeof keywords / sizeof(struct lkeyword))
 
 #define MAKE_OP(oper, ret) do {			\
   yylval.operator.op = (oper);			\
-  yylval.operator.lineno = lineno;		\
+  yylval.operator.lineno = yylineno;            \
   return (ret);					\
 } while (0)
 
 %}
+
+%option nounput
+%option yylineno
 
 DIGIT           [0-9]
 NONZERODIGIT	[1-9]
@@ -96,22 +104,31 @@ DECIM		\.{DIGIT}+
 HEXDIGIT	[0-9a-fA-F]
 GLOBAL_PREFIX   :
 SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
+CHAR_NAME       N\{[^\}\"\n]*\}?
 
 %%
 
-\n { lineno++; }
+\n { }
 [ \t\r]+  { }
-\/\/.*\n  { lineno++; }
+\/\/.*\n  { }
 \/\*     { /* start of multi-line comment */
 	   /* find end of comment */
-	   int depth = 1, c, star = false, slash = false;
+           int depth = 1;
+           bool star = false, slash = false;
+           int start_line = yylineno;
 
 #ifndef __cplusplus
 #define yyinput input
 #endif
-	   while (depth > 0 && (c = yyinput()) != EOF)
+	   while (depth > 0)
 	     {
-	       if (c == '\n') lineno++;
+               int c = yyinput();
+               if (c == EOF)
+                 {
+                   yylineno = start_line;
+                   compile_error("unterminated comment");
+                   yyterminate();
+                 }
 	       else if (c == '*' && slash) depth++;
 	       else if (c == '/' && star) depth--;
 	       star = c == '*';
@@ -121,7 +138,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 "&&"	{ return SC_AND; }
 "||"	{ return SC_OR; }
 "^^"    { return XOR; }
-"!"	{ return NOT; }
+"!"	{ return '!'; }
 "["	{ return '['; }
 "]"	{ return ']'; }
 "|"	{ return '|'; }
@@ -140,65 +157,73 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 "^"	{ return '^'; }
 ","     { return ','; }
 "."	{ return '.'; }
-"+="	{ MAKE_OP(b_add, OP_ASSIGN); }
-"-="	{ MAKE_OP(b_subtract, OP_ASSIGN); }
-"*="	{ MAKE_OP(b_multiply, OP_ASSIGN); }
-"/="	{ MAKE_OP(b_divide, OP_ASSIGN); }
-"%="	{ MAKE_OP(b_remainder, OP_ASSIGN); }
-"^="	{ MAKE_OP(b_bitxor, OP_ASSIGN); }
-"&="	{ MAKE_OP(b_bitand, OP_ASSIGN); }
-"|="	{ MAKE_OP(b_bitor, OP_ASSIGN); }
-"&&="	{ MAKE_OP(b_sc_and, OP_ASSIGN); }
-"^^="	{ MAKE_OP(b_xor, OP_ASSIGN); }
-"||="	{ MAKE_OP(b_sc_or, OP_ASSIGN); }
-">>="	{ MAKE_OP(b_shift_right, OP_ASSIGN); }
-"<<="	{ MAKE_OP(b_shift_left, OP_ASSIGN); }
+"+="	{ return ASSIGN_ADD; }
+"&="	{ return ASSIGN_BIT_AND; }
+"|="	{ return ASSIGN_BIT_OR; }
+"^="	{ return ASSIGN_BIT_XOR; }
+"/="	{ return ASSIGN_DIV; }
+"*="	{ return ASSIGN_MUL; }
+"%="	{ return ASSIGN_REM; }
+"&&="	{ return ASSIGN_SC_AND; }
+"||="	{ return ASSIGN_SC_OR; }
+"<<="	{ return ASSIGN_SHL; }
+">>="	{ return ASSIGN_SHR; }
+"-="	{ return ASSIGN_SUB; }
+"^^="	{ return ASSIGN_XOR; }
 "="	{ return ASSIGN; }
 "=="	{ return EQ; }
-"!="	{ return NE; }
-"<"	{ return LT; }
-"<="	{ return LE; }
-">"	{ return GT; }
 ">="	{ return GE; }
+">"	{ return GT; }
+"<="	{ return LE; }
+"<"	{ return LT; }
+"!="	{ return NE; }
 "<<"	{ return SHIFT_LEFT; }
 ">>"	{ return SHIFT_RIGHT; }
-"++"    { MAKE_OP(b_add, INCREMENTER); }
-"--"    { MAKE_OP(b_subtract, INCREMENTER); }
-"'"	{ return QUOTE; }
+"--"    { return DECREMENT; }
+"++"    { return INCREMENT; }
+
 "@"	{ return '@'; }
+"'"	{ return QUOTE; }
 "=>"    { return PATTERN_MATCH; }
 "_"     { return SINK; }
 "..."   { return ELLIPSIS; }
 
-\?\\(x{HEXDIGIT}{HEXDIGIT}|{OCTDIGIT}{OCTDIGIT}?{OCTDIGIT}?|.) {
+\?\\(x{HEXDIGIT}{HEXDIGIT}|{OCTDIGIT}{OCTDIGIT}?{OCTDIGIT}?|{CHAR_NAME}|.) {
           char c;
-          convert_escape_char(yytext + 2, &c);
+          const char *text = yytext + 2;
+          if (!convert_escape_char(&text, &c))
+            yyterminate();
+          assert(*text == 0);
           yylval.integer = (unsigned char)c;
           return INTEGER;
         }
 
 \?.	{
 	  yylval.integer = (unsigned char)yytext[1];
+          if (strchr("({[]})\"\\", yylval.integer) != NULL)
+            {
+              compile_error("'?%c' must be written '?\\%c'",
+                            yylval.integer, yylval.integer);
+              yyterminate();
+            }
           return INTEGER;
 	}
 
--?({DIGIT}+|0[xX]{HEXDIGIT}+) {
+{DIGIT}+|0[xX]{HEXDIGIT}+ {
 	  if (!mudlle_strtoint(yytext, &yylval.integer))
-            { 
+            {
 	      compile_error("integer constant out of bounds");
               yyterminate();
             }
 	  else
-            return INTEGER; 
+            return INTEGER;
 	}
 
-0[fF]{HEXDIGIT}+ { 
-	  if (strlen(yytext) != 2 + 16)
-	    compile_error("0f-floats must consist of exactly 16 hex digits");
-	  else if (!mudlle_strtofloat(yytext, &yylval.mudlle_float))
+0[xX]({HEXDIGIT}+(\.{HEXDIGIT}*)?|\.{HEXDIGIT}+)[pP][-+]?{DIGIT}+ {
+          if (!mudlle_strtofloat(yytext, &yylval.mudlle_float))
 	    compile_error("illegal floating point number");
 	  else
-	    return FLOAT; 
+	    return FLOAT;
           yyterminate();
 	}
 
@@ -208,7 +233,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
 	  return BIGINT;
         }
 
--?{DIGIT}+(({DECIM}{EXP}?)|{EXP}) {
+{DIGIT}+(({DECIM}{EXP}?)|{EXP}) {
           if (!mudlle_strtofloat(yytext, &yylval.mudlle_float))
             {
 	      compile_error("illegal floating point number");
@@ -222,32 +247,33 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
           char *str = yylval.string.str =
             allocate(parser_memory, strlen(yytext));
           const char *text = yytext + 1;
-          
+
           while (*text)
             if (*text == '\\')
               {
-                char c;
-
                 if (text[1] == '\n')
                   {
                     text += 2;
-                    lineno++;
                   }
                 else
                   {
-                    text += convert_escape_char(text + 1, &c) + 1;
+                    ++text;
+                    char c;
+                    if (!convert_escape_char(&text, &c))
+                      yyterminate();
                     *str++ = c;
                   }
               }
             else
               *str++ = *text++;
-          
+
           *--str = '\0';
           yylval.string.len = str - yylval.string.str;
+          yylloc.last_line = yylineno;
           return STRING;
 	}
 
-{GLOBAL_PREFIX}?{SYMBOL_NAME} { 
+{GLOBAL_PREFIX}?{SYMBOL_NAME} {
           for (int i = 0; i < NKEYWORDS; i++)
             if (stricmp(yytext, keywords[i].name) == 0)
               return keywords[i].value;
@@ -255,12 +281,18 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
           size_t size = strlen(yytext) + 1;
           yylval.symbol = allocate(parser_memory, size);
           memcpy(yylval.symbol, yytext, size);
+
           bool global = strncmp(yytext, GLOBAL_ENV_PREFIX,
                                 strlen(GLOBAL_ENV_PREFIX)) == 0;
           return global ? GLOBAL_SYMBOL : SYMBOL;
         }
 
-.	{ 
+\"      {
+          compile_error("unterminated string constant");
+          yyterminate();
+        }
+
+.	{
           int c = (unsigned char)yytext[0];
           if (isprint(c))
             compile_error("bad character %c (%#02x)", c, c);
@@ -268,7 +300,7 @@ SYMBOL_NAME     [a-zA-Z][a-zA-Z0-9$_:?!]*
             compile_error("bad character %#02x", c);
           yyterminate();
         }
-                      
+
 
 %%
 
@@ -287,7 +319,7 @@ static int string_read(char *abuf, int max_size)
 }
 
 
-void read_from_file(FILE *f, const char *name)
+void read_from_file(FILE *f, const char *afilename, const char *anicename)
 {
   if (!mbuf)
     {
@@ -297,15 +329,16 @@ void read_from_file(FILE *f, const char *name)
   else
     {
       yyrestart(f);
-      
     }
 
   line_read = false;
-  lineno = 1;
-  filename = name;
+  yylineno = 1;
+  lexer_filename = afilename;
+  lexer_nicename = anicename;
 }
 
-void read_from_string(const char *str, const char *name)
+void read_from_string(const char *str, const char *afilename,
+                      const char *anicename)
 {
   if (!mbuf)
     {
@@ -319,19 +352,14 @@ void read_from_string(const char *str, const char *name)
   line_read = true;
   line = str;
   length = strlen(line);
-  lineno = 0;
-  filename = name ? name : "<string>";
+  yylineno = 0;
+  lexer_filename = afilename ? afilename : "<string>";
+  lexer_nicename = anicename ? anicename : "<string>";
 }
 
-void dummy_function_lexer_l(void)
+static bool convert_escape_char(const char **textp, char *result)
 {
-  /* removes warning about yyunput being unused */
-  volatile void *x = yyunput;
-  (void)x;
-}
-
-size_t convert_escape_char(const char *text, char *result)
-{
+  const char *text = *textp;
   switch (text[0])
     {
     case 'a': *result = '\a'; break;
@@ -351,8 +379,35 @@ size_t convert_escape_char(const char *text, char *result)
           n = n * 8 | (text[i] - '0');
         }
       *result = n;
-      return i;
+      *textp += i;
+      return true;
     }
+    case 'N':
+      {
+        if (text[1] != '{')
+          {
+            compile_error("\\N must be followed by left curly bracket ({)");
+            return false;
+          }
+        text += 2;
+        const char *end;
+        for (end = text; *end != '}'; ++end)
+          if (*end == 0 || *end == '\n')
+            {
+              compile_error("unterminated \\N character name");
+              return false;
+            }
+
+        int c = lookup_named_character(text, end - text);
+        if (c < 0)
+          {
+            compile_error("unknown named character");
+            return false;
+          }
+        *result = c;
+        *textp = end + 1;
+        return true;
+      }
     case 'x':
       if (isxdigit(text[1]) && isxdigit(text[2]))
         {
@@ -368,12 +423,18 @@ size_t convert_escape_char(const char *text, char *result)
           else
             n += c - 'A' + 10;
           *result = n;
-          return 3;
+          *textp += 3;
+          return true;
         }
-      /* fallthrough */
+      else
+        {
+          compile_error("invalid hexadecimal character constant");
+          return false;
+        }
     default:
       *result = text[0];
       break;
     }
-  return 1;
+  ++*textp;
+  return true;
 }

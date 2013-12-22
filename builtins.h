@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -31,10 +31,10 @@ void interpreter_invoke(void);
 /* Enter the interpreter from a machine code function */
 
 /* Builtins for operations */
-void bsubtract(void), bor(void), band(void), bleq(void), 
-  blne(void), bllt(void), blle(void), blgt(void), blge(void), bbitor(void), 
-  bbitxor(void), bbitand(void), bshift_left(void), bshift_right(void), 
-  badd(void), bmultiply(void), bdivide(void), bremainder(void), bnegate(void), 
+void bsubtract(void), bor(void), band(void), bleq(void),
+  blne(void), bllt(void), blle(void), blgt(void), blge(void), bbitor(void),
+  bbitxor(void), bbitand(void), bshift_left(void), bshift_right(void),
+  badd(void), bmultiply(void), bdivide(void), bremainder(void), bnegate(void),
   bnot(void), bbitnot(void), bref(void),
   bcar(void), bcdr(void), bwglobal(void);
 
@@ -72,16 +72,16 @@ void flush_icache(ubyte *from, ubyte *to);
 #ifdef i386
 
 void bshift_left(), bshift_right(), badd(), bmultiply(), bdivide(), btypeof(),
-  bremainder(), bref(), bset(), bwglobal(), bcleargc(), bvarargs(), bcall(), 
-  balloc_variable(), balloc_cons(), balloc_closure(), bcall_primitive(), 
-  bcall_primitive_leaf(), bcall_primitive_leaf_noalloc(), bcall_secure(), 
+  bremainder(), bref(), bset(), bwglobal(), bcleargc(), bvarargs(), bcall(),
+  balloc_variable(), balloc_cons(), balloc_closure(), bcall_primitive(),
+  bcall_primitive_leaf(), bcall_primitive_leaf_noalloc(), bcall_secure(),
   bcall_varargs(),  bapply_varargs(),
-  berror_bad_function(), berror_stack_underflow(), 
-  berror_bad_type(), berror_divide_by_zero(), berror_bad_index(), 
-  berror_bad_value(), berror_variable_read_only(), berror_loop(), 
-  berror_recurse(), berror_wrong_parameters(), berror_security_violation(), 
+  berror_bad_function(), berror_stack_underflow(),
+  berror_bad_type(), berror_divide_by_zero(), berror_bad_index(),
+  berror_bad_value(), berror_variable_read_only(), berror_loop(),
+  berror_recurse(), berror_wrong_parameters(), berror_security_violation(),
   berror_value_read_only(), berror_user_interrupt(), berror_no_match(),
-  berror_compile(),
+  berror_compile(), berror_abort(),
   bcleargc0(void), bcleargc1(void), bcleargc2(void);
 
 #endif

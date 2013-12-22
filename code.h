@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -60,31 +60,35 @@ enum {
   op_execute_global1,		/* arg2 is global offset */
   op_execute_global2,		/* arg2 is global offset */
   op_argcheck,			/* arg1 is # of parameters expected */
-  op_varargs,			/* arg0. Makes vector of arguments -> local var 0 */
+  op_varargs,			/* arg0. Makes vector of args -> local var 0 */
   op_discard,			/* arg0. Pop top of stack (discard result) */
   op_pop_n,			/* arg1. Pop n stack entries */
-  op_exit_n,			/* arg1. Pop top of stack, pop n entries, push old top of stack */
+  op_exit_n,			/* arg1. Pop top of stack, pop n
+                                   entries, push old top of stack */
   op_dup,			/* arg0. Duplicate top of stack */
   /* All branch instructions must be consecutive, with the 1 byte version
      immediately preceding the 2 byte one.
      op_branch1 must be the first branch */
-  op_branch1,			/* arg1 is signed offset from next instruction */
-  op_branch2,			/* arg2 is signed offset from next instruction */
-  op_loop1,			/* arg1 is signed offset from next instruction */
-  op_loop2,			/* arg2 is signed offset from next instruction */
-  op_branch_nz1,		/* arg1 is signed offset from next instruction */
-  op_branch_nz2,		/* arg2 is signed offset from next instruction */
-  op_branch_z1,			/* arg1 is signed offset from next instruction */
-  op_branch_z2,			/* arg2 is signed offset from next instruction */
+  op_branch1,			/* arg1 is signed offset from next instr */
+  op_branch2,			/* arg2 is signed offset from next instr */
+  op_loop1,			/* arg1 is signed offset from next instr */
+  op_loop2,			/* arg2 is signed offset from next instr */
+  op_branch_nz1,		/* arg1 is signed offset from next instr */
+  op_branch_nz2,		/* arg2 is signed offset from next instr */
+  op_branch_z1,			/* arg1 is signed offset from next instr */
+  op_branch_z2,			/* arg2 is signed offset from next instr */
 
-  op_clear_local,		/* arg1 is # of local variable to set to null */
-  /* variable operations, which come in local_var, closure_var, global_var
-     flavours, and take an arg1 (local, closure) or arg2 (global) indicating the
-     offset in the corresponding variable list */
+  op_clear_local,		/* arg1 is # of local var to set to null */
+  /* variable operations, which come in local_var, closure_var,
+     global_var flavours, and take an arg1 (local, closure) or arg2
+     (global) indicating the offset in the corresponding variable
+     list */
   op_recall,
   op_assign = op_recall + global_var + 1,
 				/* arg2 is # of global variable */
-  op_closure_var = op_assign + global_var + 1,
+  op_vref =  op_assign + global_var + 1,
+
+  op_closure_var = op_vref + global_var + 1,
   /* Note: No global vars in closures ... */
 
   op_define = op_closure_var + closure_var + 1,
@@ -103,6 +107,10 @@ enum {
   op_builtin_bitand,
   op_builtin_bitor,
   op_builtin_not,
+
+  op_typeset_check,             /* arg1 is stack offset. Pop top of stack (an
+                                   integer) and make sure variable indicated by
+                                   arg1 is of a type therein. */
 
   op_typecheck			/* typecheck i: op_typecheck + i
 				   arg1 is stack offset */

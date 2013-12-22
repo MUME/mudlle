@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,7 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#  include "options.h"
+#  include "../options.h"
 
 #ifdef USE_XML
 
@@ -28,8 +28,10 @@
 #include <string.h>
 #include <libxml/xmlreader.h>
 
+#include "../ports.h"
+#include "../table.h"
+
 #include "runtime.h"
-#include "table.h"
 #include "xml.h"
 
 static struct vector *zero_vector;
@@ -44,7 +46,7 @@ static char *strdup_utf8(const xmlChar *xmlstr)
   if (xmlstr == NULL)
     return NULL;
 
-  
+
   ilen = strlen((const char *)xmlstr);
   olen = ilen * 2;
   result = malloc(olen + 1);
@@ -90,9 +92,9 @@ static struct {
   int line;
 } xml_error;
 
-static void xml_error_handler(void *arg, 
-                              const char *msg, 
-                              xmlParserSeverities severity, 
+static void xml_error_handler(void *arg,
+                              const char *msg,
+                              xmlParserSeverities severity,
                               xmlTextReaderLocatorPtr locator)
 {
   xml_error.uri  = strdup_utf8(xmlTextReaderLocatorBaseURI(locator));
@@ -121,10 +123,9 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
        " an error string. `t is the name table, or NULL.",
       3, (struct string *mfilename, value mflags,
            struct table *name_table), LVL_IMPLEMENTOR, 0,
-       "snx.x")
+       "sn[tu].[vs]")
 {
   struct vector *xmlstack = NULL, *node = NULL;
-  struct gcpro gcpro1, gcpro2, gcpro3;
   const char *error = NULL;
   char *filename;
   int flags;
@@ -134,7 +135,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
 
   TYPEIS(mfilename, type_string);
   flags = GETINT(mflags);
-  
+
   LOCALSTR(filename, mfilename);
 
   reader = xmlReaderForFile(filename, NULL, flags);
@@ -154,7 +155,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
     {
       value mdepth = makeint(xmlTextReaderDepth(reader));
       int node_type = xmlTextReaderNodeType(reader);
-      int nattrs, i;
+      int nattrs;
       char *name;
       struct symbol *name_symbol;
 
@@ -190,7 +191,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
       nattrs = xmlTextReaderAttributeCount(reader);
       SET_VECTOR(node, xmlnode_attributes,
                  nattrs ? alloc_vector(nattrs) : zero_vector);
-      for (i = 0; i < nattrs; ++i)
+      for (int i = 0; i < nattrs; ++i)
         {
           struct list *pair = alloc_list(NULL, NULL);
           struct gcpro gcpro4;
@@ -283,7 +284,7 @@ void xml_init(void)
   assert(xml_utf16_encoder != NULL);
 
   DEFINE(xml_read_file);
-  
+
   DEFINE_INT(XML_PARSE_RECOVER);
   DEFINE_INT(XML_PARSE_NOENT);
   DEFINE_INT(XML_PARSE_DTDLOAD);

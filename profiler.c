@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -21,13 +21,15 @@
 
 /* A profiler for mudlle, based on the dump files */
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <unistd.h>
 
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include "alloc.h"
 #include "types.h"
 
 #undef calloc
@@ -118,7 +120,7 @@ static ubyte *primitive_scan(ubyte *ptr, ubyte *end)
   if (ptr == end) return ptr;
   obj = (struct obj *)ptr;
 
-  ptr += ALIGN(obj->size, sizeof(value));
+  ptr += MUDLLE_ALIGN(obj->size, sizeof(value));
   switch (obj->type)
     {
     case type_primitive: case type_secure: case type_varargs:
@@ -151,8 +153,8 @@ void profile_primitives(int show_unused)
 
 struct pm
 {
-  char *varname;
-  char *filename;
+  const char *varname;
+  const char *filename;
   int lineno;
   ulong instructions;
   ulong calls;
@@ -190,34 +192,33 @@ int order_mudlle_ratio(const void *_p1, const void *_p2)
 static ubyte *mudlle_scan(ubyte *ptr, ubyte *end, int show_unused)
 {
   struct obj *obj;
-  struct code *code;
 
   while (ptr < end && *(ulong *)ptr == 0) ptr += sizeof(ulong);
   if (ptr == end) return ptr;
   obj = (struct obj *)ptr;
 
-  ptr += ALIGN(obj->size, sizeof(value));
+  ptr += MUDLLE_ALIGN(obj->size, sizeof(value));
   switch (obj->type)
     {
-    case type_code:
-      code = (struct code *)obj;
+    case type_code: ;
+      struct icode *code = (struct icode *)obj;
       if (code->call_count > 0 || show_unused)
 	{
 	  extend_info_mudlle();
-	  if (code->varname)
+	  if (code->code.varname)
 	    info_mudlle[info_mudlle_used].varname =
-	      ((struct string *)cp(code->varname))->str;
+	      ((struct string *)cp(code->code.varname))->str;
 	  else
 	    info_mudlle[info_mudlle_used].varname = "<fn>";
 	  info_mudlle[info_mudlle_used].filename =
-	    ((struct string *)cp(code->filename))->str;
-	  info_mudlle[info_mudlle_used].lineno = code->lineno;
+	    ((struct string *)cp(code->code.filename))->str;
+	  info_mudlle[info_mudlle_used].lineno = code->code.lineno;
 	  info_mudlle[info_mudlle_used].instructions = code->instruction_count;
 	  info_mudlle[info_mudlle_used].calls = code->call_count;
 	  if (code->call_count > 0)
 	    info_mudlle[info_mudlle_used].ratio =
 	      code->instruction_count / code->call_count;
-	  else 
+	  else
 	    info_mudlle[info_mudlle_used].ratio = 0;
 	}
       break;
@@ -261,16 +262,14 @@ void profile_mudlle(int show_unused, int sort_method)
 
 int main(int argc, char **argv)
 {
-  extern char *optarg;
-  extern int optind;
-  int primitives = false, mudlle = false, unused = false, c;
+  int prims = false, mudlle = false, unused = false, c;
   int sort_method = 1;
 
   while ((c = getopt(argc, argv, "pmu123")) != -1)
     switch (c)
       {
-      case 'p': 
-	primitives = true;
+      case 'p':
+	prims = true;
 	break;
       case 'm':
 	mudlle = true;
@@ -286,10 +285,10 @@ int main(int argc, char **argv)
 	return 2;
       }
 
-  if (!primitives && !mudlle) primitives = mudlle = true;
+  if (!prims && !mudlle) prims = mudlle = true;
 
   load_profile_data();
 
-  if (primitives) profile_primitives(unused);
+  if (prims) profile_primitives(unused);
   if (mudlle) profile_mudlle(unused, sort_method);
 }

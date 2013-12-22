@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -28,7 +28,6 @@ struct env *alloc_env(ulong size)
 /* Returns: A new environment, of initial size size, initialised to NULL.
 */
 {
-  struct gcpro gcpro1;
   struct env *newp = (struct env *)allocate_record(type_internal, 3);
   value tmp;
 
@@ -53,8 +52,6 @@ void env_reserve(struct env *env, ulong n)
     {
       ulong newsize = 2 * size + n;
       struct vector *newp;
-      struct gcpro gcpro1;
-
       GCPRO1(env);
       newp = alloc_vector(newsize);
       memcpy(newp->data, env->values->data, size * sizeof(value));
@@ -71,7 +68,6 @@ ulong env_add_entry(struct env *env, value v)
 */
 {
   ulong used = intval(env->used);
-  struct gcpro gcpro1, gcpro2;
 
   GCCHECK(v); GCCHECK(env);
   GCPRO2(v, env);
@@ -87,8 +83,6 @@ ulong env_add_entry(struct env *env, value v)
 void print_env(struct oport *f, struct env *env)
 {
   ulong used = intval(env->used), i;
-  struct gcpro gcpro1;
-
   GCPRO1(env);
   for (i = 0; i < used; i++)
     {

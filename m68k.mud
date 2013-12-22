@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -66,13 +66,13 @@ m68k:il_offset = 4; // instruction offset (int)
 
 m68k:i_type = 0; // type of instruction (add, subtract, etc)
 m68k:i_size = 1; // size of instruction (byte, word, longword)
-m68k:i_arg1 = 2; // most instructions: 1 or 2 arguments 
+m68k:i_arg1 = 2; // most instructions: 1 or 2 arguments
 m68k:i_arg2 = 3; // (effective address-style)
 m68k:i_cond = 2; // branch condition
 m68k:i_label = 3; // branch label
 
 // an effective address
-m68k:ea_class = 0; // type of ea 
+m68k:ea_class = 0; // type of ea
 
 // lregister
  m68k:er_reg = 1; // register number
@@ -182,7 +182,7 @@ generating 68k instructions" ()
       fcode[0] = pos;
     ];
 
-  
+
   ins_index = 0;
   add_ins = fn (fcode, ins)
     // Types: fcode : 68kcode
@@ -192,7 +192,7 @@ generating 68k instructions" ()
     //   Clears the current label
     [
       | newins |
-      
+
       // Add instruction
       newins = vector(fcode[1], ins, null, ins_index = ins_index + 1, 0);
 
@@ -206,7 +206,7 @@ generating 68k instructions" ()
       //   added.
       if (fcode[0] == null) fcode[0] = dcons!(newins, null)
       else dcons!(newins, fcode[0]); // insert before fcode[0]
-      
+
       // Set label if any
       if (fcode[1]) fcode[1][m68k:l_ins] = newins;
       fcode[1] = false;
@@ -251,13 +251,13 @@ generating 68k instructions" ()
 	  else fail()
       ]
     else vector(type, arg);
-  
+
   // actual instructions:
   // and, andimm, compareimm, jump, move, branch, compare, jsr, exchange, rts
 
   m68k:rts = fn (fcode)
     add_ins(fcode, vector(m68k:ins_rts, m68k:slongword, null, null));
-			  
+
   m68k:andimm = fn (fcode, size, val, eatype, earg)
     add_ins(fcode, vector(m68k:ins_and, size,
 			  make_ea(m68k:limmediate, val),
@@ -329,7 +329,7 @@ generating 68k instructions" ()
   m68k:new_label = fn "68kcode -> label. Returns a new unassigned label in 68kcode"
     (fcode)
       vector(false, false, label_index = label_index + 1);
-  
+
   m68k:label = fn "68kcode label -> . Makes label point at the next instruction to\n\
 be generated in 68kcode" (fcode, label)
       [
@@ -359,7 +359,7 @@ be generated in 68kcode" (fcode, label)
   m68k:ins_list = fn "68kcode -> . Prints instruction list" (fcode)
     [
       | scan, ilist |
-      
+
       ilist = fcode[0];
       scan = ilist;
       loop
@@ -367,8 +367,8 @@ be generated in 68kcode" (fcode, label)
 	  | il |
 	  il = dget(scan);
 	  if (il[m68k:il_label])
-	    display(format("%s:", m68k:slabel(il[m68k:il_label])));
-	  display(format("\t(%s) ", il[m68k:il_number]));
+	    dformat("%s:", m68k:slabel(il[m68k:il_label]));
+	  dformat("\t(%s) ", il[m68k:il_number]);
 	  m68k:print_ins(il[m68k:il_ins]);
 	  newline();
 	  scan = dnext(scan);
@@ -380,8 +380,8 @@ be generated in 68kcode" (fcode, label)
     [
       | class |
       class = ins[m68k:i_type];
-      display(format("%s.%s ", '["cmp" "jmp" "jsr" "bra" "exg" "rts" "move" "and" "clr" "add" "sub"][class],
-		     '["b" "w" "l"][ins[m68k:i_size]]));
+      dformat("%s.%s ", '["cmp" "jmp" "jsr" "bra" "exg" "rts" "move" "and" "clr" "add" "sub"][class],
+		     '["b" "w" "l"][ins[m68k:i_size]]);
       if (class == m68k:ins_compare || class == m68k:ins_and ||
 	  class == m68k:ins_exchange || class == m68k:ins_move ||
 	  class == m68k:ins_add || class == m68k:ins_subtract)
@@ -393,10 +393,10 @@ be generated in 68kcode" (fcode, label)
       else if (class == m68k:ins_jump || class == m68k:ins_jsr || class == m68k:ins_clr)
 	print_ea(ins[m68k:i_arg1])
       else if (class == m68k:ins_branch)
-	display(format("%s,%s",
+	dformat("%s,%s",
 		       '["always" "never" "hi" "ls" "cc" "cs" "ne" "eq" "nv" "ov"
 			 "pl" "mi" "ge" "lt" "gt" "le"][ins[m68k:i_cond]],
-		       m68k:slabel(ins[m68k:i_label])));
+		       m68k:slabel(ins[m68k:i_label]));
     ];
 
   rnames = '["d0" "d1" "d2" "d3" "d4" "d5" "d6" "d7"
@@ -410,21 +410,21 @@ be generated in 68kcode" (fcode, label)
       if (class == m68k:lregister)
         display(rnames[ea[m68k:er_reg]])
       else if (class == m68k:lindexed)
-	display(format("%s(%s)", ea[m68k:ei_offset], rnames[ea[m68k:ei_reg]]))
+	dformat("%s(%s)", ea[m68k:ei_offset], rnames[ea[m68k:ei_reg]])
       else if (class == m68k:limmediate)
-	display(format("#%s", ea[m68k:ek_value]))
+	dformat("#%s", ea[m68k:ek_value])
       else if (class == m68k:lconstant)
-	display(format("'%s", ea[m68k:ec_value]))
+	dformat("'%s", ea[m68k:ec_value])
       else if (class == m68k:lbuiltin)
-	display(format("builtin[%s]", ea[m68k:eb_builtin]))
+	dformat("builtin[%s]", ea[m68k:eb_builtin])
       else if (class == m68k:lfunction)
-        display(format("function[%s]", ea[m68k:ef_function][mc:c_fnumber]))
+        dformat("function[%s]", ea[m68k:ef_function][mc:c_fnumber])
       else if (class == m68k:lglobal)
-	display(format("global[%s]", ea[m68k:eg_name]))
+	dformat("global[%s]", ea[m68k:eg_name])
       else if (class == m68k:lglobal_offset)
-	display(format("wglobal[%s]", ea[m68k:eg_name]))
+	dformat("wglobal[%s]", ea[m68k:eg_name])
       else if (class == m68k:lglobal_constant)
-	display(format("kglobal[%s]", ea[m68k:eg_name]))
+	dformat("kglobal[%s]", ea[m68k:eg_name])
       else [ display(class); newline() ]
     ];
 

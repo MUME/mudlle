@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -20,7 +20,7 @@
  */
 
 library phase4 // Phase 4: code generation
-requires system, sequences, misc, graph, compiler, vars, ins3, mp, 
+requires system, sequences, misc, graph, compiler, vars, ins3, mp,
   flow, phase3, optimise
 defines mc:phase4
 reads mc:verbose
@@ -111,14 +111,20 @@ writes mc:lineno
 	      ins = il[mc:il_ins];
 	      class = ins[mc:i_class];
 
-	      if (class == mc:i_call)
+	      if (class == mc:i_call
+                  || (class == mc:i_branch &&
+                      (ins[mc:i_bop] == mc:branch_equal
+                       || ins[mc:i_bop] == mc:branch_nequal)))
 		[
 		  | survive_call |
 
 		  // everything live after the call (except the result)
 		  // belongs either in notspilt or in spilt
-		  clear_bit!(survive_call = bcopy(live_out),
-			     ins[mc:i_cdest][mc:v_number]);
+                  if (class == mc:i_call)
+                    clear_bit!(survive_call = bcopy(live_out),
+                               ins[mc:i_cdest][mc:v_number])
+                  else
+                    survive_call = live_out;
 		  bdifference!(temps, survive_call);
 		  bdifference!(locals, survive_call);
 		  bforeach
@@ -134,12 +140,12 @@ writes mc:lineno
 	      else
 		[
 		  | survives |
-		  
+
 		  // if live on the way in & out then can't be temp
 		  // this misses some possible scratch vars (and
 		  // makes register allocation for them rather pointless),
 		  // but is the simplest test
-		  
+
 		  // operations that imply allocation use scratch regs
 		  if (class == mc:i_closure ||
 		      class == mc:i_compute && ins[mc:i_aop] == mc:b_cons)
@@ -152,14 +158,14 @@ writes mc:lineno
 		  bdifference!(temps, survives);
 		]
 	    ];
-	  
+
 	  // assume everything is a temp, and migrate it as forced
 	  notspilt = mc:new_varset(ifn);
 	  spilt = bcopy(notspilt);
 	  locals = bcopy(notspilt);
 	  bvars = mc:set_vars!(bcopy(notspilt), vars);
 	  temps = bcopy(bvars);
-	  
+
 	  graph_nodes_apply(fn (n) mc:rscan_live(group, null, graph_node_get(n)),
 			    cdr(ifn[mc:c_fvalue]));
 
@@ -171,7 +177,7 @@ writes mc:lineno
 
 	  vector(notspilt, spilt, locals, temps);
 	];
-      
+
       easy_spill = fn (vars, bvars)
 	[
 	  | v |
@@ -194,11 +200,11 @@ writes mc:lineno
 	  else
 	    false
 	];
-      
+
       spill = fn (vars, bvars)
 	[
 	  | v |
-	  
+
 	  // spill first unallocated variable
 	  if (v = lexists?(fn (v) !v[mc:v_location], vars))
 	    [
@@ -209,7 +215,7 @@ writes mc:lineno
 	  else
 	    false
 	];
-      
+
       colour_order = vector(0, 0, 0);
       colour_graph = fn (vars, bvars, regtype, nregs)
 	// Types: vars: list of var
@@ -228,12 +234,12 @@ writes mc:lineno
 	  loop
 	    [
 	      | v |
-	      
+
 	      // look for a node of vars with less than nregs neighbours
 	      v = lexists?(fn (v) !v[mc:v_location] &&
 			     bcount(bintersection(v[mc:v_neighbours], bvars)) < nregs,
 			   vars);
-	      
+
 	      if (!v) exit bempty?(bvars);
 
 	      count = count + 1;
@@ -244,19 +250,19 @@ writes mc:lineno
 	      colour_order[regtype] = colour_order[regtype] + 1;
 	    ]
 	];
-      
+
       select_colours = fn (vars, regtype, nregs)
 	// Types: vars: list of var
 	//        regtype: mc:reg_xxx
 	//        nregs: int
 	// Effects: Selects colours for the variables of the interference
-	//   graph, of type regtype. nregs variables of that type are 
+	//   graph, of type regtype. nregs variables of that type are
 	//   assumed available.
 	//   This function is called once all variables have been allocated
 	//   with colour_graph or spilled.
 	[
 	  | ovars, i, nused, allocated |
-	  
+
 	  nused = -1;
 	  // Find order of variables for given type
 	  i = colour_order[regtype];
@@ -264,43 +270,43 @@ writes mc:lineno
 	  lforeach(fn (var)
 		  [
 		    | vloc |
-			      
+
 		    vloc = var[mc:v_location];
 		    if (vloc[mc:v_lclass] == mc:v_lregister &&
 			vloc[mc:v_lrtype] == regtype)
 		      ovars[vloc[mc:v_lrnumber]] = var
 		  ], vars);
-	  
+
 	  // Allocate variables in order from highest to lowest
 	  // (reverse of graph-removal order)
 	  // nodes are marked once they have been allocated
-	  
+
 	  allocated = mc:new_varset(ifn);
 	  while (i > 0)
 	    [
 	      | var, colours, colour |
-	      
+
 	      var = ovars[i = i - 1];
 	      // choose lowest available colour
 	      colours = make_string(nregs);
 	      string_fill!(colours, true);
-	      
+
 	      // remove colours used by allocated neighbours
 	      bforeach
 		(fn (nneighbour)
 		   colours[map[nneighbour][mc:v_location][mc:v_lrnumber]] = false,
 		 bintersection(allocated, var[mc:v_neighbours]));
-	      
+
 	      colour = 0;
 	      while (!colours[colour]) colour = colour + 1;
 	      var[mc:v_location][mc:v_lrnumber] = colour;
 	      set_bit!(allocated, var[mc:v_number]); // var is now allocated
 	      if (colour > nused) nused = colour;
 	    ];
-	  
+
 	  nused + 1
 	];
-      
+
       select_spill = fn (vars, maxspill)
 	// Types: vars: list of var
 	//        maxspill: int
@@ -311,40 +317,40 @@ writes mc:lineno
 	//   with colour_graph or spilled.
 	[
 	  | allocate_spill, nspilled, allocated |
-	  
+
 	  nspilled = -1;
 	  allocate_spill = fn (var)
 	    [
 	      | colours, colour |
-	      
+
 	      colours = make_string(maxspill);
 	      string_fill!(colours, true);
-	      
+
 	      // remove colours used by allocated neighbours
 	      bforeach
 		(fn (nneighbour)
 		   colours[map[nneighbour][mc:v_location][mc:v_lsoffset]] = false,
 		 bintersection(allocated, var[mc:v_neighbours]));
-	      
+
 	      colour = 0;
 	      while (!colours[colour]) colour = colour + 1;
 	      var[mc:v_location][mc:v_lsoffset] = colour;
 	      set_bit!(allocated, var[mc:v_number]); // var is now allocated
 	      if (colour > nspilled) nspilled = colour;
 	    ];
-	  
+
 	  // Allocate all spilled variables, in an arbitrary order
 	  allocated = mc:new_varset(ifn);
 	  lforeach(fn (var)
 		  [
 		    | vloc |
-			      
+
 		    vloc = var[mc:v_location];
 		    if (vloc[mc:v_lclass] == mc:v_lspill &&
 			vloc[mc:v_lrtype] == mc:spill_spill)
 		      allocate_spill(var)
 		  ], vars);
-	  
+
 	  nspilled + 1
 	];
 
@@ -355,11 +361,11 @@ writes mc:lineno
       nscratch = mp:nscratch(ifn);
       ncaller = mp:ncaller(ifn);
       ncallee = mp:ncallee(ifn);
-      
+
       // first nregargs are in registers
       spiltargs = mc:new_varset(ifn);
       mc:set_vars!(spiltargs, nth_pair(nregargs + 1, ifn[mc:c_fargs]));
-      
+
       vars = make_igraph(ifn);
       // separate variables into 4 groups:
       //   0: notspilt: those that live across procedure calls and are not spilled
@@ -374,11 +380,10 @@ writes mc:lineno
 
       if (mc:verbose >= 3)
 	[
-	  display(format("AVAILABLE: scratch: %s, caller: %s callee: %s",
-			 nscratch, ncaller, ncallee));
-	  newline();
+	  dformat("AVAILABLE: scratch: %s, caller: %s callee: %s\n",
+			 nscratch, ncaller, ncallee);
 	];
-      
+
       // Do scratch registers first, as they should normally all
       // be successful
       if (!colour_graph(temps, groups[3], mc:reg_scratch, nscratch))
@@ -398,7 +403,7 @@ writes mc:lineno
 		exit<allocate_locals> 0;
 	      if (!changes) exit 0
 	    ];
-	      
+
 	  // spill somebody, preferably already spilled
 	  // beyond that, the heuristic needs much more thought
 	  // (e.g. which is better: spill long-lived or short-lived vars ?)
@@ -424,7 +429,7 @@ writes mc:lineno
 
 	      if (!changes) exit 0;
 	    ];
-	  
+
 	  // spill somebody, preferably already spilled
 	  // beyond that, the heuristic needs much more thought
 	  // (e.g. which is better: spill long-lived or short-lived vars ?)
@@ -439,35 +444,33 @@ writes mc:lineno
 	       select_spill(vars, llength(ifn[mc:c_flocals])));
       if (mc:verbose >= 3)
 	[
-	  display(format("USED: scratch: %s, caller: %s callee: %s, spilt %s",
-			 ainfo[0], ainfo[1], ainfo[2], ainfo[3]));
-	  newline();
+	  dformat("USED: scratch: %s, caller: %s callee: %s, spilt %s\n",
+			 ainfo[0], ainfo[1], ainfo[2], ainfo[3]);
 	];
       clear_igraph(vars);
       ainfo
     ];
-  
+
   live_copy_block = fn (il, live_in, live_out, x)
     [
       il[mc:il_live_in] = live_in;
       il[mc:il_live_out] = live_out;
     ];
-  
+
   live_copy = fn (ifn)
     graph_nodes_apply(fn (n) mc:rscan_live(live_copy_block, null, graph_node_get(n)),
 		      cdr(ifn[mc:c_fvalue]));
-  
+
   cgen_function = fn (ifn)
     // Types: ifn: intermediate function with flow graph
     // Effects: Generates the actual machine code function for ifn, and stores
     //   it in ifn[mc:c_fvalue]
     [
       | ainfo |
-      
+
       if (mc:verbose >= 2)
 	[
-	  display(format("Generating %s", mc:fname(ifn)));
-	  newline();
+	  dformat("Generating %s\n", mc:fname(ifn));
 	];
 
       mc:recompute_vars(ifn, false);
@@ -475,18 +478,17 @@ writes mc:lineno
       // Copy liveness info to instructions
       //live_copy(ifn);
       // TBD: Replace other uses of rscan_live
-      
+
       ainfo = allocate_registers(ifn);
       if (mc:verbose >= 3)
 	[
-	  display(format("ainfo is %s", ainfo));
-	  newline();
+	  dformat("ainfo is %s\n", ainfo);
 	];
       //mc:display_blocks(ifn);
       mc:flatten_blocks(ifn);
       cgen_code(ifn, ainfo);
     ];
-  
+
   cgen_code = fn (ifn, ainfo)
     [
       | code |
@@ -494,15 +496,13 @@ writes mc:lineno
       ainfo = mp:select_registers(ifn, ainfo);
       if (mc:verbose >= 3)
 	[
-	  display(format("selected ainfo is %s", ainfo));
-	  newline();
+	  dformat("selected ainfo is %s\n", ainfo);
 	];
 
       if (mc:verbose >= 4)
 	[
-	  display(format("Code of function %s(%s)",
-			 ifn[mc:c_fnumber], mc:fname(ifn)));
-	  newline();
+	  dformat("Code of function %s(%s)\n",
+			 ifn[mc:c_fnumber], mc:fname(ifn));
 	  mc:ins_list1(ifn[mc:c_fvalue]);
 	  newline();
 	];

@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -20,13 +20,13 @@
  */
 
 library flow // Data-flow analysis
-requires compiler, vars, ins3, graph, 
+requires compiler, vars, ins3, graph,
   system, dlist, sequences, misc
 defines
   mc:flow_gen, mc:flow_kill, mc:flow_in, mc:flow_out, mc:flow_map,
-  mc:flow_ambiguous, mc:scan_ambiguous, mc:flow_uses, mc:flow_copies, 
+  mc:flow_ambiguous, mc:scan_ambiguous, mc:flow_uses, mc:flow_copies,
   mc:flow_live, mc:rscan_live, mc:flow_display, mc:clear_dataflow,
-  mc:split_blocks, mc:flatten_blocks, mc:display_blocks, mc:f_ilist, 
+  mc:split_blocks, mc:flatten_blocks, mc:display_blocks, mc:f_ilist,
   mc:f_ambiguous, mc:f_uses, mc:f_copies, mc:f_live, mc:f_dvars, mc:f_types,
   mc:all_functions
 
@@ -71,7 +71,7 @@ reads mc:show_type_info, mc:verbose
 
 			block = graph_node_get(n);
 			block[mc:f_ambiguous] = block[mc:f_uses] =
-			  block[mc:f_copies] = block[mc:f_live] = 
+			  block[mc:f_copies] = block[mc:f_live] =
 			  block[mc:f_types] = false;
 		      ], cdr(ifn[mc:c_fvalue]));
 
@@ -102,14 +102,18 @@ reads mc:show_type_info, mc:verbose
 	      dcons!(il = dget(scan), block);
 	      ins = il[mc:il_ins];
 
-	      // and see if this instruction is a branch or if
-	      // next instruction has a label (block end conditions)
+	      // and see if this instruction is a branch,
+	      // unconditional trap, or if next instruction has a
+	      // label (block end conditions)
 	      scan = dnext(scan);
 	      if (scan == ilist) exit 0;
 	      ilnext = dget(scan);
 
 	      if (ins[mc:i_class] == mc:i_branch ||
-		  ilnext[mc:il_label]) exit 0
+                  ilnext[mc:il_label] ||
+                  (ins[mc:i_class] == mc:i_trap &&
+                   ins[mc:i_top] == mc:trap_always))
+                exit 0
 	    ];
 
 	  // we have a block, add it to the graph
@@ -120,11 +124,14 @@ reads mc:show_type_info, mc:verbose
 
 	  // and add an edge from the previous node if:
 	  //  - it existed
-	  //  - it did not end in an unconditional branch
+	  //  - it did not end in an unconditional branch or trap
 	  if (previous_bnode) graph_add_edge(previous_bnode, bnode, true);
 
-	  if (ins[mc:i_class] == mc:i_branch &&
-	      ins[mc:i_bop] == mc:branch_always) // no edge to next node
+	  if ((ins[mc:i_class] == mc:i_branch &&
+               ins[mc:i_bop] == mc:branch_always)
+              || (ins[mc:i_class] == mc:i_trap &&
+                  ins[mc:i_top] == mc:trap_always))
+            // no edge to next node
 	    previous_bnode = false
 	  else
 	    previous_bnode = bnode;
@@ -155,19 +162,19 @@ reads mc:show_type_info, mc:verbose
     //   Sets ifn[mc:c_fvalue] to the instruction list.
     [
       | nodes, fg, ilist |
-      
+
       fg = ifn[mc:c_fvalue];
       nodes = order_nodes(car(fg), cdr(fg));
-      
+
       while (nodes != null)
 	[
 	  ilist = dappend!(ilist, graph_node_get(car(nodes))[mc:f_ilist]);
 	  nodes = cdr(nodes);
 	];
-      
+
       ifn[mc:c_fvalue] = mc:remove_labels(mc:remove_aliases(mc:remove_branches(clear_nodes(ilist))));
     ];
-  
+
   clear_nodes = fn (ilist)
     // Types: ilist: list of instruction
     // Effects: Clears flow graph backpointers from instructions in ilist
@@ -176,7 +183,7 @@ reads mc:show_type_info, mc:verbose
       dforeach(fn (il) il[mc:il_node] = null, ilist);
       ilist
     ];
-  
+
   order_nodes = fn (entry, flow)
     // Types: entry: node, flow: graph
     // Returns: A list of the nodes of the flow-graph, in an executable
@@ -338,7 +345,9 @@ mc:flow_ambiguous = fn (ifn, rwmask)
 
 	    ins = dget(scan)[mc:il_ins];
 	    if (ins[mc:i_class] == mc:i_closure)
-	      mc:set_closure_vars!(ins, rwmask, amb);
+	      mc:set_closure_vars!(ins, rwmask, amb)
+            else if (ins[mc:i_class] == mc:i_vref)
+              set_bit!(amb, ins[mc:i_varg][mc:v_number]);
 
 	    scan = dnext(scan);
 	    if (scan == ilist) exit amb
@@ -355,7 +364,7 @@ mc:flow_ambiguous = fn (ifn, rwmask)
 			   mc:new_varset(ifn), // nothing is ever killed
 			   mc:new_varset(ifn),
 			   mc:new_varset(ifn),
-			   ifn[mc:c_fallvars]); 
+			   ifn[mc:c_fallvars]);
 		      ], cdr(fg));
 
     // equations:
@@ -380,7 +389,7 @@ mc:scan_ambiguous = fn (f, x, block, globals, rwmask)
   //        globals : bitset
   //        rwmask : int
   // Effects: Scans the instructions of the block in order, doing
-  //     x = f(ins, ambiguous, x) 
+  //     x = f(ins, ambiguous, x)
   //   at each instruction, where ambiguous is the current "ambiguous"
   //   information (represented as a bitset)
   //   rwmask is used to select the variables that are considered ambiguous:
@@ -400,7 +409,7 @@ mc:scan_ambiguous = fn (f, x, block, globals, rwmask)
 
 	il = dget(scan);
 	ins = il[mc:il_ins];
-	    
+
 	x = f(il, ambiguous, x);
 	if (ins[mc:i_class] == mc:i_closure)
 	  mc:set_closure_vars!(ins, rwmask, ambiguous);
@@ -432,7 +441,7 @@ mc:flow_uses = fn (ifn)
     new_use = fn (nv, il)
       (uindex = uindex + 1) . vmap[nv] . il;
 
-    new_use_set = fn () bclear(new_bitset(uindex));
+    new_use_set = fn () new_bitset(uindex);
     use_set = fn (uses)
       [
 	| uset |
@@ -490,7 +499,7 @@ mc:flow_uses = fn (ifn)
 
     uset = new_use_set();
     lforeach(fn (v) v[mc:v_uses] = bcopy(uset), vars);
-    
+
     while (uses != null)
       [
 	| use |
@@ -537,8 +546,7 @@ mc:flow_uses = fn (ifn)
       ];
     if (mc:verbose >= 3)
       [
-	display(format("use resolution iterations: %s", rcount));
-	newline();
+	dformat("use resolution iterations: %s\n", rcount);
       ];
     lforeach(fn (v) v[mc:v_uses] = null, vars);
   ];
@@ -555,8 +563,8 @@ mc:flow_copies = fn (ifn)
     entry = car(fg);
     cindex = -1;
     vmap = ifn[mc:c_fallvars];
-    
-    new_copy_set = fn () bclear(new_bitset(cindex));
+
+    new_copy_set = fn () new_bitset(cindex);
     copy_set = fn (copies)
       [
 	| copyset |
@@ -576,7 +584,7 @@ mc:flow_copies = fn (ifn)
 
 	ins = il[mc:il_ins];
 	class = ins[mc:i_class];
-	    
+
 	// kill copies of assigned variables
 	if (ndvar = il[mc:il_defined_var])
 	  [
@@ -591,7 +599,7 @@ mc:flow_copies = fn (ifn)
 		 ins[mc:i_adest] != dvar && car(ins[mc:i_aargs]) != dvar
 	       ], copies);
 	  ];
-	
+
 	if (class == mc:i_call && mc:call_escapes?(ins))
 	  // all ambiguous variables may be assigned
 	  copies = lfilter
@@ -603,7 +611,7 @@ mc:flow_copies = fn (ifn)
 	       bit_clear?(ambiguous, ins[mc:i_adest][mc:v_number]) &&
 	       bit_clear?(ambiguous, car(ins[mc:i_aargs])[mc:v_number])
 	     ], copies);
-	
+
 	if (class == mc:i_compute && ins[mc:i_aop] == mc:b_assign)
 	  copies = il . copies;
 
@@ -618,8 +626,8 @@ mc:flow_copies = fn (ifn)
       //   considered used.
       lmap(fn (copy) (cindex = cindex + 1) . copy,
 	   mc:scan_ambiguous(copy1, null, block, globals, mc:closure_write));
-    
-    
+
+
     // initialise data-flow problem
     globals = mc:set_vars!(mc:new_varset(ifn), ifn[mc:c_fglobals]);
     mc:set_vars!(globals, ifn[mc:c_fclosure]);
@@ -632,7 +640,7 @@ mc:flow_copies = fn (ifn)
 			all_copies = lappend(copies, all_copies);
 			block[mc:f_copies] = copies;
 		      ], cdr(fg));
-    
+
     // make map of use number to uses (all_uses is in reverse order of use number)
     cindex = cindex + 1;
     i = cindex;
@@ -640,7 +648,7 @@ mc:flow_copies = fn (ifn)
     all_copies = make_vector(cindex);
 
     copyset = new_copy_set();
-    
+
     while (copies != null)
       [
 	all_copies[i = i  - 1] = cdar(copies);
@@ -692,20 +700,20 @@ mc:flow_copies = fn (ifn)
     //   in(i) = intersection{p: predecessor of i} out(p) (i != entry)
     //   in(entry) = 0
     //   out(entry) = gen(entry)
-    
+
     eblock = graph_node_get(entry)[mc:f_copies];
     eblock[mc:flow_out] = eblock[mc:flow_gen];
-    
+
     merge_block = fn (n)
       if (n != entry && intersection_predecessors(n, mc:f_copies)) change = true;
-    
+
     change = true;
     while (change)
       [
 	change = false;
 	graph_nodes_apply(merge_block, cdr(fg));
       ];
-    
+
     all_copies
   ];
 
@@ -774,7 +782,7 @@ mc:rscan_live = fn (f, x, block)
   //        x : any
   //        block : flow graph node
   // Effects: Scans the instructions of the block in reverse order, doing
-  //     x = f(ins, live_in, live_out, x) 
+  //     x = f(ins, live_in, live_out, x)
   //   at each instruction, where live_in and live_out is the liveness
   //   information (bitsets)
   //   WARNING: live_in and live_out contain references to the global
@@ -823,9 +831,9 @@ mc:rscan_live = fn (f, x, block)
 
       fg = ifn[mc:c_fvalue];
 
-      display(format("Closure %s(%s) has %s block(s):\n", ifn[mc:c_fnumber],
+      dformat("Closure %s(%s) has %s block(s):\n", ifn[mc:c_fnumber],
 		     mc:fname(ifn),
-		     llength(graph_nodes(cdr(fg)))));
+		     llength(graph_nodes(cdr(fg))));
       lforeach(fn (node)
 	       [
 		 mc:flow_display(graph_node_get(node));
@@ -842,7 +850,7 @@ mc:rscan_live = fn (f, x, block)
       bflow_display("uses", fnode[mc:f_uses],
 		    fn (use)
 		    [
-		      display(format("%s: ", mc:svar(car(use))));
+		      dformat("%s: ", mc:svar(car(use)));
 		      display(cdr(use)[mc:il_number]);
 		    ]);
       bflow_display("copies", fnode[mc:f_copies], fn (copy) display(copy[mc:il_number]));
@@ -854,10 +862,10 @@ mc:rscan_live = fn (f, x, block)
     if (info)
       [
 	| dlist |
-      
+
 	dlist = fn (name, l)
 	  [
-	    display(format("%s: ", name));
+	    dformat("%s: ", name);
 	    if (bempty?(l)) display("none")
 	    else
 	      [
@@ -871,8 +879,8 @@ mc:rscan_live = fn (f, x, block)
 	      ];
 	    newline();
 	  ];
-      
-	display(format("Data-flow information: %s\n", name));
+
+	dformat("Data-flow information: %s\n", name);
 	dlist("gen", info[mc:flow_gen]);
 	dlist("kill", info[mc:flow_kill]);
 	dlist("in", info[mc:flow_in]);

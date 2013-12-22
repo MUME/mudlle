@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -58,7 +58,8 @@ context (in that case the current value is in global variable x).
 
 #include <setjmp.h>
 
-#include "mudio.h"
+#include "types.h"
+
 
 enum call_trace_mode {
   call_trace_off,
@@ -71,7 +72,7 @@ enum call_trace_mode {
 
 #ifndef USE_CCONTEXT
 
-struct ccontext 
+struct ccontext
 {
   int dummy;
 };
@@ -81,12 +82,14 @@ struct ccontext
 #ifdef i386
 struct ccontext {
   ulong *frame_start;
+  /* The last mudlle stack frame can be found between sp and bp.
+     If bp is 0, sp instead points to where the last mudlle frame bp
+     was pushed by call/push %ebp/mov %esp,%ebp. */
   ulong *frame_end_sp;
   ulong *frame_end_bp;
   /* Space to save callee and caller saved registers */
   value callee[2];
   value caller[2];
-  ulong retadr; /* Return address from primitives */
 };
 #endif
 
@@ -101,11 +104,31 @@ struct ccontext {
 
 extern struct ccontext ccontext;
 
-extern uword seclevel;		/* Security level of the function */
+extern uword internal_seclevel; /* Security level of the function */
+extern bool seclevel_valid;
+
+static inline uword get_seclevel(void)
+{
+  assert(seclevel_valid);
+  return internal_seclevel;
+}
+
+static inline void set_seclevel(uword seclevel)
+{
+  internal_seclevel = seclevel;
+}
 
 /* Used only by byte-coded functions and C primitives (not used for,
    nor updated by, compiled code) */
-enum call_class { call_bytecode, call_c, call_compiled };
+enum call_class {
+  call_bytecode,                /* interpreted byte code closures */
+  call_compiled,                /* compiled closures */
+  call_c,                       /* primitives */
+  call_primop,                  /* primitive_ext; for displaying
+                                   stack traces only */
+  call_string                   /* a string description; for displaying
+                                   stack traces only*/
+};
 
 struct call_stack
 {
@@ -114,15 +137,19 @@ struct call_stack
   union {
     struct {
       struct closure *fn;	/* Actual function */
-      struct code *code;	/* Code for this function */
+      struct icode *code;       /* The function's code */
       struct vector *locals;	/* Local vars */
       int nargs;		/* -1 = don't know yet */
       int offset;		/* Instr. offset called from */
     } mudlle;
 
     struct {
-      struct primitive *prim;
-      value arg1, arg2, arg3, arg4, arg5;
+      union {
+        struct primitive *prim;         /* for call_c */
+        const struct primitive_ext *op; /* for call_primop */
+        const char *name;               /* for call_string */
+      } u;
+      value args[MAX_PRIMITIVE_ARGS];
       int nargs;
     } c;
 
@@ -170,7 +197,7 @@ extern struct catch_context *exception_context;
 int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode);
 /* Effects: Executes fn(x) with error protection in place.
    Returns: true if all went well, false otherwise.
-     If false, information on the exeception that occurred is in 
+     If false, information on the exeception that occurred is in
        exception_signal/exception_value.
      The execution environment is protected by this function, i.e.:
         stack
@@ -181,18 +208,16 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode);
      Calls to mcatch may be nested with no problems.
 */
 
-void mthrow(long sig, value val) NORETURN;
-
-
 /* Session context */
 /* --------------- */
+
+typedef void *muser_t;
 
 struct session_context
 {
   struct session_context *parent;
-  Mio _mudout, _muderr;
-  Muser _muduser;
-  value data;
+  struct oport *_mudout, *_muderr;
+  muser_t _muduser;
   uword old_minlevel;
   ulong old_xcount;
   ulong call_count;
@@ -216,12 +241,16 @@ extern uword minlevel;			/* Minimum security level */
 extern ulong hard_mudlle_stack_limit, mudlle_stack_limit;
 #endif
 
-void session_start(struct session_context *newp,
-		   uword new_minlevel,
-		   Muser new_muduser,
-		   Mio new_mudout,
-		   Mio new_muderr);
+struct session_info {
+  uword minlevel;
+  muser_t muser;
+  struct oport *mout, *merr;
+};
 
+extern const struct session_info cold_session;
+
+void session_start(struct session_context *newp,
+                   const struct session_info *info);
 void session_end(void);
 
 void unlimited_execution(void);
@@ -241,7 +270,7 @@ void context_init(void);
 extern struct list *mudcalltrace;
 
 void remove_call_trace(value v);
-void add_call_trace(value v, int unhandled_only);
+void add_call_trace(value v, bool unhandled_only);
 
 value mjmpbuf(void);
 bool is_mjmpbuf(value buf);

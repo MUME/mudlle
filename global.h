@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -22,6 +22,7 @@
 #ifndef GLOBAL_H
 #define GLOBAL_H
 
+#include "module.h"
 #include "objenv.h"
 
 extern struct env *environment;
@@ -53,13 +54,13 @@ struct list *global_list(void);
      The value cell of each symbol contains the variables number
 */
 
-#define GVAR(offset) (environment->values->data[(offset)])
+#define GVAR(offset) (env_values->data[(offset)])
 /* Returns: The global value at 'offset'
 */
 
-#define GCONSTANT(offset) (!integerp(mvars->data[(offset)]))
+#define GCONSTANT(offset) (!integerp(mvars->data[offset]))
 /* Returns: a true value if global variable offset is not modifiable
-     (ie is a 'define' of some module)
+     (i.e., is a 'define' of some module or system-write)
 */
 
 #define GNAME(offset) ((struct string *)global_names->data[offset])

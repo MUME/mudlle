@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -19,7 +19,7 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-// Provide a consistent set of operations on sequences: 
+// Provide a consistent set of operations on sequences:
 // lists, dlists, vectors, strings
 library sequences
 requires system, dlist
@@ -29,7 +29,7 @@ defines
   lreverse, dreverse, sreverse, vreverse,
   lreverse!, dreverse!, sreverse!, vreverse!,
   lappend, dappend, sappend, vappend,
-  lappend!, dappend!, 
+  lappend!, dappend!,
   lmap, dmap, smap, vmap, table_map,
   lmap!, dmap!, smap!, vmap!, table_map!,
   lforeach, dforeach, sforeach, vforeach,
@@ -56,13 +56,12 @@ defines
 
 // Several of these operations duplicate existing functions
 
-
 // Implementation note:
 //   the dlist functions rely on the dlist rep for performance
 
 // copy: returns a new sequence with the same contents
 
-lcopy = fn "`l1 -> `l2. Returns a copy of `l1" (list lst) 
+lcopy = fn "`l1 -> `l2. Returns a copy of `l1" (list lst)
   if (lst == null)
     null
   else
@@ -81,7 +80,7 @@ lcopy = fn "`l1 -> `l2. Returns a copy of `l1" (list lst)
       res
     ];
 
-dcopy = fn "`d1 -> `d2. Returns a copy of `d1" (d)
+dcopy = fn "`d1 -> `d2. Returns a copy of `d1" ({null,vector} d)
   if (d == null) null
   else
     [
@@ -115,20 +114,19 @@ vcopy = fn "`v1 -> `v2. Returns a copy of `v1" (vector v1)
     v2
   ];
 
-
 // length: return length of sequence
 
-llength = fn "`l -> `n. Returns the length of the list `l" (lst)
+llength = fn "`l -> `n. Returns the length of the list `l" (list lst)
   [
-    |result|
-
-    result = 0;
-    while (pair? (lst))
+    | n |
+    n = 0;
+    loop
       [
-	result = result + 1;
-	lst = cdr (lst);
+        if (lst == null)
+          exit n;
+        lst = cdr(lst);
+        ++n
       ];
-    result
   ];
 
 slength = string_length;
@@ -141,15 +139,15 @@ lreverse = fn "`l1 -> `l2. Returns reverse of `l1" (list lst)
   [
     | result |
 
-    while (pair? (lst))
+    while (lst != null)
       [
 	result = car(lst) . result;
-	lst = cdr (lst);
+        lst = cdr (lst);
       ];
     result
   ];
 
-dreverse = fn "`d1 -> `d2. Returns a list with the contents of `d1 in reverse order" (d1)
+dreverse = fn "`d1 -> `d2. Returns a list with the contents of `d1 in reverse order" ({null,vector} d1)
   if (d1 == null) d1
   else
     [
@@ -163,7 +161,7 @@ dreverse = fn "`d1 -> `d2. Returns a list with the contents of `d1 in reverse or
 	]
     ];
 
-sreverse = fn "`s1 -> `s2. Returns string with all characters reversed" (s1)
+sreverse = fn "`s1 -> `s2. Returns string with all characters reversed" (string s1)
   [
     | l, s2, i |
     i = l = string_length(s1);
@@ -173,7 +171,7 @@ sreverse = fn "`s1 -> `s2. Returns string with all characters reversed" (s1)
     s2
   ];
 
-vreverse = fn "`v1 -> `v2. Returns vector with all elements reversed" (v1)
+vreverse = fn "`v1 -> `v2. Returns vector with all elements reversed" (vector v1)
   [
     | l, v2, i |
     i = l = vector_length(v1);
@@ -204,7 +202,7 @@ lreverse! = fn "`l1 -> `l2. Reverses list `l1, destructively" (list l1)
       prev
     ];
 
-dreverse! = fn "`d1 -> `d2. Reverses dlist `d1, destructively" (d1)
+dreverse! = fn "`d1 -> `d2. Reverses dlist `d1, destructively" ({null,vector} d1)
   if (d1 == null) null
   else
     [
@@ -278,10 +276,10 @@ lappend = list fn "`l1 `l2 -> `l3. Appends `l2 to `l1 as `l3 (shares tail with `
 	  scan3 = next3;
 	]
     ];
-    
+
 sappend = string_append;
 
-dappend = fn "`d1 `d2 -> `d3. Returns a new list `d3 with the contents of `d1 and `d2" (d1, d2)
+dappend = fn "`d1 `d2 -> `d3. Returns a new list `d3 with the contents of `d1 and `d2" ({null,vector} d1, {null,vector} d2)
   dmerge!(dcopy(d1), dcopy(d2));
 
 vappend = fn "`v1 `v2 -> `v3. Returns a new vector `v3 with the contents of `v1 and `v2" (vector v1, vector v2)
@@ -302,7 +300,7 @@ vappend = fn "`v1 `v2 -> `v3. Returns a new vector `v3 with the contents of `v1 
 
 // append!:
 
-lappend! = fn "`l1 `l2 -> `l3. `l3 is `l2 appended to `l1, destructively" (list l1, list l2)
+lappend! = fn "`l1 `l2 -> `l3. Return `l2 appended to `l1, destructively" (list l1, list l2)
   if (l1 == null) l2
   else
     [
@@ -320,7 +318,7 @@ dappend! = dmerge!;
 
 // map:
 
-lmap = fn "`f `l1 -> `l2. Filters list `l1 according to function `f" (function f, list l)
+lmap = fn "`f `l1 -> `l2. Applies `f to every element of `l1 (from 1st to last) and returns a new list with the results" (function f, list l)
   if (l == null) null
   else
     [
@@ -340,7 +338,7 @@ lmap = fn "`f `l1 -> `l2. Filters list `l1 according to function `f" (function f
       first
     ];
 
-dmap = fn "`f `d1 -> `d2. Returns result of applying `f to the elements of `d1, in order" (function f, d)
+dmap = fn "`f `d1 -> `d2. Returns result of applying `f to the elements of `d1, in order" (function f, {null,vector} d)
   if (d == null) null
   else
     [
@@ -399,7 +397,7 @@ lmap! = fn "`f `l -> `l. Applies `f to every element of `l (from 1st to last) an
     s
   ];
 
-dmap! = fn "`f `d -> `d. Applies `f to every element of `d (from 1st to last) and returns the modified list with the results" (function f, d)
+dmap! = fn "`f `d -> `d. Applies `f to every element of `d (from 1st to last) and returns the modified list with the results" (function f, {null,vector} d)
   if (d == null) null
   else
     [
@@ -447,7 +445,7 @@ lforeach = fn "`f `l -> . Applies `f(`e) to every element `e of `l" (function f,
       l = cdr(l);
     ];
 
-dforeach = fn "`f `d -> . Applies `f(`e) to every element `e of `d (from 1st to last)" (function f, d)
+dforeach = fn "`f `d -> . Applies `f(`e) to every element `e of `d (from 1st to last)" (function f, {null,vector} d)
   if (d != null)
     [
       | scan |
@@ -488,7 +486,7 @@ lexists? = fn "`f `l -> `x. Returns first element `x of `l for which `f(`x) is t
       else l = cdr(l);
     ];
 
-dexists? = fn "`f `d -> `x. Returns first element `x of `d for which `f(`x) is true; false if none found" (function f, d) 
+dexists? = fn "`f `d -> `x. Returns first element `x of `d for which `f(`x) is true; false if none found" (function f, {null,vector} d)
   if (d == null) false
   else
     [
@@ -503,7 +501,7 @@ dexists? = fn "`f `d -> `x. Returns first element `x of `d for which `f(`x) is t
 	  ]
     ];
 
-vexists? = fn "`f `v -> . Returns first element `x of `v for which `f(`x) is true; false if none found" (function f, vector v) 
+vexists? = fn "`f `v -> . Returns first element `x of `v for which `f(`x) is true; false if none found" (function f, vector v)
   [
     | i, l |
     l = vector_length(v);
@@ -533,7 +531,7 @@ lforall? = fn "`f `l -> `b. Returns true if `f(`x) is true for all elements of l
     else if (!f(car(l))) exit false
     else l = cdr(l);
 
-dforall? = fn "`f `d -> `b. Returns true if `f(`x) is true for all elements of dlist `d (in order)" (function f, d)
+dforall? = fn "`f `d -> `b. Returns true if `f(`x) is true for all elements of dlist `d (in order)" (function f, {null,vector} d)
   if (d == null) false
   else
     [
@@ -584,7 +582,8 @@ lreduce = fn "`f `x `l -> `x[last]. Reduces list `l with function" +
   ];
 
 dreduce = fn "`f `x `d -> `x[last]. Reduces dlist `d with function" +
-  " `f(`e, `x[n]) -> `x[n+1] for each element `e and initial value `x" (function f, x, d)
+  " `f(`e, `x[n]) -> `x[n+1] for each element `e and initial value `x"
+  (function f, x, {null,vector} d)
   if (d == null) x
   else
     [
@@ -625,7 +624,7 @@ sreduce = fn "`f `x `s -> `x[last]. Reduces string `s with function" +
 ldelete = fn "`x `l1 -> `l2. Returns `l1 without any occurrences of `x" (x, list l)
   lfilter(fn (y) y != x, l);
 
-ddelete = fn "`x `d1 -> `d2. Returns `d1 without any occurrences of `x" (x, d)
+ddelete = fn "`x `d1 -> `d2. Returns `d1 without any occurrences of `x" (x, {null,vector} d)
   dfilter(fn (y) y != x, d);
 
 vdelete = fn "`x `v1 -> `v2. Returns `v1 without any occurrences of `x" (x, vector v)
@@ -634,13 +633,12 @@ vdelete = fn "`x `v1 -> `v2. Returns `v1 without any occurrences of `x" (x, vect
 sdelete = fn "`x `s1 -> `s2. Returns `s1 without any occurrences of `x" (x, string s)
   sfilter(fn (y) y != x, s);
 
-
 // delete!:
 
 ldelete! = fn "`x `l1 -> `l2. `l2 is `l1 with all `x's deleted" (x, list l)
    lfilter!(fn (y) x != y, l);
 
-ddelete! = fn "`x `d1 -> `d2. Returns `d1 without any occurrences of `x" (x, d)
+ddelete! = fn "`x `d1 -> `d2. Returns `d1 without any occurrences of `x" (x, {null,vector} d)
   dfilter!(fn (y) y != x, d);
 
 // sdelete! and vdelete! make no sense
@@ -671,13 +669,13 @@ lfilter = fn "`f `l1 -> `l2. Returns `l1 filtered by function `f" (function f, l
     first
   ];
 
-dfilter = fn "`f `d1 -> `d2. Returns `d1 filtered by function `f" (function f, d)
+dfilter = fn "`f `d1 -> `d2. Returns `d1 filtered by function `f" (function f, {null,vector} d)
   if (d == null) null
   else
     [
       | junk, scan |
 
-      junk = dcons!(null, null); 
+      junk = dcons!(null, null);
 
       scan = d;
       loop
@@ -743,11 +741,17 @@ sfilter = fn "`f `s1 -> `s2. Returns `s1 filtered by function `f" (function f, s
   ];
 
 table_filter = fn "`f `t1 -> `t2. Returns `t1 filtered by function `f(`sym)" (function f, table t)
-  table_reduce(fn (sym, result) [
-    if (f(sym))
-      result[symbol_name(sym)] = symbol_get(sym);
+  [
+    | result |
+    // explain to compiler that we return a table
+    result = make_table();
+    table_reduce(fn (sym, result) [
+      if (f(sym))
+        result[symbol_name(sym)] = symbol_get(sym);
+      result
+    ], result, t);
     result
-  ], make_table(), t);
+  ];
 
 // filter!:
 
@@ -772,7 +776,7 @@ lfilter! = fn "`f `l1 -> `l2. Returns `l1 filtered by function `f" (function f, 
    l
 ];
 
-dfilter! = fn "`f `d1 -> `d2. Returns `d1 filtered by function `f" (function f, d)
+dfilter! = fn "`f `d1 -> `d2. Returns `d1 filtered by function `f" (function f, {null,vector} d)
   if (d == null) null
   else
     [
@@ -808,9 +812,8 @@ lfind? = fn "`x `l -> `b. Returns TRUE if `x is in `l" (x, list l)
     if (l == null) exit false
     else if (car(l) == x) exit true
     else l = cdr(l);
-    
-	
-dfind? = fn "`x `d -> `b. Returns TRUE if `x is in `d" (x, d)
+
+dfind? = fn "`x `d -> `b. Returns TRUE if `x is in `d" (x, {null,vector} d)
   if (d == null) false
   else
     [
@@ -828,24 +831,16 @@ dfind? = fn "`x `d -> `b. Returns TRUE if `x is in `d" (x, d)
 
 vfind? = fn "`x `v -> `b. Returns TRUE if `x is in `v" (x, vector v)
   [
-    | i, l |
-    l = vector_length(v);
-    i = 0;
-    loop
-      if (i == l) exit false
-      else if (v[i] == x) exit true
-      else i = i + 1
+    for (|i, l| [ i = 0; l = vlength(v) ]; i < l; ++i)
+      if (v[i] == x) exit<function> true;
+    false
   ];
 
-sfind? = fn "`n `s -> `b. Returns TRUE if `n is in `s" (x, string s)
+sfind? = fn "`n `s -> `b. Returns TRUE if `n is in `s" (int n, string s)
   [
-    | i, l |
-    l = string_length(s);
-    i = 0;
-    loop
-      if (i == l) exit false
-      else if (s[i] == x) exit true
-      else i = i + 1
+    for (|i, l| [ i = 0; l = string_length(s) ]; i < l; ++i)
+      if (s[i] == n) exit<function> true;
+    false
   ];
 
 vfori = fn "`c `v -> . Calls `c(`i) for all indices `i in the vector `v" (function f, vector v)

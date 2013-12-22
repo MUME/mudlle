@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -24,7 +24,7 @@
 
 #include "types.h"
 
-enum module_status { 
+enum module_status {
   module_unloaded, module_error, module_loading, module_loaded,
   module_protected
 };
@@ -68,13 +68,14 @@ int module_require(const char *name);
      Other effects as in module_load
 */
 
-enum { var_normal, var_module, var_write };
+enum { var_normal, var_module, var_write, var_system_write };
 int module_vstatus(long n, struct string **name);
 /* Returns: status of global variable n:
      var_normal: normal global variable, no writes
      var_write: global variable which is written
      var_module: defined symbol of a module
        module name is stored in *name
+     var_system_write: may be written but not directly by mudlle
    Modifies: name
    Requires: n be a valid global variable offset
 */
@@ -83,11 +84,11 @@ int module_vset(long n, int status, struct string *name);
 /* Effects: Sets status of global variable n to status.
      name is the module name for status var_module
    Returns: true if successful, false if the change is impossible
-     (ie status was already var_module)
+     (i.e., status was already var_module or var_system_write)
 */
 
 int module_seclevel(const char *name);
-  
+
 void module_init(void);
 /* Initialise this module */
 

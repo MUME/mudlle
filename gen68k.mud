@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -60,11 +60,11 @@ writes ninferred
   regs_scratch = vector(m68k:reg_d0, m68k:reg_d1, m68k:reg_a0);
   regs_caller = vector(m68k:reg_d2, m68k:reg_d3, m68k:reg_d4, m68k:reg_d5);
   regs_callee = vector(m68k:reg_a1, m68k:reg_a2, m68k:reg_a3, m68k:reg_a4);
-  
+
   // nb of registers of each category available
   m68k:nscratch = fn (ifn) 3;
   m68k:ncaller = fn (ifn) 4;
-  m68k:nregargs = fn (ifn) 
+  m68k:nregargs = fn (ifn)
     [
 
       // if function has (nregargs + 1) arguments, they are all in registers
@@ -73,8 +73,7 @@ writes ninferred
 	[
 	  if (mc:verbose >= 3)
 	    [
-	      display("argsbase");
-	      newline();
+	      display("argsbase\n");
 	    ];
 	  ifn[mc:c_fmisc][mc:c_fm_argsbase] = true;
 	  nregargs
@@ -95,8 +94,7 @@ writes ninferred
 	[
 	  if (mc:verbose >= 3)
 	    [
-	      display("closurebase");
-	      newline();
+	      display("closurebase\n");
 	    ];
 	  ifn[mc:c_fmisc][mc:c_fm_closurebase] = true;
 	  ncallee = ncallee - 1;
@@ -203,8 +201,7 @@ writes ninferred
 	  aloc = arg[mc:v_location];
 	  if (mc:verbose >= 3)
 	    [
-	      display(format("checking %s", mc:svar(arg)));
-	      newline();
+	      dformat("checking %s\n", mc:svar(arg));
 	    ];
 	  if (aloc && aloc[mc:v_lclass] == mc:v_lregister &&
 	      aloc[mc:v_lrtype] == mc:reg_caller)
@@ -215,9 +212,8 @@ writes ninferred
 	      creg = aloc[mc:v_lrnumber];
 	      if (mc:verbose >= 3)
 		[
-		  display(format("%s in %s, better in %s",
-				 mc:svar(arg), creg, rarg));
-		  newline();
+		  dformat("%s in %s, better in %s\n",
+                          mc:svar(arg), creg, rarg);
 		];
 	      if (regs[creg] != rarg) // not there
 		[
@@ -479,7 +475,7 @@ writes ninferred
 
       code
     ];
-      
+
 
   m68k:mgen_instruction = fn (code, ifn, ainfo, il)
     [
@@ -508,7 +504,7 @@ writes ninferred
       trap = ins[mc:i_top];
       nerror = ins[mc:i_tdest];
       args = ins[mc:i_targs];
-      
+
       // trap_loop ignored
       if (trap == mc:trap_type)
 	[
@@ -529,7 +525,7 @@ writes ninferred
 	  m68k:jsr(code, m68k:lbuiltin, "bwglobal");
 	];
     ];
-	  
+
 
   mgen_return = fn (code, ifn, ainfo, ins)
     [
@@ -673,7 +669,7 @@ writes ninferred
 		    "badd", "bsubtract", "bmultiply", "bdivide", "bremainder",
 		    "bnegate", "bnot", "bbitnot", 0, 0, 0, 0, "bref", 0, "bcons", 0,
 		    "bcar", "bcdr" );
-  
+
   mgen_compute = fn (code, ins)
     [
       | args, arg1, arg2, op, dest, types, type1, type2 |
@@ -946,7 +942,7 @@ writes ninferred
 	m68k:branch(code, m68k:beq, dest);
 	m68k:label(code, fail);
       ]
-    else 
+    else
       [
 	| fail |
 
@@ -1020,7 +1016,7 @@ writes ninferred
 	m68k:branch(code, m68k:bne, dest);
 	m68k:label(code, fail);
       ]
-    else 
+    else
       [
 	| fail |
 
@@ -1067,7 +1063,7 @@ writes ninferred
 	];
       m68k:jsr(code, m68k:lbuiltin, builtin);
     ];
-  
+
 
   allocate = fn (code, dest, size, gtype, mtype)
     [
@@ -1110,7 +1106,7 @@ writes ninferred
       while (m != null)
 	[
 	  move = car(m);
-	  
+
 	  // is move same as a prior move ?
 	  if ((m2 = lexists?(same_move, cstspills)) ||
 	      (m2 = lexists?(same_move, newmoves)))
@@ -1119,7 +1115,7 @@ writes ninferred
 	    cstspills = move . cstspills
 	  else
 	    newmoves = move . newmoves;
-	    
+
 	  m = cdr(m);
 	];
       // newmoves is a summary of the actual register - register moves.

@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -23,17 +23,11 @@
  * Support routines for different charsets
  */
 
-#ifndef UTILS_CHARSET_H
-#define UTILS_CHARSET_H
+#ifndef CHARSET_H
+#define CHARSET_H
 
 #include <stdbool.h>
 #include <string.h>
-
-typedef enum {
-  CHARSET_UNKNOWN = 0,          /* we don't know yet - assume ASCII */
-  CHARSET_ASCII   = 1,
-  CHARSET_LATIN1  = 2
-} charset_t;
 
 #define IS_8SPACE(x) (latin1_char_class[(unsigned char) (x)] & 0x20)
 #define IS_8NAME(x) (latin1_char_class[(unsigned char) (x)] & 1)
@@ -63,4 +57,6 @@ void str8lwr(char *str);
 void str7lwr(char *str);
 char *str8cap(char *str);
 
-#endif // UTILS_CHARSET_H
+int lookup_named_character(const char *name, size_t namelen);
+
+#endif  /* CHARSET_H */

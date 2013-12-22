@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -23,18 +23,20 @@
 #include <stdlib.h>
 
 #include "alloc.h"
-#include "env.h"
-#include "global.h"
-#include "runtime/runtime.h"
-#include "utils.h"
-#include "module.h"
-#include "mcompile.h"
-#include "mparser.h"
 #include "call.h"
-#include "runtime/bigint.h"
-#include "table.h"
 #include "compile.h"
 #include "context.h"
+#include "env.h"
+#include "global.h"
+#include "mcompile.h"
+#include "module.h"
+#include "mparser.h"
+#include "print.h"
+#include "table.h"
+#include "utils.h"
+
+#include "runtime/runtime.h"
+#include "runtime/bigint.h"
 
 
 static ulong builtin_functions[last_builtin];
@@ -53,8 +55,7 @@ struct string *make_filename(const char *fname)
     {
       free(last_c_filename);
       last_c_filename = xstrdup(fname);
-      last_filename = alloc_string(fname);
-      last_filename->o.flags |= OBJ_READONLY;
+      last_filename = make_readonly(alloc_string(fname));
     }
   return last_filename;
 }
@@ -63,7 +64,6 @@ value make_constant(constant c);
 
 static value make_list(cstlist csts, int has_tail)
 {
-  struct gcpro gcpro1;
   struct list *l;
 
   if (has_tail && csts != NULL)
@@ -102,14 +102,13 @@ static value make_bigint(const char *s)
 static value make_array(cstlist csts)
 {
   ulong size = 0;
-  
+
   for (cstlist scan = csts; scan; scan = scan->next) size++;
 
   /* This intermediate step is necessary as v is IMMUTABLE
      (so must be allocated after its contents) */
   struct list *l = make_list(csts, 0);
 
-  struct gcpro gcpro1;
   GCPRO1(l);
   struct vector *v = alloc_vector(size);
   v->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
@@ -120,23 +119,22 @@ static value make_array(cstlist csts)
   return v;
 }
 
-static void protect_symbol(struct symbol *s)
+static void protect_symbol(struct symbol *s, void *dummy)
 {
   s->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
 }
 
 static value make_table(cstlist csts)
 {
-  struct gcpro gcpro1;
   struct table *t = alloc_table(DEF_TABLE_SIZE);
-  
+
   GCPRO1(t);
   for (; csts; csts = csts->next)
     table_set_len(t,
                   csts->cst->u.constpair->cst1->u.string.str,
                   csts->cst->u.constpair->cst1->u.string.len,
                   make_constant(csts->cst->u.constpair->cst2));
-  table_foreach(t, protect_symbol);
+  table_foreach(t, NULL, protect_symbol);
   immutable_table(t);
   UNGCPRO();
 
@@ -146,7 +144,6 @@ static value make_table(cstlist csts)
 static value make_symbol(cstpair p)
 {
   struct symbol *sym;
-  struct gcpro gcpro1;
   struct string *s = alloc_string_length(p->cst1->u.string.str,
                                          p->cst1->u.string.len);
 
@@ -182,7 +179,7 @@ value make_constant(constant c)
 
 typedef void (*gencode)(void *data, fncode fn);
 
-static struct code *generate_function(function f, int toplevel, fncode fn);
+static struct icode *generate_function(function f, int toplevel, fncode fn);
 static void generate_component(component comp, fncode fn);
 static void generate_condition(component condition,
 			       label slab, gencode scode, void *sdata,
@@ -248,6 +245,8 @@ static void generate_condition(component condition,
 			     slab, scode, sdata,
 			     fn);
 	  return;
+        default:
+          break;
 	}
       /* Fall through */
     default:
@@ -294,7 +293,7 @@ static void iff_code(void *_data, fncode fn)
   adjust_depth(-1, fn);
 }
 
-static void generate_if(component condition, component success, 
+static void generate_if(component condition, component success,
 			component failure, fncode fn)
 {
   struct ifdata ifdata;
@@ -345,10 +344,12 @@ static void generate_while(component condition, component iteration, fncode fn)
   wdata.endlab = new_label(fn);
   wdata.code = iteration;
 
+  env_start_loop();
   set_label(wdata.looplab, fn);
   generate_condition(condition, wdata.mainlab, wmain_code, &wdata,
 		     wdata.exitlab, wexit_code, &wdata, fn);
   set_label(wdata.endlab, fn);
+  env_end_loop();
   adjust_depth(1, fn);
 }
 
@@ -381,13 +382,13 @@ static void generate_block(block b, fncode fn)
   for (vlist vl = b->locals; vl; vl = vl->next)
     if (!vl->was_written)
       if (!vl->was_read)
-	warning_line(b->filename, b->lineno, "local variable %s is unused",
-                     vl->var);
+	warning_line(b->filename, b->nicename, vl->lineno,
+                     "local variable %s is unused", vl->var);
       else
-	warning_line(b->filename, b->lineno,
+	warning_line(b->filename, b->nicename, vl->lineno,
                      "local variable %s is never written", vl->var);
     else if (!vl->was_read)
-      warning_line(b->filename, b->lineno,
+      warning_line(b->filename, b->nicename, vl->lineno,
                    "local variable %s is never read", vl->var);
   env_block_pop();
 }
@@ -398,7 +399,8 @@ static void generate_execute(component acall, int count, fncode fn)
   if (acall->vclass == c_recall)
     {
       ulong offset;
-      variable_class vclass = env_lookup(acall->u.recall, &offset, 1, 0);
+      variable_class vclass = env_lookup(acall->u.recall, &offset,
+                                         true, false);
 
       if (vclass == global_var)
 	{
@@ -421,7 +423,8 @@ static void generate_component(component comp, fncode fn)
     case c_assign:
       {
 	ulong offset;
-	variable_class vclass = env_lookup(comp->u.assign.symbol, &offset, 0, 1);
+	variable_class vclass = env_lookup(comp->u.assign.symbol, &offset,
+                                           false, true);
 	component val = comp->u.assign.value;
 
 	if (val->vclass == c_closure)
@@ -450,13 +453,27 @@ static void generate_component(component comp, fncode fn)
 	   a problem. */
 	break;
       }
+    case c_vref:
     case c_recall:
       {
+        bool is_vref = comp->vclass == c_vref;
 	ulong offset;
-	variable_class vclass = env_lookup(comp->u.recall, &offset, 1, 0);
+	variable_class vclass = env_lookup(comp->u.recall, &offset,
+                                           true, is_vref);
 
-	if (vclass == global_var) mrecall(offset, comp->u.recall, fn);
-	else ins1(op_recall + vclass, offset, fn);
+	if (vclass != global_var)
+          ins1((is_vref ? op_vref : op_recall) + vclass, offset, fn);
+        else if (is_vref)
+          {
+            if (!mwritable(offset, comp->u.recall))
+              return;
+            ins_constant(makeint(offset), fn);
+          }
+        else
+          mrecall(offset, comp->u.recall, fn);
+        if (is_vref)
+          mexecute(global_lookup("make_variable_ref"),
+                   "make_variable_ref", 1, fn);
 	break;
       }
     case c_constant:
@@ -508,9 +525,10 @@ static void generate_component(component comp, fncode fn)
                                              new_clist(fnmemory(fn),
                                                        component_undefined,
                                                        NULL)),
-                                   NULL,
-                                   -1);
-	  generate_if(args->c, new_component(fnmemory(fn), c_block, cb),
+                                   NULL, NULL, -1);
+	  generate_if(args->c, new_component(fnmemory(fn),
+                                             args->next->c->lineno,
+                                             c_block, cb),
 		      component_undefined, fn);
 	  break;
         }
@@ -529,11 +547,13 @@ static void generate_component(component comp, fncode fn)
 	  {
 	    label loop = new_label(fn);
 
+            env_start_loop();
 	    set_label(loop, fn);
 	    start_block(NULL, fn);
 	    generate_component(args->c, fn);
 	    branch(op_loop1, loop, fn);
 	    end_block(fn);
+            env_end_loop();
 	    adjust_depth(1, fn);
 	    break;
 	  }
@@ -569,7 +589,7 @@ static void generate_component(component comp, fncode fn)
     }
 }
 
-static struct string *make_arg_types(function f)
+static struct vector *make_arg_types(function f)
 {
   if (f->varargs)
     return NULL;
@@ -577,48 +597,59 @@ static struct string *make_arg_types(function f)
   int i = 0;
   for (vlist a = f->args; a; a = a->next)
     ++i;
- 
-  struct string *result = alloc_empty_string(i);
-  for (vlist a = f->args; a; a = a->next)
-    result->str[--i] = a->type;
 
-  result->o.flags |= OBJ_READONLY;
+  struct vector *result = alloc_vector(i);
+  for (vlist a = f->args; a; a = a->next)
+    result->data[--i] = makeint(a->typeset);
+
+  result->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
   return result;
 }
 
-static struct code *generate_function(function f, int toplevel, fncode fn)
+static void generate_typeset_check(unsigned typeset, unsigned arg,
+                                   fncode newfn)
 {
-  struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
-
-  /* Make help string (must be allocated before code (immutability restriction)) */
-  struct string *help;
-  if (f->help.len)
-    {
-      help = alloc_string_length(f->help.str, f->help.len);
-      help->o.flags |= OBJ_READONLY;
-    }
+  if (typeset == TYPESET_ANY)
+    return;
+  mtype t;
+  if (typeset == TYPESET_FUNCTION)
+    t = stype_function;
+  else if (typeset == TYPESET_LIST)
+    t = stype_list;
+  else if (typeset == 0)
+    t = stype_none;
+  else if ((typeset & (typeset - 1)) == 0)
+    t = ffs(typeset) - 1;
   else
-    help = NULL;
-  GCPRO1(help);
+    {
+      ins_constant(makeint(typeset), newfn);
+      ins1(op_typeset_check, arg, newfn);
+      return;
+    }
+  ins1(op_typecheck + t, arg, newfn);
+}
+
+static struct icode *generate_function(function f, int toplevel, fncode fn)
+{
+  /* Make help string (must be allocated before code (immutability restriction)) */
+  struct string *help = NULL;
+  if (f->help.len)
+    help = make_readonly(alloc_string_length(f->help.str, f->help.len));
+  struct string *varname = NULL, *filename = NULL, *nicename = NULL;
+  struct vector *arg_types = NULL;
+  GCPRO5(help, varname, filename, nicename, arg_types);
 
   /* Make variable name (if present) */
-  struct string *varname;
   if (f->varname)
-    {
-      varname = alloc_string(f->varname);
-      varname->o.flags |= OBJ_READONLY;
-    }
+    varname = make_readonly(alloc_string(f->varname));
   else
     varname = NULL;
-  GCPRO(gcpro2, varname);
 
   /* Make filename string */
-  struct string *filename = make_filename(f->filename);
-  filename->o.flags |= OBJ_READONLY;
-  GCPRO(gcpro3, filename);
+  filename = make_filename(f->filename);
+  nicename = make_filename(f->nicename);
 
-  struct string *arg_types = make_arg_types(f);
-  GCPRO(gcpro4, arg_types);
+  arg_types = make_arg_types(f);
 
   fncode newfn = new_fncode(toplevel);
 
@@ -641,11 +672,9 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
       ins1(op_argcheck, nargs, newfn);
 
       nargs = 0;
-      for (vlist argument = f->args; argument; argument = argument->next) 
+      for (vlist argument = f->args; argument; argument = argument->next)
 	{
-	  if (argument->type != stype_any)
-	    ins1(op_typecheck + argument->type, nargs, newfn);
-
+          generate_typeset_check(argument->typeset, nargs, newfn);
 	  nargs++;
 	}
       ins1(op_pop_n, nargs, newfn);
@@ -653,22 +682,25 @@ static struct code *generate_function(function f, int toplevel, fncode fn)
 
   /* Generate code of function */
   env_push(f->args, newfn);
-  
+
   start_block("function", newfn);
   generate_component(f->value, newfn);
   end_block(newfn);
-  if (f->type != stype_any) ins1(op_typecheck + f->type, 0, newfn);
+
+  generate_typeset_check(f->typeset, 0, newfn);
+
   ins0(op_return, newfn);
   peephole(newfn);
 
-  struct code *c = generate_fncode(newfn, help, varname, filename, f->lineno,
-                                   arg_types, f->type, compile_level);
+  struct icode *c = generate_fncode(
+    newfn, help, varname, filename, nicename, f->lineno, arg_types,
+    f->typeset, compile_level);
   varlist closure = env_pop(&c->nb_locals);
 
   UNGCPRO();
 
   /* Generate code for creating closure */
-  
+
   /* Count length of closure */
   int clen = 0;
   for (varlist cvar = closure; cvar; cvar = cvar->next) clen++;
@@ -692,22 +724,24 @@ struct closure *compile_code(mfile f, int seclev)
   const char *filename = (f->body->filename
                           ? f->body->filename
                           : "");
+  const char *nicename = (f->body->nicename
+                            ? f->body->nicename
+                            : "");
   compile_level = seclev;
   erred = false;
   env_reset();
   fncode top = new_fncode(true);
   env_push(NULL, top);		/* Environment must not be totally empty */
-  function func = new_function(fnmemory(top), stype_any, sl, NULL,
-                               new_component(fnmemory(top), c_block,
+  function func = new_function(fnmemory(top), TYPESET_ANY, sl, NULL,
+                               new_component(fnmemory(top), 0, c_block,
                                              f->body),
                                f->body->lineno,
-                               filename);
+                               filename, nicename);
   func->varname = "top-level";
-  struct code *cc = generate_function(func, true, top);
+  struct icode *cc = generate_function(func, true, top);
 
-  struct gcpro gcpro1;
   GCPRO1(cc);
-  generate_fncode(top, NULL, NULL, NULL, 0, NULL, stype_any, seclev);
+  generate_fncode(top, NULL, NULL, NULL, NULL, 0, NULL, TYPESET_ANY, seclev);
   uword dummy;
   env_pop(&dummy);
   delete_fncode(top);
@@ -715,10 +749,20 @@ struct closure *compile_code(mfile f, int seclev)
 
   if (erred)
     return NULL;
-  return alloc_closure0(cc);
+  return alloc_closure0(&cc->code);
 }
 
-int interpret(value *result, int seclev, int reload)
+struct call_info {
+  value f, *result;
+};
+
+static void docall0(void *_ci)
+{
+  struct call_info *ci = _ci;
+  *ci->result = call0(ci->f);
+}
+
+bool interpret(value *result, int seclev, int reload)
 {
   bool ok = false;
   block_t parser_block;
@@ -741,15 +785,19 @@ int interpret(value *result, int seclev, int reload)
       if (mstart(parser_block, f, seclev))
 	{
 	  struct closure *closure = compile_code(f, seclev);
+	  if (closure)
+            mwarn_module(seclev, f->body);
+          mstop(f);
 
 	  if (closure)
-	    {
-	      mwarn_module(f->name ? f->name : f->body->filename);
-
-	      *result = mcatch_call0(closure);
-
-	      ok = exception_signal == 0;
+            {
+              struct call_info ci = {
+                .f      = closure,
+                .result = result
+              };
+	      ok = mcatch(docall0, &ci, call_trace_barrier);
 	    }
+
 	  if (f->name)
 	    module_set(f->name, ok ? module_loaded : module_error, seclev);
 	}
@@ -768,15 +816,13 @@ void compile_init(void)
   compile_block = new_block();
 
   /* Note: These definitions actually depend on those in types.h and runtime.c */
-  component_undefined = new_component(compile_block, c_constant,
+  component_undefined = new_component(compile_block, 0, c_constant,
 				      new_constant(compile_block, cst_int, 42));
-  component_true = new_component(compile_block, c_constant,
+  component_true = new_component(compile_block, 0, c_constant,
 				 new_constant(compile_block, cst_int, true));
-  component_false = new_component(compile_block, c_constant,
+  component_false = new_component(compile_block, 0, c_constant,
 				  new_constant(compile_block, cst_int, false));
-  
-  builtin_functions[b_or] = global_lookup("or");
-  builtin_functions[b_and] = global_lookup("and");
+
   builtin_ops[b_eq] = op_builtin_eq;
   builtin_ops[b_ne] = op_builtin_neq;
   builtin_ops[b_lt] = op_builtin_lt;
@@ -801,6 +847,6 @@ void compile_init(void)
   builtin_functions[b_cons] = global_lookup("cons");
 
   staticpro(&last_filename);
-  last_filename = alloc_string("");
+  last_filename = static_empty_string;
   last_c_filename = xstrdup("");
 }

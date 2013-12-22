@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -25,36 +25,49 @@
 
 #include "compile.h"
 #include "context.h"
+#include "lexer.h"
+#include "ports.h"
+#include "strbuf.h"
+#include "utils.h"
 
-extern int lineno;
-extern const char *filename;
+bool use_nicename;
+bool erred;
 
-int erred;
-
-static void vlog_error(const char *fname, int line, 
-                       const char *msg, va_list va)
+static void vlog_message(const char *fname, const char *nname, int line,
+                         bool is_warning, const char *msg, va_list va)
 {
-  char err[4096], *p = err;
+  strbuf_t sb = SBNULL;
 
-  if (fname == NULL)
-    ;
-  else if (line > 0)
-    p += sprintf(p, "%s:%d: ", fname, line);
-  else
-    p += sprintf(p, "%s: ", fname);
-  vsprintf(p, msg, va);
-  if (mudout) mflush(mudout);
-  mprintf(muderr, "%s" EOL, err);
-  if (muderr) mflush(muderr);
-  erred = 1;
+  if (fname != NULL)
+    {
+      bool use_fname = !use_nicename || nname == NULL;
+
+      sb_printf(&sb, "%s:", use_fname ? fname : nname);
+      if (line > 0)
+        sb_printf(&sb, "%d:", line);
+      sb_addc(&sb, ' ');
+      if (use_fname && nname != NULL && strcmp(nname, fname) != 0)
+        sb_printf(&sb, "[%s] ", nname);
+    }
+  if (is_warning)
+    sb_addstr(&sb, "warning: ");
+  sb_vprintf(&sb, msg, va);
+  if (mudout) pflush(mudout);
+  pprintf(muderr, "%s\n", sb_str(&sb));
+  if (muderr) pflush(muderr);
+  sb_free(&sb);
+  if (!is_warning)
+    erred = true;
 }
 
 void log_error(const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
-  vlog_error(this_mfile && this_mfile->body ? this_mfile->body->filename : NULL,
-             lineno, msg, args);
+  block body = this_mfile ? this_mfile->body : NULL;
+  vlog_message(body ? body->filename : NULL,
+               body ? body->nicename : NULL,
+               yylineno, false, msg, args);
   va_end(args);
 }
 
@@ -62,43 +75,33 @@ void compile_error(const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
-  vlog_error(filename, lineno, msg, args);
+  vlog_message(lexer_filename, lexer_nicename, yylineno, false, msg, args);
   va_end(args);
 }
 
-static void vwarning(const char *fname, int line, const char *msg, va_list args)
+static void vwarning(const char *fname, const char *nname, int line,
+                     const char *msg, va_list args)
 {
-  char err[4096];
-
-  vsnprintf(err, sizeof err, msg, args);
-  if (mudout) mflush(mudout);
-
-  if (fname == NULL)
-    mprintf(muderr, "warning: %s" EOL, err);
-  else if (line > 0)
-    mprintf(muderr, "%s:%d: warning: %s" EOL, fname, line, err);
-  else
-    mprintf(muderr, "%s: warning: %s" EOL, fname, err);
-
-  if (muderr) mflush(muderr);
+  vlog_message(fname, nname, line, true, msg, args);
 }
 
 
-void warning(const char *msg, ...)
+void compile_warning(const char *msg, ...)
 {
   va_list args;
 
   va_start(args, msg);
-  vwarning(NULL, -1, msg, args);
+  vwarning(lexer_filename, lexer_nicename, yylineno, msg, args);
   va_end(args);
 }
 
-void warning_line(const char *fname, int line, const char *msg, ...)
+void warning_line(const char *fname, const char *nname, int line,
+                  const char *msg, ...)
 {
   va_list args;
 
   va_start(args, msg);
-  vwarning(fname, line, msg, args);
+  vwarning(fname, nname, line, msg, args);
   va_end(args);
 }
 
@@ -176,35 +179,16 @@ char *xstrdup(const char *s)
 }
 #endif
 
-char *strlwr(char *s)
+void *reverse_list_internal(void *l)
 {
-  char *t = s;
-
-  while (*t) { *t = tolower(*t); t++; }
-
-  return s;
-}
-
-#if (!HAVE_MEMMOVE)
-void *memmove(void *dest, const void *src, size_t n)
-{
-  if (dest == src) return dest;
-
-  char *to = dest;
-  const char *from = src;
-  if (to > from && to < from + n)
+  void *prev = NULL;
+  while (l != NULL)
     {
-      from += n;
-      to += n;
-      while (n--) *--to = *--from;
+      void **p = l;
+      void *next = *p;
+      *p = prev;
+      prev = l;
+      l = next;
     }
-  else if (from > to && from < to + n)
-    {
-      while (n--) *to++ = *from++;
-    }
-  else
-    return memcpy(to, from, n);
-  return dest;
+  return prev;
 }
-
-#endif

@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -24,170 +24,21 @@ requires system, sequences
 defines abbrev?, assert, assert_message, assoc, assq, bcomplement,
   bcomplement!, bforeach, bitset_to_list, breduce, caaar, caadr, caar, cadar,
   caddr, cadr, cdaar, cdadr, cdar, cddar, cdddr, cddr,
-  concat_words, difference, equal?, fail, fail_message, find_word?,
+  concat_words, difference, fail, fail_message, find_word?,
   intersection, last_element, last_pair, list_first_n!, list_index,
   list_to_vector, lprotect, lqsort, mappend, mapstr, member, memq, nth,
-  nth_element, nth_element_cond, nth_pair, random_element, repeat, rprotect,
+  nth_element, nth_element_cond, nth_pair, random_element, repeat,
   set_eq?, set_in?, skip_white, sorted_table_list, sorted_table_vector,
   string_head?, string_index, string_ljustify, string_ljustify_cut,
   string_rindex, string_rjustify, string_rjustify_cut, string_tail, table_copy,
   union, unquote, vector_exists_index, vector_index, vector_rindex,
   vector_to_list, vequal?, vqsort!, vqsort_slice!, call_cc
-
-reads random // hack to avoid problems w/ standalone version
 [
 
 repeat = fn "`n `f -> . Execute `f() `n times" (int n, function f)
-  while (--n >= 0) f();
+  while (n-- > 0) f();
 
-[
-  | recurse |
-  
-  recurse = fn (x1, stack1, x2, stack2)
-    if (null?(x1) || null?(x2) || integer?(x1) || integer?(x2))
-      x1 == x2
-    else if (string?(x1))
-      string?(x2) && string_cmp(x1, x2) == 0
-    else if (float?(x1))
-      if (float?(x2))
-	if (fnan?(x1) || fnan?(x2))
-	  x1 == x2
-	else
-	  fcmp(x1, x2) == 0
-      else
-	false
-    else if (bigint?(x1))
-      bigint?(x2) && bicmp(x1, x2) == 0
-    else if (x1 == x2)
-      true
-    else
-      [
-	| i, s1 |
-
-	// If we find x1 in stack1, check that x2 is at the same position
-	// in stack2. stack1 and stack2 are guaranteed to be of the same
-	// length.
-
-	i = 0;
-	s1 = stack1;
-	loop
-	  [
-	    if (s1 == null)
-	      exit null;
-	    if (car(s1) == x1)
-	      [
-		| s2 |
-		s2 = stack2;
-		while (i--)
-		  s2 = cdr(s2);
-		exit<function> car(s2) == x2;
-	      ];
-	    s1 = cdr(s1);
-	    ++i;
-	  ];
-	stack1 = x1 . stack1;
-	stack2 = x2 . stack2;
-
-	if (pair?(x1))
-	  (pair?(x2)
-	   && recurse(car(x1), stack1, car(x2), stack2)
-	   && recurse(cdr(x1), stack1, cdr(x2), stack2))
-	else if (vector?(x1))
-	  vector?(x2) &&
-	    [
-	      | l |
-	      l = vector_length(x1);
-	      if (l != vector_length(x2)) false
-	      else
-		[
-		  while ((l = l - 1) >= 0)
-		    if (!recurse(x1[l], stack1, x2[l], stack2))
-		      exit<function> false;
-		  true
-		]
-	    ]
-	else if (symbol?(x1))
-	  (symbol?(x2)
-	   && string_icmp(symbol_name(x1), symbol_name(x2)) == 0
-	   && recurse(symbol_get(x1), stack1, symbol_get(x2), stack2))
-	else if (table?(x1))
-	  table?(x2) &&
-	    [
-	      | y |
-	      y = table_copy(x2);
-	      
-	      if (table_exists?(fn (sym) [
-		| sname |
-		if (recurse(symbol_get(sym), stack1,
-			    table_ref(y, sname = symbol_name(sym)), stack2))
-		  [
-		    table_set!(y, sname, null);
-		    false
-		  ]
-		else
-		  true
-	      ], x1))
-		false
-	      else if (table_exists?(fn (sym) true, y))
-		false
-	      else
-		true
-	    ]
-	else
-	  false;
-      ];
-
-  equal? = fn "`x1 `x2 -> `b. Compares `x1 to `x2 for equality, recursively for container objects" (x1, x2)
-    recurse(x1, null, x2, null);
-];
-
-rprotect = fn "`x -> `x. Protect `x recursively" (x)
-  [
-    | pro, seen |
-
-    pro = fn (x)
-      if (!immutable?(x) && !memq(x, seen))
-	[
-	  protect(x);
-
-	  if (pair?(x))
-	    [
-	      seen = x . seen;
-	      pro(car(x));
-	      pro(cdr(x));
-	    ]
-	  else if (vector?(x))
-	    [
-	      | l |
-	      
-	      l = vector_length(x);
-	      seen = x .  seen;
-	      while ((l = l - 1) >= 0) 
-		pro(x[l]);
-	    ]
-	  else if (symbol?(x))
-	    [
-	      seen = x . seen;
-	      pro(symbol_name(x));
-	      pro(symbol_get(x));
-	    ]
-	  else if (table?(x))
-	    [
-	      seen = x . seen;
-	      table_foreach(pro, x)
-	    ]
-	];
-
-    // Start new session, with no execution limits
-    session(fn ()
-	    [
-	      unlimited_execution();
-	      pro(x);
-	    ]);
-    x
-  ];
-
-lprotect = fn "`l -> `l. Protects list `l" (l)
+lprotect = fn "`l -> `l. Protects list `l" (list l)
   [
     | t |
 
@@ -214,9 +65,14 @@ cddar = fn "`x0 -> `x1. Returns cdr(cdr(car(`x0)))" (pair x) cdr(cdr(car(x)));
 cdddr = fn "`x0 -> `x1. Returns cdr(cdr(cdr(`x0)))" (pair x) cdr(cdr(cdr(x)));
 
 assert = fn "`b -> . Fail if `b is false" (b) if (!b) fail();
-assert_message = fn "`b `s -> . Fail with message `s if `b is false" (b, s) if (!b) fail_message(s);
-fail = fn " -> . Fail." () 1/0;
-fail_message = fn "`s -> . Fail with message `s." (s) [ display(format("%s%n", s)); 1/0 ];
+assert_message = fn "`b `s -> . Fail with message `s if `b is false" (b, string s)
+  if (!b) fail_message(s);
+fail = none fn " -> . Fail." () error(error_abort);
+fail_message = none fn "`s -> . Fail with message `s." (string s)
+  [
+    display(s); newline();
+    fail()
+  ];
 
 union = fn "`l1 `l2 -> `l3. Set union of `l1 and `l2" (list l1, list l2)
   // Types: l1, l2: set
@@ -228,7 +84,7 @@ union = fn "`l1 `l2 -> `l3. Set union of `l1 and `l2" (list l1, list l2)
     while (l2 != null)
       [
 	| f2 |
-	
+
 	if (!memq(f2 = car(l2), l1)) result = f2 . result;
 	l2 = cdr(l2)
       ];
@@ -249,7 +105,7 @@ intersection = fn "`l1 `l2 -> `l3. Set intersection of `l1 and `l2" (list l1, li
       ];
     result
   ];
-  
+
 difference = fn "`l1 `l2 -> `l3. Set difference of `l1 and `l2" (list l1, list l2)
   // Types: l1, l2: set
   // Returns: The set difference (comparison with ==) of l1 and l2.
@@ -283,21 +139,19 @@ vector_index = fn "`x `v -> `n. Finds index of `x in `v, or -1 if none" (x, vect
     | check, max |
     check = 0;
     max = vector_length(v);
-
     loop
       if (check == max) exit -1
       else if (v[check] == x) exit check
-      else check = check + 1
+      else ++check
   ];
 
 vector_rindex = fn "`x `v -> `n. Finds index of last `x in `v, or -1 if none" (x, vector v)
   [
     | check |
-
     check = vector_length(v);
     loop
       if (check == 0) exit -1
-      else if (v[check = check - 1] == x) exit check
+      else if (v[--check] == x) exit check
   ];
 
 vector_exists_index = fn "`f `v -> `n. Returns the index of first element `x of `v for which `f(`x) is true, or -1 if none" (function f, vector v)
@@ -309,30 +163,24 @@ vector_exists_index = fn "`f `v -> `n. Returns the index of first element `x of 
     loop
       if (i == l) exit -1
       else if (f(v[i])) exit i
-      else i = i + 1
+      else ++i
   ];
 
-string_index = fn "`s `n1 -> `n2. Finds index of char `n1 in `s, or -1 if none"
-   (string str, int n) [
-   |check, max|
-   check = 0;
-   max = string_length (str) - 1;
-   while (if (check <= max) (str[check] != n) else 0)
-      check = check + 1;
-   if (check <= max) check else -1;
-];
-
-string_rindex = fn "`s `n1 -> `n2. Finds last index of char `n1 in `s, or -1 if none"
-   (string str, int n) 
+string_index = fn "`s `n1 -> `n2. Finds index of char `n1 in `s, or -1 if none" (string str, int n)
   [
-    | max |
-
-    max = string_length (str);
-    while (max > 0)
-      if (str[max = max - 1] == n) exit<function> max;
+    n &= 255;
+    for (|l, i| [ l = string_length(str); i = 0 ]; i < l; ++i)
+      if (str[i] == n) exit<function> i;
     -1
   ];
 
+string_rindex = fn "`s `n1 -> `n2. Finds last index of char `n1 in `s, or -1 if none" (string str, int n)
+  [
+    n &= 255;
+    for (|i| i = string_length(str); i > 0; )
+      if (str[--i] == n) exit<function> i;
+    -1
+  ];
 
 vequal? = fn "`v1 `v2 -> `b. True if the elements of `v1 are == to those of `v2" (vector v1, vector v2)
   [
@@ -341,7 +189,7 @@ vequal? = fn "`v1 `v2 -> `b. True if the elements of `v1 are == to those of `v2"
     if (l != vector_length(v2)) false
     else
       [
-	while ((l = l - 1) >= 0)
+	while (--l >= 0)
 	  if (v1[l] != v2[l]) exit<function> false;
 	true
       ]
@@ -426,7 +274,7 @@ mapstr = fn "`c `s -> `l. Executes `c(`n) on every character `n in `s and makes 
     len = string_length(s); results = null;
 
     while (len > 0)
-      results = f(s[len = len - 1]) . results;
+      results = f(s[--len]) . results;
 
     results
   ];
@@ -444,47 +292,52 @@ mappend = fn "`f `l1 -> `l2. Like `lmap, but appends the results of `f(`x) for e
     results
   ];
 
-memq = fn "`x `l1 -> `l2. Returns first sublist `l2 of `l1 which is == to `x, or FALSE if none" (x, list l)
+memq = fn "`x `l -> `p. Returns the first pair `p of list `l whose `car is == `x, or `false if none" (x, list l)
   loop
     if (l == null) exit false
     else if (x == car(l)) exit l
     else l = cdr(l);
 
-member = fn "`x `l1 -> `l2. Returns first sublist `l2 of `l1 which is `equal? to `x, or FALSE if none" (x, list l)
+member = fn "`x `l -> `p. Returns the first pair `p of list `l whose `car is `equal? to `x, or `false if none" (x, list l)
   loop
     if (l == null) exit false
     else if (equal?(x, car(l))) exit l
     else l = cdr(l);
 
-assq = fn "`x1 `l -> `x2. Looks for a pair in `l whose car is == to `x1. Returns that pair, false if not found" (x, list l)
+assq = fn "`x `l -> `p. Looks for a pair in `l whose `car is == to `x. Returns that pair, false if not found" (x, list l)
   loop
-    if (l == null) exit false
-    else if (car(car(l)) == x) exit car(l)
-    else l = cdr(l);
+    [
+      if (l == null) exit false;
+      | item |
+      item = car(l);
+      if (car(item) == x) exit item;
+      l = cdr(l)
+    ];
 
-
-assoc = fn "`x1 `l -> `x2. Looks for a pair in `l whose car is `equal? to `x1. Returns that pair, false if not found" (x, list l)
+assoc = fn "`x `l -> `p. Looks for a pair in `l whose `car is `equal? to `x. Returns that pair, false if not found" (x, list l)
   loop
-    if (l == null) exit false
-    else if (equal?(car(car(l)), x)) exit car(l)
-    else l = cdr(l);
-
+    [
+      if (l == null) exit false;
+      | item |
+      item = car(l);
+      if (equal?(car(item), x)) exit item;
+      l = cdr(l)
+    ];
 
 nth = fn "`n `l -> `x. Returns `n'th (one-based) element of list `l" (int n, list l)
   [
-    while ((n = n - 1) > 0)
+    while (--n > 0)
       l = cdr(l);
     car(l)
   ];
 
-list_to_vector = fn "`l -> `v. Makes a vector out of a list" 
-   (list lst) [
+list_to_vector = fn "`l -> `v. Makes a vector out of a list" (list lst) [
    |vec, i|
    vec = make_vector (llength (lst));
    i = 0;
    while (pair? (lst)) [
       vec [i] = car (lst);
-      i = i + 1;
+      ++i;
       lst = cdr (lst);
    ];
    vec;
@@ -495,7 +348,7 @@ vector_to_list = fn "`v -> `l. Makes a vector into a list" (vector v)
     | len, l |
 
     len = vector_length(v);
-    while ((len = len - 1) >= 0) l = v[len] . l;
+    while (--len >= 0) l = v[len] . l;
     l
   ];
 
@@ -523,7 +376,7 @@ table_copy = fn "`table1 -> `table2. Makes a copy of `table1" (table table)
 nth_pair = fn "`n `l -> `x. Returns nth pair of `l" (int n, list lst) [
    while (pair? (lst) && (n > 1)) [
       lst = cdr (lst);
-      n = n - 1;
+      --n;
    ];
    if (n == 1) lst else null;
 ];
@@ -534,7 +387,7 @@ nth_element = fn "`n `l -> `x. Returns element `n of a list or null" (int n, lis
    if (pair? (nth)) car (nth) else null;
 ];
 
-random_element = fn 
+random_element = fn
    "`l -> `x. Returns a random element in list `l or null" (list lst) [
    |items|
    items = llength (lst);
@@ -557,7 +410,7 @@ last_element = fn "`l -> `x. Returns the last element of list `l or null" (list 
    if (pair? (res)) car (res) else null;
 ];
 
-list_first_n! = fn "`n `l -> `l. Returns first `n elements of `l" 
+list_first_n! = fn "`n `l -> `l. Returns first `n elements of `l"
    (int n, list lst) [
    |nth|
    nth = nth_pair (n, lst);
@@ -577,16 +430,16 @@ nth_element_cond = fn "`n `l `f -> `x|`b. Returns `n'th `x in `l for which `f(`x
       lst = cdr(lst);
     if (pair?(lst) && n == 1)
       car(lst)
-    else 
+    else
       false;
   ];
 
-list_index = fn "`x `l -> `n. Returns the index of `x or false" 
+list_index = fn "`x `l -> `n. Returns the index of `x or false"
    (x, list lst) [
    |count|
    count = 1;
    while (pair? (lst) && (car (lst) != x)) [
-      count = count + 1;
+      ++count;
       lst = cdr (lst);
    ];
    if (!pair? (lst)) count = 0;
@@ -601,7 +454,7 @@ string_tail = fn "`s `n -> `s. Returns the tail of `s starting from position `n"
   else
     substring(str, from, string_length (str) - from);
 
-string_head? = fn "`s1 `s2 `n -> `b. True if `s1 = first of `s2, min `n characters" (string head, string whole, int n)
+string_head? = fn "`s1 `s2 `n -> `b. True if `s1 = first of `s2, min `n characters (case and accentuation insensitive)" (string head, string whole, int n)
   [
     | hlen |
 
@@ -616,10 +469,14 @@ string_head? = fn "`s1 `s2 `n -> `b. True if `s1 = first of `s2, min `n characte
     true;
 ];
 
-abbrev? = fn "`s1 `s2 -> `b. Returns true if `s1 is an abbreviation of `s2" (string a, string b) 
-  string_head?(a, b, 1);
+abbrev? = fn "`s1 `s2 -> `b. Returns true if `s1 is an abbreviation of `s2 (case and accentuation insensitive)" (string a, string b)
+  [
+    | la |
+    la = slength(a);
+    la && la <= slength(b) && string_nicmp(a, b, la) == 0
+  ];
 
-find_word? = fn "`s1 `s2 -> `b. True if `s1 is a word in the `s2 sentence" (string word, string sent)
+find_word? = fn "`s1 `s2 -> `b. True if `s1 is a word in the `s2 sentence, as seen by `split_words()." (string word, string sent)
   lexists?(fn (x) !string_icmp(word, x), split_words(sent)) != false;
 
 unquote = fn "`s1 -> `s2. Returns `s1 without any surrounding single or double quotes" (string s)
@@ -630,14 +487,17 @@ unquote = fn "`s1 -> `s2. Returns `s1 without any surrounding single or double q
     else substring(s, 1, l - 2)
   ];
 
-skip_white = fn "`s1 -> `s2. Returns `s1 without any leading white space" (string s)
+skip_white = fn "`s1 -> `s2. Returns `s1 without any leading white space. May return `s1 unmodified." (string s)
   [
     | n, l |
     n = 0;
     l = string_length(s);
     while (n < l && cspace?(s[n]))
       ++n;
-    substring(s, n, l - n)
+    if (n == 0)
+      s
+    else
+      substring(s, n, l - n)
   ];
 
 string_ljustify = fn "`s1 `n -> `s2. Left justifies `s1 in a field `n characters wide"
@@ -659,7 +519,7 @@ string_ljustify_cut = fn "`s1 `n -> `s2. Left justifies `s1 in a field `n charac
     if (l >= n) substring(s, 0, n)
     else
       [
-	string_fill!(blanks = make_string(n - l), ? );
+	string_fill!(blanks = make_string(n - l), ?\ );
 	s + blanks
       ]
   ];
@@ -683,7 +543,7 @@ string_rjustify_cut = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n chara
     if (l >= n) substring(s, 0, n)
     else
       [
-	string_fill!(blanks = make_string(n - l), ? );
+	string_fill!(blanks = make_string(n - l), ?\ );
 	blanks + s
       ]
   ];
@@ -696,7 +556,13 @@ string_rjustify_cut = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n chara
     if (l == null)
       ""
     else if (cdr(l) == null)
-      car(l)
+      [
+        | s |
+        s = car(l);
+        if (!string?(s))
+          error(error_bad_type);
+        s
+      ]
     else
       [
         port_empty!(op);
@@ -713,7 +579,7 @@ string_rjustify_cut = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n chara
 
 // Bitsets (basic operations are in C)
 
-bitset_to_list = fn "`bitset `map -> `l. Returns a list of `map[`i] for all bits `i in `bitset" (string set, map)
+bitset_to_list = list fn "`bitset `map -> `l. Returns a list of `map[`i] for all bits `i in `bitset. `map must be a vector or a string." (string set, {vector,string} map)
   breduce(fn (i, l) map[i] . l, null, set);
 
 breduce = fn "`f `x0 `bitset -> `x. Reduces `bitset by `x = `f(`i, `x) for each bit `i, and initial value `x0" (function f, x, string b)
@@ -733,8 +599,8 @@ breduce = fn "`f `x0 `bitset -> `x. Reduces `bitset by `x = `f(`i, `x) for each 
 	if (bi & 32) x = f(n + 5, x);
 	if (bi & 64) x = f(n + 6, x);
 	if (bi & 128) x = f(n + 7, x);
-	n = n + 8;
-	i = i + 1;
+	n += 8;
+	++i;
       ];
     x
   ];
@@ -744,7 +610,7 @@ bcomplement! = fn "`bitset1 -> `bitset1. `bitset1 = ~`bitset1 (beware extra bits
     | l |
 
     l = string_length(b1);
-    while ((l = l - 1) >= 0) b1[l] = ~b1[l];
+    while (--l >= 0) b1[l] = ~b1[l];
     b1
   ];
 
@@ -773,8 +639,8 @@ bforeach = fn "`f `bitset -> . Does `f(`i) for each bit set in `bitset" (functio
 	if (bi & 32) f(n + 5);
 	if (bi & 64) f(n + 6);
 	if (bi & 128) f(n + 7);
-	n = n + 8;
-	i = i + 1;
+	n += 8;
+	++i;
       ];
   ];
 
@@ -787,7 +653,8 @@ call_cc = fn "`f0 -> `x0. Call `f0(`f1), where `f1(`x1) can be used to return `x
         | continuation |
         // "useless" variable to name the function
         continuation = fn "`x -> . Continuation function from `call_cc()" (x)
-          longjmp(buf, x)
+          longjmp(buf, x);
+        continuation
     ]);
 
   setjmp(call_cc2)

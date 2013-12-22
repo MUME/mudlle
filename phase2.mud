@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -22,7 +22,7 @@
 library phase2 // Phase 2: 3-address (not really) generation
 requires system, sequences, misc, compiler, vars, ins3
 defines mc:phase2, mc:inline_builtin_call
-reads mc:this_module
+reads mc:this_module, mc:verbose
 writes mc:this_function, mc:lineno
 // See ins3.mud for details on these instructions
 
@@ -42,44 +42,55 @@ writes mc:this_function, mc:lineno
 [
 
   | cundefined, ctrue, cfalse, closure_count, builtin_branch, builtin_call?,
-    builtin_branch_not, comp_undefined, comp_true, comp_false, vset, phase2,
+    builtin_branch_not, comp_true, comp_false, vset, phase2,
     gen_clist, gen_component, gen_if, gen_while, gen_condition, make_bf,
     builtin_functions, builtin_branches, make_bb, make_btype, gen_abs_comp,
-    gen_list, gen_set_mem!, vlist, gen_const |
+    gen_list, gen_set_mem!, vlist, gen_const, ins_typeset_trap, verror,
+    gen_error, int_bits, gen_builtin, fold_add |
+
+  int_bits = 31;
+  assert((1 << (int_bits - 1)) == minint);
 
   vlist = mc:var_make_kglobal("list", global_lookup("list"));
+  verror = mc:var_make_kglobal("error", global_lookup("error"));
 
   // Mapping of tree-operators to intermediate code branch operators
   builtin_branch = sequence
-    (mc:branch_or, mc:branch_and,
-     false, false,
+    (false, false,
      mc:branch_eq, mc:branch_ne,
      mc:branch_lt, mc:branch_le,
      mc:branch_gt, mc:branch_ge,
      false, false, false, false, false, false,
      false, false, false, false, false, false,
-     false, false, false, false, false, false, false);
+     false, false, false, false, false, false, false, false);
+  assert(vlength(builtin_branch) == mc:parser_builtins);
   builtin_branch_not = sequence
-    (mc:branch_nor, mc:branch_nand,
-     false, false,
+    (false, false,
      mc:branch_ne, mc:branch_eq,
      mc:branch_ge, mc:branch_gt,
      mc:branch_le, mc:branch_lt);
+  for (|i, l| [ i = vlength(builtin_branch_not); l = vlength(builtin_branch) ];
+       i < l;
+       ++i)
+    assert(!builtin_branch[i]);
 
   make_bf = fn (name, op, nargs)
     sequence(mc:var_make_kglobal(name, global_lookup(name)), nargs, op);
 
-  // this can/could/should have been done on parse tree level...
   gen_abs_comp = fn (fcode, result, args)
     [
-      | plab |
-
-      plab = mc:new_label(fcode);
-      mc:ins_assign(fcode, result, car(args));
-      mc:ins_branch(fcode, mc:branch_ge, plab,
-                    list(result, mc:var_make_constant(0)));
-      mc:ins_compute(fcode, mc:b_negate, result, list(result));
-      mc:ins_label(fcode, plab);
+      | var0, var1 |
+      var0 = mc:new_local(fcode);
+      var1 = mc:new_local(fcode);
+      // var0 = arg;
+      mc:ins_assign(fcode, var0, car(args));
+      // var1 = var0 >> 30 (-1 for negative, 0 otherwise)
+      mc:ins_compute(fcode, mc:b_shift_right, var1,
+                     list(var0, mc:var_make_constant(int_bits - 1)));
+      // var0 = var0 ^ var1
+      mc:ins_compute(fcode, mc:b_bitxor, var0, list(var0, var1));
+      // result = var0 - var1
+      mc:ins_compute(fcode, mc:b_subtract, result, list(var0, var1));
       result
     ];
 
@@ -88,7 +99,7 @@ writes mc:this_function, mc:lineno
       if (args == null)
         mc:ins_assign(fcode, result, mc:var_make_constant(null))
       else if (cdr(args) == null)
-        mc:ins_compute(fcode, mc:b_cons, result, 
+        mc:ins_compute(fcode, mc:b_cons, result,
                        list(car(args), mc:var_make_constant(null)))
       else
         mc:ins_call(fcode, result, vlist . args);
@@ -99,32 +110,46 @@ writes mc:this_function, mc:lineno
     [
       mc:ins_trap(fcode, mc:trap_type, error_bad_type,
                   list(car(args), mc:var_make_constant(type)));
-      mc:ins_memory(fcode, mc:memory_write_safe, car(args), offset,
-                    cadr(args));
-      mc:ins_assign(fcode, result, cundefined);
+      mc:ins_assign(fcode, result, cadr(args));
+      mc:ins_memory(fcode, mc:memory_write_safe, car(args), offset, result);
     ];
 
   gen_const = fn (val) fn (fcode, result, args)
     mc:ins_assign(fcode, result, mc:var_make_constant(val));
 
+  gen_error = fn (fcode, result, args)
+    [
+      | arg, val |
+      @(arg) = args;
+      if (arg[mc:v_class] == mc:v_constant)
+        val = arg[mc:v_kvalue]
+      else if (arg[mc:v_class] == mc:v_global_constant)
+        val = global_value(arg[mc:v_goffset]);
+      if (integer?(val) && val >= 0 && val < last_runtime_error)
+        mc:ins_trap(fcode, mc:trap_always, val, null)
+      else
+        mc:ins_call(fcode, result, verror . args);
+    ];
+
   builtin_functions = sequence
-    (make_bf("car",            mc:b_car,                     1),  
-     make_bf("cdr",            mc:b_cdr,                     1),  
-     make_bf("string_length",  mc:b_slength,                 1),  
-     make_bf("slength",        mc:b_slength,                 1),  
-     make_bf("vector_length",  mc:b_vlength,                 1),  
-     make_bf("vlength",        mc:b_vlength,                 1),  
-     make_bf("typeof",         mc:b_typeof,                  1),  
-     make_bf("list",           gen_list,                     -1), 
-     make_bf("abs",            gen_abs_comp,                 1),      
-     make_bf("set_car!",       gen_set_mem!(0, type_pair),   2),  
-     make_bf("set_cdr!",       gen_set_mem!(1, type_pair),   2),  
+    (make_bf("car",            mc:b_car,                     1),
+     make_bf("cdr",            mc:b_cdr,                     1),
+     make_bf("string_length",  mc:b_slength,                 1),
+     make_bf("slength",        mc:b_slength,                 1),
+     make_bf("vector_length",  mc:b_vlength,                 1),
+     make_bf("vlength",        mc:b_vlength,                 1),
+     make_bf("typeof",         mc:b_typeof,                  1),
+     make_bf("list",           gen_list,                     -1),
+     make_bf("abs",            gen_abs_comp,                 1),
+     make_bf("set_car!",       gen_set_mem!(0, type_pair),   2),
+     make_bf("set_cdr!",       gen_set_mem!(1, type_pair),   2),
      make_bf("symbol_name",    mc:b_symbol_name,             1),
-     make_bf("symbol_get",     mc:b_symbol_get,              1),      
+     make_bf("symbol_get",     mc:b_symbol_get,              1),
      make_bf("symbol_set!",    gen_set_mem!(1, type_symbol), 2),
-     make_bf("compiled?",      gen_const(true),              0),  
-     make_bf("loop_count",     mc:b_loop_count,              0),  
-     make_bf("max_loop_count", mc:b_max_loop_count,          0));     
+     make_bf("compiled?",      gen_const(true),              0),
+     make_bf("loop_count",     mc:b_loop_count,              0),
+     make_bf("max_loop_count", mc:b_max_loop_count,          0),
+     make_bf("error",          gen_error,                    1));
 
   make_bb = fn (name, op, notop, nargs)
     sequence(mc:var_make_kglobal(name, global_lookup(name)), nargs, op, notop);
@@ -154,7 +179,9 @@ writes mc:this_function, mc:lineno
      make_btype("gone?", type_gone),
 
      make_bb("immutable?", mc:branch_immutable, mc:branch_mutable, 1),
-     make_bb("readonly?", mc:branch_readonly, mc:branch_writable, 1));
+     make_bb("readonly?", mc:branch_readonly, mc:branch_writable, 1),
+
+     make_bb("equal?", mc:branch_equal, mc:branch_nequal, 2));
 
   builtin_call? = fn (function, args, builtins)
     [
@@ -171,7 +198,6 @@ writes mc:this_function, mc:lineno
 
   // gniark, gniark, guess the values
   cundefined = mc:var_make_constant(42);
-  comp_undefined = sequence(mc:c_recall, -1, cundefined) . null;
   ctrue = mc:var_make_constant(true);
   comp_true = sequence(mc:c_recall, -1, ctrue);
   cfalse = mc:var_make_constant(false);
@@ -198,16 +224,76 @@ writes mc:this_function, mc:lineno
                                false);
     ];
 
+  ins_typeset_trap = fn (topf, arg, typeset)
+    [
+      // common case
+      if (typeset == mc:typeset_any)
+        exit<function> null;
+
+      | types |
+      types = mc:types_from_typeset(typeset);
+      if (cdr(types) == null)
+        [
+          mc:ins_trap(topf, mc:trap_type, error_bad_type,
+                      list(arg, mc:var_make_constant(car(types))));
+          exit<function> null;
+        ];
+
+      | oklab, elab, int_ok? |
+      elab = mc:new_label(topf);
+      oklab = mc:new_label(topf);
+      int_ok? = typeset & (1 << type_integer);
+      mc:ins_branch(topf, mc:branch_type? + type_integer,
+                    if (int_ok?) oklab else elab,
+                    list(arg));
+      if (int_ok?
+          && cdr(types = lfilter(fn (n) n != type_integer, types)) == null)
+        [
+          mc:ins_trap(topf, mc:trap_type, error_bad_type,
+                      list(arg, mc:var_make_constant(car(types))));
+          mc:ins_branch(topf, mc:branch_always, oklab, null);
+        ]
+      else
+        [
+          | null_ok? |
+          null_ok? = typeset & (1 << type_null);
+          mc:ins_branch(topf, mc:branch_type? + type_null,
+                        if (null_ok?) oklab else elab,
+                        list(arg));
+          if (null_ok?
+              && cdr(types = lfilter(fn (n) n != type_null, types)) == null)
+            [
+              mc:ins_trap(topf, mc:trap_type, error_bad_type,
+                          list(arg, mc:var_make_constant(car(types))));
+              mc:ins_branch(topf, mc:branch_always, oklab, null);
+            ]
+          else
+            [
+              loop
+                [
+                  if (types == null) exit null;
+                  mc:ins_branch(topf, mc:branch_type? + car(types), oklab,
+                                list(arg));
+                  types = cdr(types);
+                ];
+            ];
+        ];
+
+      mc:ins_label(topf, elab);
+      mc:ins_trap(topf, mc:trap_always, error_bad_type, null);
+      mc:ins_label(topf, oklab);
+    ];
+
   phase2 = fn (top)
     // Returns: intermediate rep of function top
     [
-      | clist, topf, result, args, types |
+      | clist, topf, result, args, typesets |
 
       mc:this_function = top;
       clist = top[mc:c_fvalue];
       topf = mc:new_fncode(top);
       args = top[mc:c_fargs];
-      types = top[mc:c_fargtypes];
+      typesets = top[mc:c_fargtypesets];
 
       mc:lineno = top[mc:c_flineno];
 
@@ -219,28 +305,28 @@ writes mc:this_function, mc:lineno
       // argument type checks
       while (args != null)
 	[
-	  | type |
+	  | typeset |
 
-	  type = car(types);
-	  if (type != stype_any)
-	    mc:ins_trap(topf, mc:trap_type, error_bad_type,
-			list(car(args), mc:var_make_constant(type)));
+	  typeset = car(typesets);
+          ins_typeset_trap(topf, car(args), typeset);
 	  args = cdr(args);
-	  types = cdr(types);
+	  typesets = cdr(typesets);
 	];
 
       // compute expression
       result = gen_clist(topf, clist);
 
       // return result
-      if (top[mc:c_freturn_type] != stype_any)
-	mc:ins_trap(topf, mc:trap_type, error_bad_type,
-		    list(result, mc:var_make_constant(top[mc:c_freturn_type])));
+      ins_typeset_trap(topf, result, top[mc:c_freturn_typeset]);
       mc:ins_return(topf, result);
 
       top[mc:c_fvalue] =
-	mc:remove_var_aliases(mc:remove_labels(mc:remove_aliases(mc:remove_branches(mc:get_instructions(topf)))));
+	mc:remove_var_aliases(mc:remove_labels(mc:remove_aliases(
+          mc:remove_branches(mc:get_instructions(topf)))));
       top[mc:c_fnumber] = (closure_count = closure_count + 1);
+
+      mc:this_function = null;
+
       top
     ];
 
@@ -257,6 +343,99 @@ writes mc:this_function, mc:lineno
 	  clist = cdr(clist)
 	];
       result
+    ];
+
+  | get_const |
+  get_const = fn (argl)
+    [
+      match (argl)
+        [
+          (arg) && arg[mc:v_class] == mc:c_recall => [
+            | var |
+            var = arg[mc:c_rsymbol];
+            if (var[mc:v_class] == mc:v_constant)
+              exit<function> var[mc:v_kvalue];
+          ];
+        ];
+      null
+    ];
+
+  gen_builtin = fn (fcode, op, args)
+    [
+      | result |
+      result = mc:new_local(fcode);
+      mc:ins_compute(fcode, op, result, args);
+      result
+    ];
+
+  // constant-fold (nested) addition of args (must be a list of two
+  // elements); if partial?, the top-level add will never be folded
+  fold_add = fn (fcode, args, partial?)
+    [
+      | terms, recurse |
+      // updates terms with the remaining terms to be added
+      recurse = fn (args, partial?)
+        lforeach(fn (argl) [
+          loop
+            <continue> [
+              | arg |
+              @(arg . argl) = argl;
+              if (argl != null)
+                exit<continue> gen_component(fcode, arg);
+
+              if (arg[mc:c_class] == mc:c_builtin
+                  && arg[mc:c_bfn] == mc:b_add)
+                exit recurse(arg[mc:c_bargs], false);
+
+              | r |
+              r = gen_component(fcode, arg);
+              if (terms != null)
+                [
+                  // check if r can be constant folded with the most recent
+                  // term
+                  if (!(partial? && cdr(terms) == null)
+                      && r[mc:v_class] == mc:v_constant)
+                    [
+                      | r2 |
+                      r2 = car(terms);
+                      if (r2[mc:v_class] == mc:v_constant)
+                        [
+                          | v, v2 |
+                          v = r[mc:v_kvalue];
+                          v2 = r2[mc:v_kvalue];
+                          if (integer?(v) && integer?(v2)
+                              || string?(v) && string?(v2))
+                            [
+                              if (mc:verbose >= 3)
+                                dformat("%d: %s FOLD%s\n",
+                                        mc:lineno,
+                                        if (string?(v)) "STR" else "INT",
+                                        if (partial?) " (partial)" else "");
+                              exit<function>
+                                terms = mc:var_make_constant(v2 + v)
+                                  . cdr(terms)
+                            ]
+                        ]
+                    ];
+                  // if there were already two terms in the list, add them
+                  // together now
+                  if (cdr(terms) != null)
+                    terms = gen_builtin(fcode, mc:b_add,
+                                        list(cadr(terms), car(terms)))
+                      . null
+                ];
+              exit terms = r . terms;
+            ];
+        ], args);
+      recurse(args, partial?);
+
+      if (cdr(terms) == null)
+        car(terms)
+      else
+        [
+          assert(cddr(terms) == null);
+          gen_builtin(fcode, mc:b_add, list(cadr(terms), car(terms)))
+        ]
     ];
 
   gen_component = fn (fcode, c)
@@ -290,6 +469,13 @@ writes mc:this_function, mc:lineno
 	]
       else if (class == mc:c_recall)
 	c[mc:c_rsymbol]
+      else if (class == mc:c_vref)
+        [
+          | var |
+          var = mc:new_local(fcode);
+          mc:ins_vref(fcode, var, c[mc:c_rsymbol]);
+          var
+        ]
       else if (class == mc:c_closure)
 	[
 	  | closure, f |
@@ -301,11 +487,34 @@ writes mc:this_function, mc:lineno
 	]
       else if (class == mc:c_execute)
 	[
-	  | args, result, function, bf |
+	  | args, result, function, bf, fval |
 
 	  result = mc:new_local(fcode);
-	  args = lmap(fn (arg) gen_clist(fcode, arg), c[mc:c_efnargs]);
-	  function = car(args);
+          args = lcopy(c[mc:c_efnargs]);
+          function = set_car!(args, gen_clist(fcode, car(args)));
+
+          // fold string concatenations for calls to OP_STR_READONLY primitives
+          if (function[mc:v_class] == mc:v_global_constant
+              && function?(fval = global_value(function[mc:v_goffset]))
+              && !closure?(fval)
+              && primitive_flags(fval) & OP_STR_READONLY)
+            lmap!(fn (argl) [
+              loop
+                [
+                  | arg |
+                  @(arg . argl) = argl;
+                  if (argl == null)
+                    exit
+                      if (arg[mc:c_class] == mc:c_builtin
+                          && arg[mc:c_bfn] == mc:b_add)
+                        fold_add(fcode, arg[mc:c_bargs], false)
+                      else
+                        gen_component(fcode, arg);
+                  gen_component(fcode, arg);
+                ];
+            ], cdr(args))
+          else
+            lmap!(fn (arg) gen_clist(fcode, arg), cdr(args));
 
 	  // Check for builtin functions
 	  if (bf = builtin_call?(function, args, builtin_functions))
@@ -324,7 +533,8 @@ writes mc:this_function, mc:lineno
 	]
       else if (class == mc:c_exit)
 	[
-	  if (!mc:exit_block(fcode, c[mc:c_ename], gen_clist(fcode, c[mc:c_eexpression])))
+	  if (!mc:exit_block(fcode, c[mc:c_ename],
+                             gen_clist(fcode, c[mc:c_eexpression])))
 	    if (c[mc:c_ename] == null) mc:error("no loop to exit from")
 	    else mc:error("no block labeled %s", c[mc:c_ename]);
 	  cundefined // but an exit never returns ...
@@ -367,23 +577,22 @@ writes mc:this_function, mc:lineno
 	      vargs = lmap(fn (arg) gen_clist(fcode, arg), args);
 	      mc:ins_call(fcode, result, vset . vargs);
 	      result
-	      
 	    ]
-	  else
-	    [
-	      | result, vargs |
-	      result = mc:new_local(fcode);
-	      vargs = lmap(fn (arg) gen_clist(fcode, arg), c[mc:c_bargs]);
-	      mc:ins_compute(fcode, op, result, vargs);
-	      result
+	  else if (op == mc:b_add)
+            fold_add(fcode, args, true)
+          else
+            [
+              | vargs |
+              vargs = lmap(fn (arg) gen_clist(fcode, arg), args);
+              gen_builtin(fcode, op, vargs)
 	    ]
 	]
       else fail();
-      
+
       mc:lineno = olineno;
       result
     ];
-      
+
   gen_if = fn (fcode, condition, success, failure)
     // Types: fcode : fncode
     //        condition, success, failure : list of component or 'false'
@@ -469,6 +678,10 @@ writes mc:this_function, mc:lineno
 	  condition = cdr(condition);
 	];
       condition = car(condition); // The actual condition
+
+      // We may want to restore the previous line number
+      if (condition[mc:c_lineno] > 0)
+	mc:lineno = condition[mc:c_lineno];
 
       class = condition[mc:c_class];
       if (class == mc:c_builtin)
@@ -564,7 +777,7 @@ writes mc:this_function, mc:lineno
 	  branch_fail = mc:branch_false;
 	  branch_succeed = mc:branch_true;
 	];
-      
+
       // generate basic code
       if (success)
         [

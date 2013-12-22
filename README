@@ -1,7 +1,7 @@
 mudlle: MUD Language for Little Extensions
 ------------------------------------------
 
-This software is Copyright (C) 1993-2006 David Gay and Gustav Hållberg.
+This software is Copyright (C) 1993-2012 David Gay and Gustav Hållberg.
 Read the COPYRIGHT file for terms of use.
 
 Installation
@@ -42,7 +42,7 @@ language introduction and reference. However, everything described in those
 documents should still work.
 
 A compiler is available for the x86/linux and sparc/solaris platforms. To
-load it, type 
+load it, type
   load("sc.mud") // sparc/solaris compiler
 or
   load("xc.mud") // x86/linux compiler
@@ -65,4 +65,3 @@ Contact Information
 
 You can contact me at dgay@acm.org. My response time varies from 3 minutes
 to 3 months...
-

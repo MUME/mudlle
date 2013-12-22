@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -28,7 +28,7 @@
 #endif
 
 #define N(x) x
-	
+
 /* Important constants ... */
 #define true 3
 #define false 1
@@ -158,7 +158,7 @@
 	set	N(env_values),%globals; \
 	mov	%l0,%xcountr; \
 	ld	[%globals],%globals;
-			
+
 #define CCALL_LEAF(fn) \
 	set	N(ccontext),%l0; \
 	st	%sp,[%l0+cc_frame_end]; \
@@ -167,7 +167,7 @@
 	set	N(env_values),%globals; \
 	mov	%l0,%xcountr; \
 	ld	[%globals],%globals;
-			
+
 #define CCALL(fn) \
 	set	N(ccontext),%l0; \
 	st	%sp,[%l0+cc_frame_end]; \
@@ -181,7 +181,7 @@
 	set	N(xcount),%l0; \
 	ld	[%globals],%globals; \
 	ld	[%l0],%xcountr;
-			
+
 #define CCALL_SECURE(fn) \
 	set	N(ccontext),%l0; \
 	st	%sp,[%l0+cc_frame_end]; \
@@ -196,7 +196,7 @@
 	set	N(xcount),%l0; \
 	ld	[%globals],%globals; \
 	ld	[%l0],%xcountr;
-			
+
 /* Simple integer manipulation macros */
 #define SETINT(reg) \
 	bset	1,%reg;		/* set integer type bit */
@@ -252,10 +252,10 @@
 #else
 #define GCCHECK(reg)
 #endif
-	
+
 
 	.global	N(abort)
-	
+
 /* Boolean builtins: and, or, not */
 
 	.global	N(bor)
@@ -310,7 +310,7 @@ N(blne):	cmp	%arg0,%arg1
 	nop
 
 
-/* Simple integer operations: <, <=, >, >=, |, &, ^, <<, >>, -, *, /, %, ~, 
+/* Simple integer operations: <, <=, >, >=, |, &, ^, <<, >>, -, *, /, %, ~,
    - (unary), + (int) */
 
 #define INT1ARG \
@@ -444,7 +444,7 @@ N(bbitnot):
 	INT1ARG
 	retl
 	xnor	%arg0,1,%arg0
-	
+
 
 /* Call C code: ref, + */
 
@@ -476,7 +476,7 @@ cadd:	/* Call string_append */
 	restore	%o0,0,%arg0
 
 	.global	N(bref)
-	
+
 N(bref):	ISINT(arg0)
 	bne	cref
 	nop
@@ -493,7 +493,7 @@ cref:	mov	%arg0,%globals
 	call	clear_frame
 	nop
 	mov	%globals,%o0
-	mov	%scratch,%o1	
+	mov	%scratch,%o1
 
 	CCALL_LEAF(N(code_ref))
 	ret
@@ -673,7 +673,7 @@ clear_frame:
 	clr	%o5
 
 	.global	N(balloc_variable)
-	
+
 N(balloc_variable):
 	set	N(posgen0),%arg0
 	ld	[%arg0],%arg0
@@ -712,7 +712,7 @@ vgc:	save	%sp,-minframe,%sp
 
 
 	.global	N(balloc_closure)
-	
+
 /* size of closure is in arg1 */
 N(balloc_closure):
 	set	N(posgen0),%arg0
@@ -810,7 +810,7 @@ call_secure:
 	lduh	[%closure_in+primop_seclevel],%arg0
 	cmp	DEFAULT_SECLEVEL,%arg0
 	tlu	error_security_violation+trap_offset
-	
+
 call_primitive:
 	/* Check arg count */
 	lduh	[%closure_in+primop_nargs],%arg0
@@ -915,7 +915,7 @@ vargc:	mov	%o7,%l0
 	sra	%l2,1,%l1
 
 	.global	N(bcall_secure)
-	
+
 N(bcall_secure):
 	ld	[%closure_in+object_offset+primitive_op],%closure_in
 	/* Check security level */
@@ -1044,7 +1044,7 @@ N(mc_invoke):
 	clr	[%sp+argstart+6*4]
 	clr	[%sp+argstart+7*4]
 	clr	[%sp+argstart+8*4]
-	
+
 	ld	[%closure+object_offset],%arg0
 	set	N(env_values),%globals
 	mov	%i0,%o0
@@ -1095,8 +1095,8 @@ N(mc_invoke_vector):
 	set	N(ccontext),%scratch
 	ld	[%scratch+cc_frame_start],%l3
 	ld	[%scratch+cc_frame_end],%l2
-	st	%sp,[%scratch]	
-	
+	st	%sp,[%scratch]
+
 	/* Transfer arguments (from the 6th, to argstart + 5*4) */
 	ld	[%fp+argstart+7*4],%l5
 	ld	[%fp+argstart+8*4],%l6
@@ -1262,4 +1262,3 @@ N(flush_windows):
 	restore
 	ret
 	restore
-		

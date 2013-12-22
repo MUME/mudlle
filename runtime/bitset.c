@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,12 +19,13 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "runtime/runtime.h"
-#include "interpret.h"
+#include "runtime.h"
+#include "../interpret.h"
 #include <string.h>
 
 TYPEDOP(new_bitset, 0,
-        "`n -> `bitset. Returns a bitset usable for storing at least `n bits",
+        "`n -> `bitset. Returns an empty bitset usable for storing at"
+        " least `n bits.",
 	1, (value n),
 	OP_LEAF | OP_NOESCAPE, "n.s")
 {
@@ -34,6 +35,7 @@ TYPEDOP(new_bitset, 0,
 
   size = (size + 7) >> 3;
   struct string *newp = alloc_empty_string(size);
+  memset(newp->str, 0, size);
   return newp;
 }
 
@@ -61,11 +63,11 @@ TYPEDOP(set_bitb, "set_bit!", "`bitset `n -> . Sets bit `n in `bitset",
 {
   TYPEIS(b, type_string);
   long n = GETINT(_n);
-  
+
   long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   b->str[i] |= 1 << (n & 7);
-  
+
   undefined();
 }
 
@@ -76,37 +78,37 @@ TYPEDOP(clear_bitb, "clear_bit!",
 {
   TYPEIS(b, type_string);
   long n = GETINT(_n);
-  
+
   long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
   b->str[i] &= ~(1 << (n & 7));
-  
+
   undefined();
 }
 
-TYPEDOP(bit_setp, "bit_set?", "`bitset `n -> `b. True if bit `n is set",
-	2, (struct string *b, value _n),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
+static bool bit_is_set(struct string *b, value _n)
 {
   TYPEIS(b, type_string);
   long n = GETINT(_n);
   long i = n >> 3;
   if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
-  
-  return makeint(b->str[i] & 1 << (n & 7));
+
+  return b->str[i] & (1 << (n & 7));
+}
+
+TYPEDOP(bit_setp, "bit_set?", "`bitset `n -> `b. True if bit `n is set",
+	2, (struct string *b, value n),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "sn.n")
+{
+  return makebool(bit_is_set(b, n));
 }
 
 TYPEDOP(bit_clearp, "bit_clear?",
         "`bitset `n -> `b. True if bit `n is not set",
-	2, (struct string *b, value _n),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.n")
+	2, (struct string *b, value n),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "sn.n")
 {
-  TYPEIS(b, type_string);
-  long n = GETINT(_n);
-  long i = n >> 3;
-  if (i < 0 || i >= string_len(b)) runtime_error(error_bad_index);
-  
-  return makebool(!(b->str[i] & 1 << (n & 7)));
+  return makebool(!bit_is_set(b, n));
 }
 
 /* All binary ops expect same-sized bitsets */
@@ -123,7 +125,6 @@ static struct string *bitset_binop(struct string *b1, struct string *b2,
   struct string *result;
   if (alloc_new)
     {
-      struct gcpro gcpro1, gcpro2;
       GCPRO2(b1, b2);
       result = alloc_empty_string(l);
       UNGCPRO();
@@ -221,55 +222,55 @@ TYPEDOP(bassignb, "bassign!",
 TYPEDOP(bitset_inp, "bitset_in?",
         "`bitset1 `bitset2 -> `b. True if `bitset1 is a subset of `bitset2",
 	2, (struct string *b1, struct string *b2),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "ss.n")
 {
   TYPEIS(b1, type_string);
   TYPEIS(b2, type_string);
   long l = string_len(b1);
   if (l != string_len(b2)) runtime_error(error_bad_value);
-  
+
   const char *sb1 = b1->str, *sb2 = b2->str;
   while (l-- >= 0) if (*sb1++ & ~*sb2++) return makebool(false);
-  
+
   return makebool(true);
 }
 
 TYPEDOP(bitset_eqp, "bitset_eq?",
         "`bitset1 `bitset2 -> `b. True if `bitset1 == `bitset2",
 	2, (struct string *b1, struct string *b2),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.n")
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "ss.n")
 {
   TYPEIS(b1, type_string);
   TYPEIS(b2, type_string);
   long l = string_len(b1);
   if (l != string_len(b2)) runtime_error(error_bad_value);
-  
+
   return makebool(memcmp(b1->str, b2->str, l) == 0);
 }
 
 TYPEDOP(bemptyp, "bempty?",
         "`bitset -> `b. True if `bitset has all bits clear",
 	1, (struct string *b),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "s.n")
 {
   TYPEIS(b, type_string);
-  
+
   long l = string_len(b);
   const char *sb = b->str;
   while (l-- > 0)
     if (*sb++) return makebool(false);
-  
+
   return makebool(true);
 }
 
 TYPEDOP(bcount, 0, "`bitset -> `n. Returns the number of bits set in `bitset",
 	1, (struct string *b),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "s.n")
 {
   static const char count[16] = {
     0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
   };
-  
+
   TYPEIS(b, type_string);
   long l = string_len(b);
   const char *sb = b->str;

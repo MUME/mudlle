@@ -69,4 +69,3 @@ regressqpass("callsec2", "unlimited_execution()");
 cprim4 = sequence;
 regresseval("callvar1", "cprim4(22, 33)", '[22 33]);
 regresseval("callvar2", "sequence(22, 33)", '[22 33]);
-

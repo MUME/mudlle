@@ -33,7 +33,7 @@ crash the game. They are likely to cause strange behaviour, but this
 is more or less unavoidable.
 
 The result of this may not please everyone, but I feel that a
-reasonable balance has been struck. 
+reasonable balance has been struck.
 
 You may be wondering after all this what the language is like ? In one
 incomprehensible sentence, it is an expression-based imperative
@@ -53,7 +53,7 @@ language are visible in this example, namely:
   'fn (<parameters>) <expression>' defines a function, whose result is
     <expression>.
 
-  expressions: these are the building blocks of the language. 
+  expressions: these are the building blocks of the language.
     Any piece of code written in the language is an expression that can
     be evaluated, for example:
 
@@ -65,7 +65,7 @@ language are visible in this example, namely:
     to be executed in sequence (eg a display followed by a newline, as
     in the example above):
 
-      [ | a | a = x + y; display(a); newline(); a ] 
+      [ | a | a = x + y; display(a); newline(); a ]
 
     is a block that declares a variable 'a', stores 'x+y' in it, then
     displays a. The value of this block is a: blocks are also expressions.
@@ -77,7 +77,7 @@ language are visible in this example, namely:
 
 You will have noticed that their are no type declarations, the language
 is 'dynamically-typed'. This means that the language still has various
-data types (integer, string, list, ...), but that a given variable can 
+data types (integer, string, list, ...), but that a given variable can
 contain a value of any type. All type-checking is done at run-time,
 for example '+' checks that it is really adding two integers. So you
 can write:
@@ -115,7 +115,7 @@ but the following will cause a runtime error:
   modulo(3)	  // Bad number of arguments
 
 If the result type is omitted (eg as in 'newline: -> ') it means that
-the function returns an unspecified value (ie nothing useful). 
+the function returns an unspecified value (ie nothing useful).
 
 If the parameter list ends with '...' it means that the function
 accepts a variable number of parameters, as in
@@ -163,7 +163,7 @@ apropos(string) to get help on all functions whose name
 contains 'string', for example
 
   apropos("sub")
-  RESULT: 
+  RESULT:
     substring
     Primitive: s1 n1 n2 -> s2. Extract substring of s starting at n1 of length n2.
     The first character is numbered 0
@@ -196,12 +196,12 @@ The answer is lots of things:
 
 - a function: fn (x) x + 1
 
-- a control expression: while (a > 0) [ a = a - 1; b = b * a], 
+- a control expression: while (a > 0) [ a = a - 1; b = b * a],
     if (a == 1) 3 else 2
 
 - a function call: display("fun"), modulo(88,12)
 
-- a complex expression, with the usual operators (and brackets): 
+- a complex expression, with the usual operators (and brackets):
     3+2, 7*(a-b/2), a != 0 or b > 2
 
 - a variable assignment: a = 44
@@ -444,7 +444,7 @@ even improve the efficiency of the code:
 
 add1 is a function that accepts an integer argument and returns an
 integer result. Runtime checks are made at function entry and exit to
-confirm that the types are correct. 
+confirm that the types are correct.
 
 The possible type keywords are: int, string, vector, pair, null, list,
 symbol, table, function, object, character, gone, any, none. list
@@ -462,7 +462,7 @@ line.  For long comments, of for disabling sections of code, you can
 also surround your comment with /* ... */ (as in C). Note however that
 /* */ comments nest, i.e. you can have:
 
-   /* this is a 
+   /* this is a
         /* nested */
       comment
    */
@@ -490,7 +490,7 @@ undefined result).
 
 Here is a typically bad imperative function:
 
-  mad = fn (a, b) 
+  mad = fn (a, b)
     [ c = a + 2; d = b - 1;
       display("The result of "); display(c); display("/"); display(d);
       display(" is "); display(c / d); newline() ]
@@ -518,7 +518,7 @@ functions which use the same names.
 
 This is achieved by declaring 'c' and 'd' as local variables:
 
-  better = fn (a, b) 
+  better = fn (a, b)
     [ | c, d | // Declare local variables c and d
       c = a + 2; d = b - 1;
       display("The result of "); display(c); display("/"); display(d);
@@ -538,7 +538,7 @@ A typical usage:
 
   d
   RESULT: something
-  
+
 
 Local variables are simply listed at the start of a block, surrounded
 by '|'s. New local variables are created every time the block is
@@ -687,7 +687,7 @@ This example has also shown how you can add a help text to functions
 you define.
 
 The other classical control structure, recursion, is also available.
-Knowing that 
+Knowing that
 
 	    | n * fact(n - 1) if n > 0
   fact(n) = |
@@ -754,7 +754,7 @@ case, the whole function's expression is implicitly labeled 'function':
 As all the examples above show, you can only use exit<name> from within
 a block labeled 'name'. Attempts to use such an exit elsewhere will
 cause a (compile-time) error.
-       
+
 3.6) Libraries & modules
 ------------------------
 
@@ -884,7 +884,7 @@ is:
 There are a number of functions connected with module handling, but
 they are mostly for internal use. The useful ones are:
 
-  module_status: s -> n. Returns status of module s (one of 
+  module_status: s -> n. Returns status of module s (one of
   module_unloaded, module_loaded, module_error, module_protected)
 
   module_vstatus: n -> s/n. Returns status of variable n, var_write if
@@ -910,7 +910,7 @@ The following types are defined in mudlle:
 
 - null type: used to mark the end of lists, has only one value: null
 
-- vector: a one-dimensional array of values, similar to a list, [ ], 
+- vector: a one-dimensional array of values, similar to a list, [ ],
   [ 12 -1 ]
 
 - closure (or function): fn (x) x + 1
@@ -1107,7 +1107,7 @@ second element of a pair (the names have historical reasons):
 Lists are just a convention on the use of pairs: to pass a list to a
 function you pass it a pair. The first element of the pair is
 considered to be the first element of the list. The second element of
-the pair is expected to be either: 
+the pair is expected to be either:
 
 - null (the null value), which means that this is the end of the list.
 
@@ -1239,7 +1239,7 @@ ASSOCIATIVE ARRAYS and SYMBOLS
 
 An associative array is more general (and less efficient) than a vector.
 Its indexes are strings, which is convenient, eg, for symbol tables. An
-associative array can store an arbitrary number of entries. Each time a 
+associative array can store an arbitrary number of entries. Each time a
 new index is used, a new element is added to the array. Elements can
 be effectively deleted by setting their value to null (an array reference
 with an unused index also returns null). The indexes of associative arrays
@@ -1328,12 +1328,12 @@ and others, may be used).
 	 by "s" if it is different (for plurals).
       %P compares the next argument (an integer) with 1, and is replaced
 	 by "ies" if it is different, "y" if it is equal (also for plurals).
-    
+
 display, write and examine display varying amounts of information on
 their parameter, display the least, examine the most.
 
 load loads a file whose pathname you specify. Within MUME this function
-is not available (see the mudlle/mume documentation for more information). 
+is not available (see the mudlle/mume documentation for more information).
 
 load_data & save_data load & save mudlle values. save_data finds all the
 data reachable from its argument, and saves it to disk. load_data reloads
@@ -1341,7 +1341,7 @@ this data and recreates an identical value. There are no restrictions on
 the complexity of the stored values.
 
 load/save_data preserve the == relationship between the reachable
-parts of x (for instance you can save a circular list with no problems). 
+parts of x (for instance you can save a circular list with no problems).
 But the values returned by separate calls to load_data are never related.
 
 For instance if you have:
@@ -1356,7 +1356,7 @@ Then y = [ (1 . 2) 3 ], and y[0] == x. If you do:
   x1 = load_data("x")
   y1 = load_data("y")
 
-Then y1 = [ (1 . 2) 3], and x1 = (1 . 2). But y != y1, x != x1 and 
+Then y1 = [ (1 . 2) 3], and x1 = (1 . 2). But y != y1, x != x1 and
 y1[0] != x1.
 
 Within MUME the god-accessible versions of load_data and save_data have
@@ -1413,11 +1413,11 @@ It is sometimes useful to execute a piece of code that may cause
 a runtime error, without having your whole computation fail. Two
 functions are provided for this purpose:
 
-  catch_error: fn b -> x. Executes fn() and returns its result. If an 
+  catch_error: fn b -> x. Executes fn() and returns its result. If an
   error occurs, returns the error number. If b is true, error messages
    are suppressed
 
-  handle_error: fn1 fn2 -> x. Executes fn1(). If an error occurs, calls 
+  handle_error: fn1 fn2 -> x. Executes fn1(). If an error occurs, calls
   fn2(errno). Returns result of fn1 or fn2
 
 handle_error is the more useful of these two functions as it allows easy
@@ -1560,4 +1560,3 @@ Theoretically, you should check that obj is not FALSE (no object
 called "glorf" found), but move_object expects an object as parameter.
 If it gets FALSE, it will signal a runtime error and whatever was
 being doing will be abandoned.
-

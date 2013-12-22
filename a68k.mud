@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -77,7 +77,7 @@ defines m68k:assemble
 	       ], ilist);
       change
     ];
-		       
+
 
   remove_aliases = fn (ilist)
     // Types: ilist: list of 68k instructions
@@ -182,7 +182,7 @@ defines m68k:assemble
       ea2 = ins[m68k:i_arg2];
       size = ins[m68k:i_size];
 
-      if (type == m68k:ins_move) 
+      if (type == m68k:ins_move)
 	[
 	  | dea |
 
@@ -194,7 +194,7 @@ defines m68k:assemble
 	  offset = ea_extension(code, offset + 2, ea1, size, info);
 	  ea_extension(code, offset, ea2, size, info)
 	]
-      else if (type == m68k:ins_jump || type == m68k:ins_jsr) 
+      else if (type == m68k:ins_jump || type == m68k:ins_jsr)
 	[
 	  setword(code, offset, basic_code[type] | mode1[size] | ea_code(ea1));
 	  ea_extension(code, offset + 2, ea1, size, info)
@@ -245,7 +245,7 @@ defines m68k:assemble
 	  ]
       else if (type == m68k:ins_compare || type == m68k:ins_and ||
 	       type == m68k:ins_add || type == m68k:ins_subtract)
-        if (ea2[m68k:ea_class] == m68k:lregister) 
+        if (ea2[m68k:ea_class] == m68k:lregister)
 	  [
 	    | r2 |
 

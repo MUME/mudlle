@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -111,7 +111,7 @@ writes nops_called, nops_inlined
     (sparc:reg_i0, sparc:reg_i1, sparc:reg_i2, sparc:reg_i3,
      sparc:reg_i4, sparc:reg_l2, sparc:reg_l3, sparc:reg_l4,
      sparc:reg_l5, sparc:reg_l6, sparc:reg_l7);
-  
+
   // nb of registers of each category available
   sparc:nscratch = fn (ifn) 1;
   sparc:ncaller = fn (ifn) 6;
@@ -227,8 +227,7 @@ writes nops_called, nops_inlined
 	  aloc = arg[mc:v_location];
 	  if (mc:verbose >= 3)
 	    [
-	      display(format("checking %s", mc:svar(arg)));
-	      newline();
+	      dformat("checking %s\n", mc:svar(arg));
 	    ];
 	  if (aloc && aloc[mc:v_lclass] == mc:v_lregister &&
 	      aloc[mc:v_lrtype] == mc:reg_callee)
@@ -239,9 +238,8 @@ writes nops_called, nops_inlined
 	      creg = aloc[mc:v_lrnumber];
 	      if (mc:verbose >= 3)
 		[
-		  display(format("%s better in %s",
-				 mc:svar(arg), rarg));
-		  newline();
+		  dformat("%s better in %s\n",
+                          mc:svar(arg), rarg);
 		];
 	      if (regs[creg] != rarg) // not there
 		[
@@ -344,7 +342,7 @@ writes nops_called, nops_inlined
 	   clear_bit!(spilt, arg[mc:v_number]);
 	   clear_bit!(locals, arg[mc:v_number]);
 	   clear_bit!(temps, arg[mc:v_number]);
-	 ], 
+	 ],
 	 list_first_n!(nregargs, lcopy(ifn[mc:c_fargs])));
     ];
 
@@ -401,7 +399,7 @@ writes nops_called, nops_inlined
 	  argcheck[mc:i_top] == mc:trap_argcheck)
 	[
 	  cmp(code, reg_argcount, car(argcheck[mc:i_targs])[mc:v_kvalue]);
-		   
+
 	  // Remove trap ins
 	  ifn[mc:c_fvalue] = ilist = dremove!(ilist, ilist);
 	]
@@ -495,7 +493,7 @@ writes nops_called, nops_inlined
 
       code
     ];
-      
+
 
   sparc:mgen_instruction = fn (code, ifn, ainfo, il)
     [
@@ -566,7 +564,7 @@ writes nops_called, nops_inlined
 	type_trap(code, arg2[mc:v_kvalue], fn () fetch1(code, arg1), type1)
       else fail();
     ];
-	  
+
 
   mgen_return = fn (code, ifn, ainfo, ins)
     [
@@ -700,7 +698,7 @@ writes nops_called, nops_inlined
     ];
 
   builtins = sequence
-    ("bor", "band", 0, 0,
+    (0, 0,
      "bleq", "blne", "bllt", "blle", "blgt", "blge",
      "bbitor", "bbitxor", "bbitand", "bshift_left", "bshift_right",
      "badd", "bsubtract", "bmultiply", "bdivide", "bremainder",
@@ -708,7 +706,7 @@ writes nops_called, nops_inlined
      "bcar", "bcdr");
 
   commute = sequence
-    (true, true, 0, 0,
+    (0, 0,
      false, false, false, false, false, false,
      true, true, true, false, false,
      false, false, true, false, false,
@@ -717,18 +715,18 @@ writes nops_called, nops_inlined
 
   // Type of compute op arguments (uses type_xxx/stype_xxx sets)
   typearg1 = sequence
-    (stype_any, stype_any, 0, 0,
+    (0, 0,
      stype_any, stype_any, type_integer, type_integer, type_integer, type_integer,
      type_integer, type_integer, type_integer, type_integer, type_integer,
-     stype_any, type_integer, type_integer, type_integer, type_integer, 
+     stype_any, type_integer, type_integer, type_integer, type_integer,
      type_integer, stype_any, type_integer, 0, 0, 0, 0, stype_any, 0, 0, 0,
      type_pair, type_pair, type_string, type_vector, type_integer);
 
   typearg2 = sequence
-    (stype_any, stype_any, 0, 0,
+    (0, 0,
      stype_any, stype_any, type_integer, type_integer, type_integer, type_integer,
      type_integer, type_integer, type_integer, type_integer, type_integer,
-     stype_any, type_integer, type_integer, type_integer, type_integer, 
+     stype_any, type_integer, type_integer, type_integer, type_integer,
      0, 0, 0, 0, 0, 0, 0, stype_any, 0, 0, 0,
      0, 0, 0, 0, type_integer);
 
@@ -736,11 +734,11 @@ writes nops_called, nops_inlined
     if (in_reg(dvar)) get_reg(dvar)
     else  reg_arg0;
 
-  inline1? = fn (op, arg, type) 
+  inline1? = fn (op, arg, type)
     // Returns: True if op should be inlined on arg
     true;
 
-  mgen_inline1 = fn (code, op, r, type, d) 
+  mgen_inline1 = fn (code, op, r, type, d)
     // Effects: Generates code for d = op r
     //   d, r are registers
     if (op == mc:b_negate)
@@ -793,7 +791,7 @@ writes nops_called, nops_inlined
   relop = fn (code, branch, r1, r2, d)
     [
       | skip |
-      
+
       skip = sparc:new_label(code);
       cmp(code, r1, r2);
       mov(code, mfalse, d);
@@ -806,60 +804,7 @@ writes nops_called, nops_inlined
     // Effects: Generates code for d = r1 op r2
     //   type1 & type2 are provided to help generate code for polymorphic ops
     //   r1, r2, d are registers
-    if (op == mc:b_or)
-      [
-	| skip |
-
-	// (v1-1) | v2 == false iff v1 == false && v2 == false
-	// (this assumes that 2 is an illegal value)
-	skip = sparc:new_label(code);
-	sparc:sub(code, r1, 1, reg_scratch);
-	sparc:or(code, reg_scratch, r2, d);
-	cmp(code, d, mfalse);
-	sparc:branch(code, sparc:bne, skip, true);
-	mov(code, mtrue, d);
-	sparc:label(code, skip);
-      ]
-    else if (op == mc:b_and)
-      if (integer?(r2))
-	  if (r2 == mfalse) mov(code, mfalse, d)
-	  else // x and true
-	    [
-	      | skip |
-
-	      skip = sparc:new_label(code);
-
-	      cmp(code, r1, mfalse);
-	      mov(code, mtrue, d);
-	      sparc:branch(code, sparc:beq, skip, true);
-	      mov(code, mfalse, d);
-	      sparc:label(code, skip);
-	    ]
-      else
-	[
-	  | skip1, skip2 |
-
-	  skip1 = sparc:new_label(code);
-	  skip2 = sparc:new_label(code);
-	  if (r2 == d) // oops
-	    [
-	      | t |
-	      
-	      t = r1; r1 = r2; r2 = t;
-	    ];
-	  // works even if r1 == r2 == d
-	  cmp(code, r1, mfalse);
-	  mov(code, mtrue, d);
-	  sparc:branch(code, sparc:beq, skip1, true);
-	  mov(code, mfalse, d);
-	  sparc:label(code, skip1);
-	  
-	  cmp(code, r2, mfalse);
-	  sparc:branch(code, sparc:beq, skip2, true);
-	  mov(code, mfalse, d);
-	  sparc:label(code, skip2);
-	]
-    else if (op == mc:b_eq) relop(code, sparc:beq, r1, r2, d)
+    if (op == mc:b_eq) relop(code, sparc:beq, r1, r2, d)
     else if (op == mc:b_ne) relop(code, sparc:bne, r1, r2, d)
     else if (op == mc:b_lt) relop(code, sparc:blt, r1, r2, d)
     else if (op == mc:b_le) relop(code, sparc:ble, r1, r2, d)
@@ -1007,7 +952,7 @@ writes nops_called, nops_inlined
 	  ]
     else fail();
 
-  
+
   mgen_compute = fn (code, ins)
     [
       | args, arg1, arg2, r1, r2, rd, op, dest, types, type1, type2 |
@@ -1145,7 +1090,7 @@ writes nops_called, nops_inlined
 	      extra = cdr(extra);
 	    ];
 	];
-      
+
       // first nregargs go into regs_args_in
       rargs = regs_args_in;
       while (rargs != null && args != null)
@@ -1167,47 +1112,47 @@ writes nops_called, nops_inlined
       if (nargs >= 6) // 6th arg in o5
 	moves = (nth(6, args) . sparc:reg_o5) . moves;
       shuffle(code, moves);
-      
+
       move(code, lprimitive, called[mc:v_name], lregister, reg_scratch);
       sparc:call_builtin(code, primcallop);
       nop(code);
 
       reg_result
     ];
-  
+
   call_primitive = fn (code, called, prim, args)
     [
       | flags |
 
       flags = primitive_flags(prim);
-      call_basic(code, called, args, 
+      call_basic(code, called, args,
 		 if (flags & OP_LEAF)
 		   if (flags & OP_NOALLOC) "bcall_primitive_leaf_noalloc"
 		   else "bcall_primitive_leaf"
 		 else "bcall_primitive")
     ];
-  
+
   call_closure = fn (code, called, args)
     [
       | nargs, moves |
-      
+
       // Move arguments, function into their respective slots
       nargs = llength(args);
       moves = setup_args(code, args, nargs, nregargs);
       moves = (called . reg_closure_in) . moves;
       shuffle(code, moves);
-      
+
       sparc:load_word(code, reg_closure_in, object_offset, reg_arg0);
       sparc:jmpl(code, reg_arg0, object_offset + function_offset, sparc:reg_o7);
       mov(code, nargs, reg_argcount);
 
       reg_result
     ];
-  
+
   call = fn (code, called, args, callprimop)
     [
       | nargs, moves |
-      
+
       // Move arguments, function into their respective slots
       nargs = llength(args);
       moves = setup_args(code, args, nargs, nregargs);
@@ -1223,18 +1168,18 @@ writes nops_called, nops_inlined
   mgen_call = fn (code, ins)
     [
       | args, called, prim, dest, done |
-      
+
       args = ins[mc:i_cargs];
       called = car(args);
       args = cdr(args);
       dest = ins[mc:i_cdest];
       done = false;
-      
+
       // Optimise calls to global constants
       if (called[mc:v_class] == mc:v_global_constant)
 	[
 	  | f, t |
-	  
+
 	  f = global_value(called[mc:v_goffset]);
 	  if (primitive?(f) && primitive_nargs(f) == llength(args))
 	    done = call_primitive(code, called, f, args)
@@ -1265,7 +1210,7 @@ writes nops_called, nops_inlined
       | mtype |
 
       mtype = mc:itypemap[type];
-      
+
       if ((mtype & typeset) == itype_none) // is not of given type
 	[
 	  if (reversed) sparc:branch(code, sparc:balways, dest, true)
@@ -1277,9 +1222,9 @@ writes nops_called, nops_inlined
       else
 	[
 	  | r, success, commit, abort, fail |
-	  
+
 	  fail = sparc:new_label(code);
-	  
+
 	  // Handle the 3 cases that arise in positive/negative typechecks:
 	  //   - value *not* of type (abort)
 	  //     flow of control must not proceed (eg not pointer)
@@ -1287,31 +1232,31 @@ writes nops_called, nops_inlined
 	  //   - end of type check, final test (commit)
 	  if (reversed)
 	    [
-	      commit = fn (cc) 
+	      commit = fn (cc)
 		sparc:branch(code, cc ^ 8, dest, false); // ^ 8 reverses condition
-	      
+
 	      success = fn (cc)
 		sparc:branch(code, cc, fail, false);
-	      
+
 	      abort = fn (cc)
 		sparc:branch(code, cc, dest, false);
 	    ]
 	  else
 	    [
-	      commit = fn (cc) 
+	      commit = fn (cc)
 		sparc:branch(code, cc, dest, false);
-	      
+
 	      success = fn (cc)
 		sparc:branch(code, cc, dest, false);
-	      
+
 	      abort = fn (cc)
 		sparc:branch(code, cc, fail, false);
 	    ];
 
 	  // checks can now assume the !reversed case
-	  
+
 	  r = fetch1(code, arg);
-	  
+
 	  if (type == type_integer)
 	    [
 	      sparc:andcc(code, r, 1, zero);
@@ -1386,17 +1331,17 @@ writes nops_called, nops_inlined
 	      commit(sparc:beq);
 	      nop(code);
 	    ];
-	  
+
 	  sparc:label(code, fail);
 	];
     ];
-  
+
   gtype = sequence // garbage type map
-    (garbage_code, garbage_record, garbage_record, garbage_record, 
-     garbage_permanent, garbage_permanent, garbage_permanent, 
-     0, garbage_string, garbage_record, garbage_record, garbage_record, garbage_record, 
-     garbage_record, 
-     garbage_temp, garbage_temp, garbage_temp, 
+    (garbage_code, garbage_record, garbage_record, garbage_record,
+     garbage_permanent, garbage_permanent, garbage_permanent,
+     0, garbage_string, garbage_record, garbage_record, garbage_record, garbage_record,
+     garbage_record,
+     garbage_temp, garbage_temp, garbage_temp,
      garbage_record, garbage_mcode, 0);
 
   infotype = fn (type) type | gtype[type] << 8;
@@ -1408,13 +1353,13 @@ writes nops_called, nops_inlined
     //   summary: trap if !type
     [
       | trap, mtype |
-      
-      trap = fn (cc) 
+
+      trap = fn (cc)
 	sparc:trap(code, cc, zero, trap_offset + error_bad_type);
-      
+
       // if value cannot pass trap, trap unconditionally
       mtype = mc:itypemap[type];
-      
+
       if ((mtype & typeset) == itype_none)
 	trap(sparc:balways)
       // if value must pass trap, don't test
@@ -1423,9 +1368,9 @@ writes nops_called, nops_inlined
       else
 	[
 	  | r |
-	      
+
 	  r = lazy_r();
-	      
+
 	  if (type == type_integer)
 	    [
 	      sparc:andcc(code, r, 1, zero);
@@ -1439,7 +1384,7 @@ writes nops_called, nops_inlined
 	  else if (type == stype_function)
 	    [
 	      | ok |
-		  
+
 	      ok = sparc:new_label(code);
 	      sparc:load_uhword(code, r, object_info, reg_scratch);
 	      cmp(code, reg_scratch, infotype(type_closure));
@@ -1455,7 +1400,7 @@ writes nops_called, nops_inlined
 	  else if (type == stype_list)
 	    [
 	      | ok |
-	      
+
 	      ok = sparc:new_label(code);
 	      if (itype_null & typeset)
 		[
@@ -1463,7 +1408,7 @@ writes nops_called, nops_inlined
 		  sparc:branch(code, sparc:beq, ok, false);
 		  nop(code);
 		];
-		  
+
 	      sparc:load_uhword(code, r, object_info, reg_scratch);
 	      cmp(code, reg_scratch, infotype(type_pair));
 	      trap(sparc:bne);
@@ -1479,7 +1424,7 @@ writes nops_called, nops_inlined
 	    ];
 	];
     ];
-  
+
   fetch1 = fn (code, var)
     [
       if (in_reg(var)) get_reg(var)
@@ -1489,15 +1434,15 @@ writes nops_called, nops_inlined
 	  reg_arg1
 	]
     ];
-  
+
   fetch2 = fn (code, var1, var2, min2, max2)
     [
       | cst, avail, r1, r2 |
-      
+
       avail = reg_arg0 . reg_arg1 . null;
       if (in_reg(var1)) avail = ldelete!(get_reg(var1), avail);
       if (in_reg(var2)) avail = ldelete!(get_reg(var2), avail);
-      
+
       // Select r1
       if (in_reg(var1)) r1 = get_reg(var1)
       else
@@ -1506,7 +1451,7 @@ writes nops_called, nops_inlined
 	  move(code, lvar, var1, lregister, r1);
 	];
       avail = ldelete!(r1, avail);
-      
+
       if (var1 == var2) r2 = r1
       else if (in_reg(var2)) r2 = get_reg(var2)
       else if (var2[mc:v_class] == mc:v_constant &&
@@ -1517,10 +1462,10 @@ writes nops_called, nops_inlined
 	  r2 = car(avail);
 	  move(code, lvar, var2, lregister, r2);
 	];
-      
+
       r1 . r2
     ];
-  
+
   callop1 = fn (code, builtin, arg)
     // Scratch register usage: reg_scratch
     [
@@ -1528,17 +1473,17 @@ writes nops_called, nops_inlined
       sparc:call_builtin(code, builtin);
       nop(code);
     ];
-  
+
   callop2 = fn (code, builtin, commutes, arg1, arg2)
     // Scratch register usage: reg_scratch
     [
       | switched |
-      
+
       switched = false;
       if (get_reg(arg2) == reg_arg0 && commutes) // better to switch
 	[
 	  | t |
-	  
+
 	  switched = true;
 	  t = arg1; arg1 = arg2; arg2 = t;
 	];
@@ -1548,22 +1493,22 @@ writes nops_called, nops_inlined
       nop(code);
       switched
     ];
-  
-  
+
+
   shuffle = fn (code, moves)
     // Scratch register usage: reg_scratch
     [
       | copies, cstspills, regmoves, m, same_move, amove, m2, xfers,
 	l1_used, l1_dest |
-      
+
       same_move = fn (move2) car(amove) == car(move2);
-      
+
       // find copies, constants, spills, etc
       m = moves;
       while (m != null)
 	[
 	  amove = car(m);
-	  
+
 	  // is amove same as a prior move ?
 	  if ((m2 = lexists?(same_move, cstspills)) ||
 	      (m2 = lexists?(same_move, regmoves)))
@@ -1572,23 +1517,23 @@ writes nops_called, nops_inlined
 	    cstspills = amove . cstspills
 	  else
 	    regmoves = amove . regmoves;
-	  
+
 	  m = cdr(m);
 	];
       // regmoves is a summary of the actual register - register moves.
       // do these first.
-      
+
       // a: build reg1 -> reg2 list from regmoves & remove vacuous moves
       xfers = lreduce
 	(fn (move, xfers)
 	 [
 	   | dest |
-	   
+
 	   dest = get_reg(car(move));
 	   if (dest == cdr(move)) xfers
 	   else (dest . cdr(move)) . xfers
 	 ], null, regmoves);
-      
+
       // b: while xfers remain, try & do a move. if none possible
       //    move first reg to reg_scratch
       //    move it from reg_scratch next time no moves are possible
@@ -1605,14 +1550,14 @@ writes nops_called, nops_inlined
 	  else
 	    [
 	      amove = car(xfers);
-	      
+
 	      if (l1_used)
 		[
 		  // reg for reg_scratch should be free
 		  assert(!assq(l1_dest, xfers));
 		  mov(code, reg_scratch, l1_dest)
 		];
-	      
+
 	      l1_used = true;
 	      // move first reg to reg_scratch
 	      mov(code, car(amove), reg_scratch);
@@ -1621,24 +1566,24 @@ writes nops_called, nops_inlined
 	    ];
 	];
       if (l1_used) mov(code, reg_scratch, l1_dest);
-      
+
       // Set constants and spilled variables
       lforeach(fn (m) move(code, lvar, car(m), lregister, cdr(m)),
 	       cstspills);
-      
+
       // Make copies
       lforeach(fn (copy) move(code, lregister, cdar(copy), lregister, cddr(copy)),
 	       copies);
     ];
-  
+
   spillreg = sequence(reg_closure, reg_fp, reg_sp);
-  
+
   resolve = fn (type, arg)
     [
       if (type == lvar)
 	[
 	  | loc |
-	  
+
 	  if (in_reg(arg))
 	    lregister . get_reg(arg)
 	  else if (loc = arg[mc:v_location])
@@ -1661,7 +1606,7 @@ writes nops_called, nops_inlined
       else
 	type . arg
     ];
-  
+
   move = fn (code, stype, source, dtype, dest)
     // Scratch register usage:
     //   none if destination is in a register
@@ -1673,16 +1618,16 @@ writes nops_called, nops_inlined
     //     1 for destination if it is not indexed (reg_arg0) (ie dest is global)
     [
       | sea, dea, sscratch, dscratch |
-      
+
       // lvar, lregister, lindexed, lfunction
       sea = resolve(stype, source);
       stype = car(sea); source = cdr(sea);
       dea = resolve(dtype, dest);
       dtype = car(dea); dest = cdr(dea);
-      
+
       // limmediate, lconstant, lglobal/constant, lfunction
       // lregister, lindexed
-      
+
       if (!equal?(sea, dea))
 	[
 	  // destination is register or indexed or global
@@ -1706,15 +1651,15 @@ writes nops_called, nops_inlined
 	      // If destination is register, use that as scratch for source
 	      if (dtype == lregister) sscratch = dest
 	      else sscratch = reg_scratch;
-	      
+
 	      if (stype == lindexed)
 		sparc:load_word(code, car(source), cdr(source), sscratch)
 	      else if (stype == lconstant && integer?(source))
 		[
 		  | mint |
-		  
+
 		  mint = makeint(source);
-		  
+
 		  if (source >= min_mudlle13 && source <= max_mudlle13)
 		    mov(code, mint, sscratch)
 		  else
@@ -1726,7 +1671,7 @@ writes nops_called, nops_inlined
 	      else
 		[
 		  sparc:sethi(code, 0, sscratch);
-		  
+
 		  // Note relocation info
 		  if (stype == lconstant)
 		    sparc:register_constant(code, source)
@@ -1739,13 +1684,13 @@ writes nops_called, nops_inlined
 		  else if (stype == lprimitive)
 		    sparc:register_primitive(code, source)
 		  else fail();
-		  
+
 		  sparc:or(code, sscratch, 0, sscratch);
-		  
+
 		  if (stype == lglobal)
 		    sparc:load_word(code, reg_globals, sscratch, sscratch);
 		];
-	      
+
 	      // If destination is indexed add store
 	      if (dtype == lindexed)
 		sparc:store_word(code, sscratch, car(dest), cdr(dest))
@@ -1760,5 +1705,5 @@ writes nops_called, nops_inlined
 	    ]
 	]
     ];
-  
+
 ];

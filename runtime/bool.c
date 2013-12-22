@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -20,21 +20,22 @@
  */
 
 #include <string.h>
-#include "runtime/runtime.h"
+#include "runtime.h"
 
-TYPEDOP(not, 0, "`b1 -> `b2. `b2 = not `b1", 1, (value v),
+TYPEDOP(not, "!", "`b1 -> `b2. `b2 = !`b1", 1, (value v),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(isfalse(v));
 }
 
-TYPEDOP(or, 0, "`b1 `b2 -> `b3. Returns `b1 or `b2", 2, (value v1, value v2),
+TYPEDOP(or, "||", "`b1 `b2 -> `b3. Returns `b1 || `b2", 2, (value v1, value v2),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
   return makebool(istrue(v1) || istrue(v2));
 }
 
-TYPEDOP(and, 0, "`b1 `b2 -> `b3. Returns `b1 and `b2", 2, (value v1, value v2),
+TYPEDOP(and, "&&", "`b1 `b2 -> `b3. Returns `b1 && `b2",
+        2, (value v1, value v2),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
   return makebool(istrue(v1) && istrue(v2));

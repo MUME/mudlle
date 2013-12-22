@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,13 +19,16 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "ins.h"
-#include "alloc.h"
-#include "runtime/runtime.h"
-#include "builtins.h"
-#include <string.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include "alloc.h"
+#include "builtins.h"
+#include "ins.h"
+#include "lexer.h"
+#include "utils.h"
+#include "runtime/runtime.h"
 
 /* Instruction lists are stored in reverse order, to simplify creation.
    They are reversed before use ...
@@ -90,12 +93,10 @@ static void add_ins(instruction ins, fncode fn)
   fn->next_label = NULL;
 }
 
-extern int lineno;
-
 void set_lineno(int line, fncode fn)
 {
   if (line)
-    lineno = fn->lineno = line;
+    yylineno = fn->lineno = line;
 }
 
 void adjust_depth(int by, fncode fn)
@@ -225,8 +226,9 @@ void ins1(instruction ins, int arg1, fncode fn)
   switch (ins)
     {
       /* Note: op_exit_n *MUST NOT* modify stack depth */
-    case op_recall + local_var: case op_recall + closure_var: case op_integer1:
-    case op_constant1: case op_closure:
+    case op_recall + local_var: case op_recall + closure_var:
+    case op_vref + local_var: case op_integer1: case op_constant1:
+    case op_closure:
       fn->current_depth++;
       if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
       break;
@@ -246,20 +248,24 @@ void ins2(instruction ins, int arg2, fncode fn)
    Modifies: fn
 */
 {
-  if (ins == op_recall + global_var || ins == op_integer2 || ins == op_constant2)
+  switch (ins)
     {
+    case op_recall + global_var: case op_vref + global_var:
+    case op_integer2: case op_constant2:
       fn->current_depth++;
       if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
+      break;
+    case op_execute_global2: case op_execute_primitive2:
+      fn->current_depth--;
+      break;
     }
-  else if (ins == op_execute_global2 || ins == op_execute_primitive2)
-    fn->current_depth--;
   add_ins(ins, fn);
   add_ins(arg2 >> 8, fn);
   add_ins(arg2 & 0xff, fn);
 }
 
 void branch(instruction abranch, label to, fncode fn)
-/* Effects: Adds a branch instruction to lavel 'to' to instruction 
+/* Effects: Adds a branch instruction to lavel 'to' to instruction
      list 'next'.
      A 1 byte offset is added at this stage.
    Requires: 'branch' be a 1 byte branch instruction.
@@ -303,7 +309,7 @@ static void resolve_labels(fncode fn)
 	    {
 	      /* Remove branch to next instruction */
 	      prev2->next = scan->next;
-	      if (scan->lab) 
+	      if (scan->lab)
 		/* If removed instruction had a label, make it point to prev2 */
 		/* NOTE: This can lead to there being more than one unaliased
 		   label pointing to a particular instruction !!! */
@@ -317,7 +323,7 @@ static void resolve_labels(fncode fn)
 
       prev2 = prev1;
       prev1 = scan;
-    } 
+    }
 }
 
 static void number_instructions(fncode fn)
@@ -413,25 +419,9 @@ void peephole(fncode fn)
   while (!resolve_offsets(fn));
 }
 
-static void reverse_ilist(ilist *head)
+static inline ilist reverse_ilist(ilist l)
 {
-  ilist prev = NULL;
-  ilist ins = *head;
-
-  if (ins == NULL)
-    return;
-
-  for (;;)
-    {
-      ilist next = ins->next;
-      ins->next = prev;
-      prev = ins;
-      if (next == NULL)
-	break;
-      ins = next;
-    }
-
-  *head = ins;
+  return reverse_list(l, struct _ilist);
 }
 
 /*
@@ -505,7 +495,7 @@ static struct string *build_lineno_data(fncode fn)
   return res;
 }
 
-int get_code_line_number(struct code *code, int offset)
+int get_code_line_number(struct icode *code, int offset)
 {
   int line = 0;
   int dlen;
@@ -534,7 +524,7 @@ int get_code_line_number(struct code *code, int offset)
 	}
       else
 	cofs += data[pos++];
-      
+
       if (cofs > offset)
 	return line;
 
@@ -551,14 +541,15 @@ int get_code_line_number(struct code *code, int offset)
     }
 }
 
-struct code *generate_fncode(fncode fn,
-			     struct string *help,
-			     struct string *varname,
-			     struct string *afilename,
-			     int alineno,
-                             struct string *arg_types,
-                             mtype return_type,
-			     int seclev)
+struct icode *generate_fncode(fncode fn,
+                              struct string *help,
+                              struct string *varname,
+                              struct string *afilename,
+                              struct string *anicename,
+                              int alineno,
+                              struct vector *arg_types,
+                              unsigned return_typeset,
+                              int seclev)
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
      recent call to new_fncode. That call is then deemed to never have
@@ -571,44 +562,46 @@ struct code *generate_fncode(fncode fn,
   instruction *codeins;
   uword i;
   struct local_value *scancst;
-  struct code *gencode;
+  struct icode *gencode;
   ulong size;
-  struct gcpro gcpro1, gcpro2, gcpro3, gcpro4, gcpro5;
   struct string *lineno_data = NULL;
 
-  reverse_ilist(&fn->instructions);
+  fn->instructions = reverse_ilist(fn->instructions);
 
   /* Count # of instructions */
   sequence_length = 0;
   for (scanins = fn->instructions; scanins; scanins = scanins->next) sequence_length++;
 
-  GCPRO5(help, varname, afilename, arg_types, lineno_data);
+  assert(immutablep(arg_types));
+
+  GCPRO6(help, varname, afilename, anicename, arg_types, lineno_data);
   lineno_data = build_lineno_data(fn);
 
   /* Warning: Portability */
-  size = offsetof(struct code, constants) + fn->cstindex * sizeof(value) + 
-    sequence_length * sizeof(instruction);
+  size = offsetof(struct icode, constants) + fn->cstindex * sizeof(value) +
+    sequence_length * sizeof (instruction);
   bc_length += size;
   gencode = gc_allocate(size);
   UNGCPRO();
 
-  gencode->o.size = size;
-  gencode->o.garbage_type = garbage_code;
-  gencode->o.type = type_code;
-  gencode->o.flags = OBJ_IMMUTABLE; /* Code is immutable */
-  gencode->return_type = return_type;
+  gencode->code.o.size = size;
+  gencode->code.o.garbage_type = garbage_code;
+  gencode->code.o.type = type_code;
+  gencode->code.o.flags = OBJ_IMMUTABLE; /* Code is immutable */
+  gencode->code.return_typeset = return_typeset;
   gencode->nb_constants = fn->cstindex;
   gencode->nb_locals = 0; /* Initialised later */
   gencode->stkdepth = fn->max_depth;
-  gencode->seclevel = seclev;
-  gencode->help = help;
-  gencode->lineno = alineno;
-  gencode->filename = afilename;
-  gencode->varname = varname;
+  gencode->code.seclevel = seclev;
+  gencode->code.help = help;
+  gencode->code.lineno = alineno;
+  gencode->code.filename = afilename;
+  gencode->code.nicename = anicename;
+  gencode->code.varname = varname;
 
   gencode->call_count = gencode->instruction_count = 0;
   gencode->lineno_data = lineno_data;
-  gencode->arg_types = arg_types;
+  gencode->code.arg_types = arg_types;
 
   /* Copy the sequence (which is reversed) */
   codeins = (instruction *)(gencode->constants + fn->cstindex);
@@ -641,7 +634,7 @@ struct code *generate_fncode(fncode fn,
 
   {
     ulong *dispatch = (ulong *)gencode->magic_dispatch;
-    
+
     dispatch[0] = 4 << 22 | 2 << 25 | (ulong)interpreter_invoke >> 10;
     dispatch[1] = 2 << 30 | 2 << 25 | 2 << 19 | 2 << 14 | 1 << 13 |
       ((ulong)interpreter_invoke & ((1 << 10) - 1));
@@ -651,27 +644,18 @@ struct code *generate_fncode(fncode fn,
 #endif
 
 #if defined(i386) && !defined(NOCOMPILER)
-  /* jmp interpreter_invoke */
-  gencode->magic_dispatch[0] = 0xea;
-  *(ulong *)(gencode->magic_dispatch + 1) = (ulong)interpreter_invoke;
-  /* segment */
-  asm("mov %%cs,%0" : "=r" (*(short *)(gencode->magic_dispatch + 5)));
-#if 0
-  /* this is for valgrind */
-  /*
-    mov interpreter_invoke,%edi
-    jmp *%edi
-   */
-  gencode->magic_dispatch[0] = 0xbf;
-  *(ulong *)(gencode->magic_dispatch + 1) = (ulong)interpreter_invoke;
+  /* movl interpreter_invoke,%ecx */
+  gencode->magic_dispatch[0] = 0xb9;
+  ulong invoke_addr = (ulong)interpreter_invoke;
+  memcpy(gencode->magic_dispatch + 1, &invoke_addr, sizeof invoke_addr);
+  /* jmp *%ecx */
   gencode->magic_dispatch[5] = 0xff;
-  gencode->magic_dispatch[6] = 0xd7;
-#endif
+  gencode->magic_dispatch[6] = 0xe1;
 #endif
 
 #ifdef GCSTATS
   gcstats.anb[type_code]++;
-  gcstats.asizes[type_code] += ALIGN(size, sizeof (long));
+  gcstats.asizes[type_code] += MUDLLE_ALIGN(size, sizeof (long));
 #endif
 
   return gencode;
@@ -691,7 +675,7 @@ label new_label(fncode fn)
 }
 
 void set_label(label lab, fncode fn)
-/* Effects: lab will point at the next instruction generated with ins0, 
+/* Effects: lab will point at the next instruction generated with ins0,
      ins1, ins2 or branch.
    Modifies: lab
 */

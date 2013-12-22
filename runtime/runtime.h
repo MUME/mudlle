@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,27 +19,58 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_H
-#define RUNTIME_H
+#ifndef RUNTIME_RUNTIME_H
+#define RUNTIME_RUNTIME_H
 
 #include "../mudlle.h"
-#include "../types.h"
 #include "../alloc.h"
-#include "../stack.h"
-#include "../global.h"
-#include "../error.h"
+#include "../call.h"
 #include "../charset.h"
+#include "../context.h"
+#include "../error.h"
+#include "../global.h"
+#include "../stack.h"
+#include "../types.h"
 
 void runtime_init(void);
 
-#define FULLOP(x, name, helpmsg, nargs, args, seclevel,                 \
-	       flags, type, storage_class)                              \
+void flag_check_failed(const struct primitive_ext *op, const char *flag);
+
+#define CHECK_PRIM_FLAGS 1
+
+#  define LVL_IMPLEMENTOR 1
+#  define CASSERT_SECLEVEL(seclevel)            \
+  CASSERT_EXPR(seclevel == 0 || seclevel == 1)
+
+#define FULLOP(x, name, helpmsg, nargs, args,                           \
+               seclevel, flags, type, storage_class)                    \
+static value flag_check_ ## x(PRIMARGS ## nargs);                       \
 storage_class value code_ ## x args;                                    \
-static const struct primitive_ext op_ ## x = {                          \
-  (name) ? (name) : #x, helpmsg, code_ ## x, nargs, flags,              \
-  type, seclevel, __FILE__, __LINE__                                    \
+storage_class const struct primitive_ext op_ ## x = {                   \
+  (name) ? (name) : #x, helpmsg,                                        \
+  (CHECK_PRIM_FLAGS                                                     \
+   ? (value (*)())flag_check_ ## x                                      \
+   : (value (*)())code_ ## x),                                          \
+  nargs, flags, type, seclevel, __FILE__, __LINE__                      \
 };                                                                      \
                                                                         \
+static value flag_check_ ## x(PRIMARGS ## nargs)                        \
+{                                                                       \
+  CASSERT_EXPR(!((flags) & ~ALL_OP_FLAGS));                             \
+  CASSERT_SECLEVEL(seclevel);                                           \
+  ubyte *oldposgen0 = posgen0;                                          \
+  ulong old_mudlle_call_count = mudlle_call_count;                      \
+  bool old_seclevel_valid = seclevel_valid;                             \
+  seclevel_valid = seclevel > 0 || nargs == NVARARGS;                   \
+  value r = code_ ## x(PRIMARGNAMES ## nargs);                          \
+  seclevel_valid = old_seclevel_valid;                                  \
+  if (((flags) & OP_NOALLOC) && oldposgen0 != posgen0)                  \
+    flag_check_failed(&op_ ## x, "noalloc");                            \
+  if (((flags) & (OP_LEAF | OP_NOESCAPE))                               \
+      && old_mudlle_call_count != mudlle_call_count)                    \
+    flag_check_failed(&op_ ## x, "leaf/noescape");                      \
+  return r;                                                             \
+}                                                                       \
 storage_class value code_ ## x args
 
 #define TYPEDOP(x, name, helpmsg, nargs, args, flags, type)             \
@@ -59,12 +90,14 @@ storage_class value code_ ## x args
   FULLOP(x, name, helpmsg, nargs, args, 0, flags, NULL, /* extern */)
 
 #define VAROP(x, name, helpmsg, flags)                                  \
-  FULLOP(x, name, helpmsg, -1, (struct vector *args, ulong nargs),      \
+  FULLOP(x, name, helpmsg, NVARARGS,                                    \
+         (struct vector *args, ulong nargs),                            \
 	 0, flags, NULL, static)
 
 #define VARTOP(x, name, helpmsg, flags, type)                           \
   MTYPE(type_ ## x, type);                                              \
-  FULLOP(x, name, helpmsg, -1, (struct vector *args, ulong nargs),      \
+  FULLOP(x, name, helpmsg, NVARARGS,                                    \
+         (struct vector *args, ulong nargs),                            \
 	 0, flags, type_ ## x, static)
 
 #define SECOP(x, name, helpmsg, nargs, args, seclevel, flags)           \
@@ -76,8 +109,6 @@ storage_class value code_ ## x args
   FULLOP(x, name, helpmsg, nargs, args, seclevel, flags,                \
 	 type_ ## x, static)
 
-#  define LVL_IMPLEMENTOR 1
-
 #define UNSAFEOP(x, name, helpmsg, nargs, args, flags)                  \
   SECOP(x, name, "UNSAFE:" helpmsg, nargs, args,                        \
 	LVL_IMPLEMENTOR, flags)
@@ -86,9 +117,8 @@ storage_class value code_ ## x args
   SECTOP(x, name, "UNSAFE:" helpmsg, nargs, args,                       \
  	 LVL_IMPLEMENTOR, flags, type)
 
-#define UNIMPLEMENTED(x, name, helpmsg, nargs, args, flags)             \
-  FULLOP(x, name, "UNIMPLEMENTED: " helpmsg, nargs, args, 0, flags,     \
-	 NULL, static)                                                  \
+#define UNIMPLEMENTED(x, name, helpmsg, nargs, args, flags, type)       \
+TYPEDOP(x, name, "UNIMPLEMENTED: " helpmsg, nargs, args, flags, type)   \
 {                                                                       \
   runtime_error(error_bad_function);                                    \
   undefined();                                                          \
@@ -97,13 +127,15 @@ storage_class value code_ ## x args
 #define DEFINE(x) runtime_define(&op_ ## x)
 
 void system_define(const char *name, value val);
+void system_write(const char *name, value val);
 /* Modifies: environment
    Requires: name not already exist in environment.
    Effects: Adds name to environment, with value val for the variable,
-     as a 'define' of the system module.
+     as a 'define' of the system module or as a system-write variable.
 */
 
-void define_string_vector(const char *name, const char *const *vec, int count);
+struct vector *define_string_vector(const char *name, const char *const *vec,
+                                    int count);
 void define_int_vector(const char *name, const int *vec, int count);
 
 void runtime_define(const struct primitive_ext *op);
@@ -120,8 +152,9 @@ void runtime_define(const struct primitive_ext *op);
 		   ? intval(v)					\
 		   : (runtime_error(error_bad_type), 0L))
 
-#define CHECK_FAST_LOOP() \
-  if (!--xcount) runtime_error(error_loop);
+#define GETUINT(v) (integerp(v)					\
+		    ? uintval(v)				\
+		    : (runtime_error(error_bad_type), 0UL))
 
 #ifdef MUDLLE_INTERRUPT
 void check_interrupt(void);
@@ -130,10 +163,9 @@ void check_interrupt(void);
    SIGINT or SIGQUIT
 */
 
+#define UNDEFINED_VALUE (makeint(42))
 /* Return the undefined result */
-#define undefined()  return makeint(42)
-/* Return a value to shut compiler up */
-#define NOTREACHED return 0
+#define undefined()  return UNDEFINED_VALUE
 
 /* Typing information for primitives */
 /* A type signature is a string xxx.y, where the
@@ -147,13 +179,18 @@ void check_interrupt(void);
    v: vector
    l: list (pair or null)
    u: null
-   k: pair
+   k: pair (mnemonic: kons)
    t: table
    y: symbol
+   d: float (mnemonic: double)
+   b: bigint
+   r: reference
    x: any
    o: other
    1-9: same type as corresponding argument (must be a previous arg)
    A-Z: special typesets, as follows:
+    B: integer or bigint (auto-converts to bigint)
+    D: integer, bigint, or float (auto-converts to float)
     S: string or integer
    *: Kleene closure of the previous type; must be followed by "."
    [...]: one of the enclosed characters
@@ -168,6 +205,27 @@ void check_interrupt(void);
 
 void mudlle_consts_init(void);
 
+struct primitive_ext;
+const struct primitive_ext *lookup_primitive(ulong adr);
 
-#endif
+#define STATIC_STRING(name, value)                      \
+static ulong static_data_ ## name;                      \
+static const struct static_string name = {              \
+  .static_data = &static_data_ ## name,                 \
+  .s = {                                                \
+    .o = {                                              \
+      .size = sizeof (struct string) + sizeof value,    \
+      .garbage_type = garbage_static_string,            \
+      .type = type_string,                              \
+      .flags = OBJ_IMMUTABLE | OBJ_READONLY             \
+    },                                                  \
+    .str = value                                        \
+  }                                                     \
+}
 
+#define GET_STATIC_STRING(name) ((struct string *)&(name).s)
+
+extern struct string *const static_empty_string;
+
+
+#endif /* RUNTIME_RUNTIME_H */

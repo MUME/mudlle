@@ -7,7 +7,7 @@ pedges = fn (l)
 pnode = fn (n)
   format("%s: %s : %s",
 	 graph_node_get(n), pedges(graph_edges_in(n)), pedges(graph_edges_out(n)));
-pg = fn (g) lforeach(fn (n) display(format("%s\n", pnode(n))), graph_nodes(g));
+pg = fn (g) lforeach(fn (n) dformat("%s\n", pnode(n)), graph_nodes(g));
 n3=graph_add_node(g, 99);
 pg(g);
 graph_remove_node(n3);

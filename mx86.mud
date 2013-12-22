@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -78,9 +78,9 @@ x86:i_arg2 = 2;
 // modes/arguments are:
 //   x86:lreg: register
 //   x86:lidx: register . offset
-//   x86:lridx: register1 . scale . register2 . disp 
+//   x86:lridx: register1 . scale . register2 . disp
 //     (register1 * scale + register2 + disp)
-//   x86:lqidx: register1 . scale . disp 
+//   x86:lqidx: register1 . scale . disp
 //     (register1 * scale + disp)
 //   x86:limm: immediate
 //   x86:lcst: mudlle constant
@@ -210,7 +210,7 @@ x86:op_op16 = 34; // generate the operand size prefix
       vector(null, false, null)
       // 0: insertion position
       // 1: label for next instruction (false for none)
-      // 2: list of error handlers (error number . label)
+      // 2: list of error handlers [error number, lineno, label]
     ];
 
   x86:set_instruction = fn "fncode ilist -> . Sets the current instruction insert position to ilist" (fcode, pos)
@@ -234,7 +234,7 @@ x86:op_op16 = 34; // generate the operand size prefix
     [
       add_ins(fcode, il[x86:il_ins]);
     ];
-  
+
   ins_index = 0;
   add_ins = fn (fcode, ins)
     // Types: fcode : x86code
@@ -244,7 +244,7 @@ x86:op_op16 = 34; // generate the operand size prefix
     //   Clears the current label
     [
       | newins |
-      
+
       // Add instruction
       newins = vector(fcode[1], ins, null, ins_index = ins_index + 1, 0,
 		      mc:lineno);
@@ -259,7 +259,7 @@ x86:op_op16 = 34; // generate the operand size prefix
       //   added.
       if (fcode[0] == null) fcode[0] = dcons!(newins, null)
       else dcons!(newins, fcode[0]); // insert before fcode[0]
-      
+
       // Set label if any
       if (fcode[1]) fcode[1][x86:l_ins] = newins;
       fcode[1] = false;
@@ -270,7 +270,7 @@ x86:op_op16 = 34; // generate the operand size prefix
       if (type == x86:lvar)
 	[
 	  | loc |
-	  
+
 	  if (mc:in_reg(arg))
 	    x86:lreg . mc:get_reg(arg)
 	  else if (loc = arg[mc:v_location])
@@ -293,7 +293,7 @@ x86:op_op16 = 34; // generate the operand size prefix
       else
 	type . arg
     ];
-  
+
   x86:mudlleint = fn (x) x . 1;
   x86:doubleint = fn (x) x . 0;
 
@@ -366,7 +366,7 @@ x86:op_op16 = 34; // generate the operand size prefix
   x86:new_label = fn "x86code -> label. Returns a new unassigned label in x86code"
     (fcode)
       vector(false, false, label_index = label_index + 1);
-  
+
   x86:label = fn "x86code label -> . Makes label point at the next instruction to\n\
 be generated in x86code" (fcode, label)
       [
@@ -393,17 +393,19 @@ be generated in x86code" (fcode, label)
 
   // traps
 
-  x86:trap = fn "x86code cc n -> Cause error n if cc is true " (fcode, cc, n)
+  x86:trap = fn "x86code cc n -> Cause error n if cc is true "
+    (fcode, cc, n, lineno)
     [
-      | l |
+      | t, l |
 
-      if ((l = lexists?(fn (trap) car(trap) == n, fcode[2])))
-	l = cdr(l)
+      if (t = lexists?(fn (trap) trap[0] == n && trap[1] == lineno,
+                       fcode[2]))
+	l = t[2]
       else
 	[
 	  // new trap
 	  l = x86:new_label(fcode);
-	  fcode[2] = (n . l) . fcode[2];
+	  fcode[2] = vector(n, lineno, l) . fcode[2];
 	];
 
       if (cc == x86:balways)
@@ -417,7 +419,6 @@ be generated in x86code" (fcode, label)
   x86:ins_list = fn "x86code -> . Prints instruction list" (fcode)
     [
       | scan, ilist |
-      
       ilist = fcode[0];
       scan = ilist;
       loop
@@ -426,8 +427,8 @@ be generated in x86code" (fcode, label)
 
 	  il = dget(scan);
 	  if (il[x86:il_label])
-	    display(format("%s:", slabel(il[x86:il_label])));
-	  display(format("\t%s\t(%s) ", il[x86:il_lineno], il[x86:il_number]));
+	    dformat("%s:", slabel(il[x86:il_label]));
+	  dformat("\t%s\t(%s) ", il[x86:il_lineno], il[x86:il_number]);
 
 	  x86:print_ins(il[x86:il_ins]);
 
@@ -435,8 +436,6 @@ be generated in x86code" (fcode, label)
 	  scan = dnext(scan);
 	  if (scan == ilist) exit 0
 	];
-      lforeach(fn (n) display(format("error %s: label %s%n", car(n), slabel(cdr(n)))),
-	       fcode[2]);
     ];
 
   opname = '["push" "pop"
@@ -501,24 +500,24 @@ be generated in x86code" (fcode, label)
       a2 = ins[x86:i_arg2];
 
       if (op == x86:op_jmp)
-	display(format("jmp %s", slabel(a1)))
+	dformat("jmp %s", slabel(a1))
       else if (op == x86:op_jmp32)
-	display(format("jmp32 %s", slabel(a1)))
+	dformat("jmp32 %s", slabel(a1))
       else if (op == x86:op_jcc)
-	display(format("j%s %s", cnames[a2], slabel(a1)))
+	dformat("j%s %s", cnames[a2], slabel(a1))
       else if (op == x86:op_jcc32)
-	display(format("j%s32 %s", cnames[a2], slabel(a1)))
+	dformat("j%s32 %s", cnames[a2], slabel(a1))
       else if (op == x86:op_callrel || op == x86:op_callrel_prim)
-	display(format("callrel %s", a1))
+	dformat("callrel %s", a1)
       else if (op == x86:op_setcc)
-	display(format("set%s %s", cnames[a1], eastr(a2, rnames8)))
+	dformat("set%s %s", cnames[a1], eastr(a2, rnames8))
       else if (a1 == null)
-	display(format("%s", opname[op]))
+	dformat("%s", opname[op])
       else if (a2 == null)
-	display(format("%s %s", opname[op], eastr(a1, rnames32)))
+	dformat("%s %s", opname[op], eastr(a1, rnames32))
       else
-	display(format("%s %s,%s", opname[op],
-		       eastr(a1, rnames32), eastr(a2, rnames32)));
+	dformat("%s %s,%s", opname[op],
+		       eastr(a1, rnames32), eastr(a2, rnames32));
     ];
 
 ];

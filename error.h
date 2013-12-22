@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,17 +19,16 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_ERROR_H
-#define RUNTIME_ERROR_H
+#ifndef ERROR_H
+#define ERROR_H
 
 #include <setjmp.h>
-
-#define SIGNAL_ERROR   1
-#define SIGNAL_LONGJMP 2
-#define SIGNAL_RETURN  3
+#include "mudlle.h"
 
 typedef enum {
+/* end mudlle const */
   error_none = -1,
+/* start mudlle const */
   error_bad_function,
   error_stack_underflow,
   error_bad_type,
@@ -45,10 +44,16 @@ typedef enum {
   error_user_interrupt,
   error_no_match,
   error_compile,
+  error_abort,
   last_runtime_error
 } runtime_errors;
 
-extern const char *const mudlle_errors[last_runtime_error];
+/* end mudlle const */
+#define SIGNAL_ERROR   1
+#define SIGNAL_LONGJMP 2
+#define SIGNAL_RETURN  3
+
+extern const char *const mudlle_errors[];
 extern int suppress_extra_calltrace;
 
 void error_init(void);
@@ -63,15 +68,20 @@ void early_runtime_error(runtime_errors error) NORETURN;
 */
 
 void runtime_error(runtime_errors error) NORETURN;
-/* Effects: Runtime error 'error' has occured in a primitive operation. 
+/* Effects: Runtime error 'error' has occured in a primitive operation.
      Dump the call_stack (plus the primitive operation call) to
      mudout & throw back to the exception handler with SIGNAL_ERROR
      and the error code in exception_value.
    Note: Never returns
 */
 
+struct primitive_ext;
+void primitive_runtime_error(runtime_errors error,
+                             const struct primitive_ext *op,
+                             int nargs, ...) NORETURN;
+
 void runtime_warning(const char *msg);
 
 struct vector *get_mudlle_call_trace(void);
 
-#endif
+#endif /* ERROR_H */

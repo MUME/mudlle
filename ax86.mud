@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -87,7 +87,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
     // Types: ilist: list of x86 instructions
     // Requires: ilist != null, no aliased labels
     // Returns: list of x86 instructions
-    // Effects: Performs peephole optimisation - currently replaces 
+    // Effects: Performs peephole optimisation - currently replaces
     //   jcc x/jmp y/x: with jncc y/x:
     [
       | iscan, jcc, jmp, aliased_label |
@@ -102,7 +102,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
 	  if (ins[x86:i_op] == x86:op_jmp && il[x86:il_label])
 	    [
-	      if (mc:verbose >= 3) 
+	      if (mc:verbose >= 3)
 		[
 		  display("PEEPHOLE labeled jmp: ");
 		  x86:print_ins(ins);
@@ -139,7 +139,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	      if (il[x86:il_label] == jcc[x86:i_arg1]) // peephole time!
 		[
 		  jccjmp_count = jccjmp_count + 1;
-		  if (mc:verbose >= 3) 
+		  if (mc:verbose >= 3)
 		    [
 		      display("PEEPHOLE jcc over jmp: ");
 		      x86:print_ins(jcc);
@@ -214,7 +214,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
       ins_lineno = fn (line, offset)
         [
           | dl, do, add_int |
-          
+
           add_int = fn (p, i)
             for (|j|j = 0; j < 4; ++j)
               [
@@ -242,12 +242,12 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
               last_offset = offset;
             ];
         ];
-		       
+
       last = dget(dprev(ilist));
       size = last[x86:il_offset] + ins_size(last[x86:il_ins]);
       nbytes = nbytes + size;
       code = make_string(size);
-      
+
       linenos = make_string_oport();
       last_line = last_offset = 0;
 
@@ -257,7 +257,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
         ins_gen(code, il[x86:il_ins], il[x86:il_offset], info);
       ], ilist);
       info[mc:a_linenos] = port_string(linenos);
-      
+
       code . info
     ];
 
@@ -308,7 +308,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   easize = fn (arg)
     [
       | m, a |
-      
+
       m = car(arg); a = cdr(arg);
       if (m == x86:lreg) 1
       else if (m == x86:lidx)
@@ -326,12 +326,12 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	  else if (byte?(offset)) 2
 	  else 5
 	]
-      else if (m == x86:lridx) 
+      else if (m == x86:lridx)
 	[
 	  | d |
 
 	  d = cdddr(a);
-	  
+
 	  if (d == 0 && caddr(a) != x86:reg_ebp) 2
 	  else if (byte?(d)) 3
 	  else 6
@@ -362,7 +362,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   isize[x86:op_jcc] = fn (a1, a2) 2;
   isize[x86:op_jcc32] = fn (a1, a2) 6;
   isize[x86:op_lea] = fn (a1, a2)
-    if (car(a1) == x86:lspecial)
+    if (car(a1) == x86:lspecial || car(a1) == x86:lprimitive)
       5
     else
       1 + easize(a1);
@@ -375,7 +375,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
       else 5 + easize(a2)
     else if (register?(a1)) 1 + easize(a2)
     else if (register?(a2)) 1 + easize(a1)
-    else [ display(format("%s %s\n", a1, a2)); fail(); ];
+    else [ dformat("%s %s\n", a1, a2); fail(); ];
 
   gsize2b = fn (a1, a2)
     if (immediate?(a1))
@@ -418,7 +418,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   isize[x86:op_test]    = gsize2u;
 
   gsize1b = fn (a1, a2) 1 + easize(a1);
-  gsize1 = fn (a1, a2) 
+  gsize1 = fn (a1, a2)
       if (register?(a1)) 1
       else 1 + easize(a1);
 
@@ -446,7 +446,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
   isize[x86:op_setcc] = fn (a1, a2) 2 + easize(a2);
   isize[x86:op_movzxbyte] = fn (a1, a2) 2 + easize(a1);
-  isize[x86:op_xchg] = fn (a1, a2) 
+  isize[x86:op_xchg] = fn (a1, a2)
     if (register?(a1)) 1 + easize(a2)
     else 1 + easize(a1);
   isize[x86:op_op16] = fn (a1, a2) 1;
@@ -457,7 +457,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   igen = make_vector(38);
 
   igen[x86:op_push] = fn (code, a1, a2, o, info)
-    if (immediate8?(a1)) 
+    if (immediate8?(a1))
       [
 	code[o] = 0x6a;
 	code[o + 1] = immval8(a1);
@@ -538,9 +538,10 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
     ];
 
   igen[x86:op_lea] = fn (code, a1, a2, o, info)
-    if (car(a1) == x86:lspecial)
+    if (car(a1) == x86:lspecial || car(a1) == x86:lprimitive)
       [
         assert(register?(a2));
+        // this is mov $value,reg
         code[o] = 0xb8 | regval(a2);
         setimm(code, o + 1, a1, info);
       ]
@@ -581,7 +582,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
   eax? = fn (arg) register?(arg) && regval(arg) == x86:reg_eax;
 
-  generic2 = fn (uimm8op, imm8op, imm32op, immextraop, 
+  generic2 = fn (uimm8op, imm8op, imm32op, immextraop,
                  imm32eaxop, regmemop, memregop)
     fn (code, a1, a2, o, info)
       if (uimm8op != null && uimmediate8?(a1) && byte_reg?(a2))
@@ -651,7 +652,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	]
       else fail();
 
-  // cannot use 8-bit unsigned ops for math since flags aren't set 
+  // cannot use 8-bit unsigned ops for math since flags aren't set
   // as they would for 32-bit ops
   generic2math = fn (n) generic2(null, 0x83, 0x81, n, 0x05 | (n << 3),
                                  0x01 | (n << 3), 0x03 | (n << 3));
@@ -712,7 +713,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	| n |
 
 	n = immval8(a1);
-	if (n == 1) 
+	if (n == 1)
 	  [
 	    code[o] = 0xd1;
 	    setea1(code, o + 1, op, a2, info);
@@ -819,7 +820,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	      o + 5
 	    ]
 	]
-      else if (m == x86:lridx) 
+      else if (m == x86:lridx)
 	[
 	  | d, r1, r2, s, mod |
 
@@ -844,7 +845,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	  code[o + 1] = (s << 6) | (r1 << 3) | r2;
 	  if (mod == 0)
 	    o + 2
-	  else if (mod == 1) 
+	  else if (mod == 1)
 	    [
 	      code[o + 2] = d;
 	      o + 3
@@ -855,7 +856,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	      o + 6
 	    ]
 	]
-      else if (m == x86:lqidx) 
+      else if (m == x86:lqidx)
 	[
 	  | d, r1, s |
 
@@ -919,6 +920,8 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	info[mc:a_subfns] = (a . -o) . info[mc:a_subfns]
       else if (m == x86:lspecial)
         info[mc:a_builtins] = (a . o) . info[mc:a_builtins]
+      else if (m == x86:lprimitive)
+        info[mc:a_primitives] = (a . o) . info[mc:a_primitives]
       else if (m == x86:limm)
 	[
 	  if (pair?(a)) // 2*n or 2*n+1

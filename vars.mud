@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -28,11 +28,12 @@ defines
   mc:reg_scratch, mc:reg_caller, mc:reg_callee, mc:spill_closure,
   mc:spill_args, mc:spill_spill, mc:v_global, mc:v_goffset, mc:v_local,
   mc:v_lclosure_uses, mc:closure_read, mc:closure_write, mc:local_write_once,
-  mc:local_write_many, mc:v_closure, mc:v_cparent, mc:v_constant, mc:v_kvalue,
-  mc:v_global_constant, mc:var_make_local, mc:var_make_dglobal,
-  mc:var_make_global, mc:var_make_constant, mc:var_base, mc:var_value,
-  mc:alias_base, mc:alias, mc:var_make_closure, mc:var_make_kglobal,
-  mc:v_global_define, mc:in_reg, mc:get_reg
+  mc:local_write_many, mc:local_write_many_nonnull, mc:vref_indirect,
+  mc:v_closure, mc:v_cparent, mc:v_constant, mc:v_kvalue, mc:v_global_constant,
+  mc:var_make_local, mc:var_make_dglobal, mc:var_make_global,
+  mc:var_make_constant, mc:var_base, mc:var_value, mc:alias_base, mc:alias,
+  mc:var_make_closure, mc:var_make_kglobal, mc:v_global_define, mc:in_reg,
+  mc:get_reg
 
 [
 // Variable handling.
@@ -81,6 +82,8 @@ mc:v_local = 1;
    mc:closure_write = 2;
    mc:local_write_once = 4;
    mc:local_write_many = 8;
+   mc:local_write_many_nonnull = 16; // written with multiple non-null values
+   mc:vref_indirect = 32;
 
 mc:v_closure = 2;
  mc:v_cparent = 2; // data: variable of parent (variable)
@@ -88,7 +91,7 @@ mc:v_closure = 2;
 mc:v_constant = 3;
  mc:v_kvalue = 2; // data: value of constant
 
-// global variables imported from modules 
+// global variables imported from modules
 
 mc:v_global_constant = 4; // from protected module
  // uses mc:v_goffset
@@ -104,7 +107,7 @@ mc:v_global_define = 5; // from own or loaded module
   dglobals = make_table();
   kglobals = make_table();
 
-  make_global = 
+  make_global =
     fn (globals, type)
       fn (name, n)
 	[
@@ -116,7 +119,7 @@ mc:v_global_define = 5; // from own or loaded module
 	      gv[mc:v_uses] = null; // reset in case of bug
 	      gv // reuse previously created global var
 	    ]
-	  else 
+	  else
 	    [
 	      | gvar |
 
@@ -167,7 +170,7 @@ mc:v_global_define = 5; // from own or loaded module
     [
       | class, base, loc |
 
-      base = 
+      base =
 	[
 	  class = var[mc:v_class];
 	  if (class == mc:v_global) format("global %s(%s)", var[mc:v_name], var[mc:v_number])

@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,31 +19,35 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+/* needed for REG_xxx constants for signal contexts */
+#define _GNU_SOURCE
+
 #include <stdlib.h>
 #include <signal.h>
 
-#include "runtime/runtime.h"
-#include "module.h"
-#include "vector.h"
-#include "basic.h"
-#include "symbol.h"
-#include "stringops.h"
-#include "files.h"
+#include "../context.h"
+#include "../module.h"
+
 #include "arith.h"
-#include "mudlle-float.h"
+#include "basic.h"
 #include "bigint.h"
-#include "pattern.h"
+#include "bitset.h"
 #include "bool.h"
+#include "debug.h"
+#include "files.h"
 #include "io.h"
 #include "list.h"
+#include "mudlle-float.h"
+#include "pattern.h"
+#include "runtime.h"
+#include "stringops.h"
 #include "support.h"
-#include "bitset.h"
-#include "debug.h"
+#include "symbol.h"
+#include "vector.h"
 #include "xml.h"
-#include "context.h"
 
 #ifdef AMIGA
-#include <dos.h>
+  #include <dos.h>
 #endif
 
 
@@ -63,19 +67,35 @@ void system_define(const char *name, value val)
      as a 'define' of the system module.
 */
 {
-  struct gcpro gcpro1;
-
   GCPRO1(val);
-  ulong aindex = global_lookup(name);        /* may allocate ... */
+  ulong aindex = global_lookup(name);
   UNGCPRO();
 
-  assert(GVAR(aindex) == NULL /* cannot define same constant twice */);
+  assert(!GCONSTANT(aindex));
 
   GVAR(aindex) = val;
   module_vset(aindex, var_module, system_module);
 }
 
-void define_string_vector(const char *name, const char *const *vec, int count)
+void system_write(const char *name, value val)
+/* Modifies: environment
+   Requires: name not already exist in environment.
+   Effects: Adds name to environment, with value val for the variable,
+     as a 'define' of the system module.
+*/
+{
+  GCPRO1(val);
+  ulong aindex = global_lookup(name);
+  UNGCPRO();
+
+  assert(!GCONSTANT(aindex));
+
+  GVAR(aindex) = val;
+  module_vset(aindex, var_system_write, NULL);
+}
+
+struct vector *define_string_vector(const char *name, const char *const *vec,
+                                    int count)
 {
   if (count < 0)
     for (count = 0; vec[count]; ++count)
@@ -83,38 +103,42 @@ void define_string_vector(const char *name, const char *const *vec, int count)
 
   struct vector *v = alloc_vector(count);
 
-  struct gcpro gcpro1;
   GCPRO1(v);
 
   for (int n = 0; n < count; ++n)
-    {
-      struct string *s = alloc_string(vec[n]);
-      s->o.flags |= OBJ_READONLY;
-      v->data[n] = s;
-    }
+    v->data[n] = make_readonly(alloc_string(vec[n]));
   UNGCPRO();
-  v->o.flags |= OBJ_READONLY;
-  system_define(name, v);
+  make_readonly(v);
+  if (name != NULL)
+    system_define(name, v);
+  return v;
 }
 
 void define_int_vector(const char *name, const int *vec, int count)
 {
   struct vector *v = alloc_vector(count);
 
-  struct gcpro gcpro1;
   GCPRO1(v);
 
   for (int n = 0; n < count; ++n)
     v->data[n] = makeint(vec[n]);
 
   UNGCPRO();
-  v->o.flags |= OBJ_READONLY;
-  system_define(name, v);
+  system_define(name, make_readonly(v));
 }
+
+#define tassert(what) do {                                      \
+  if (!(what))                                                  \
+    {                                                           \
+      fprintf(stderr, "%s:%d: %s: Assertion `%s' failed.\n",    \
+              op->filename, op->lineno, op->name, #what);       \
+      abort();                                                  \
+    }                                                           \
+} while (0)
 
 static void validate_typing(const struct primitive_ext *op)
 {
-  static const char allowed[] = "fnsvluktyxo123456789S";
+  static const char allowed[] = "fnsvluktryxo123456789SdDbB";
 
   if (op->type == NULL)
     return;
@@ -138,37 +162,46 @@ static void validate_typing(const struct primitive_ext *op)
               for (;;)
                 {
                   ++s;
-                  assert(*s);
+                  tassert(*s);
                   if (*s == ']')
                     break;
-                  assert(strchr(allowed, *s));
+                  tassert(strchr(allowed, *s));
                 }
             }
           else if (*s == '*')
             {
-              assert (s > this && s[1] == '.' && !saw_period);
+              tassert(s > this && s[1] == '.' && !saw_period);
               continue;
             }
           else
-            assert(strchr(allowed, *s));
+            tassert(strchr(allowed, *s));
           if (saw_period)
             {
-              assert(!s[1]);
+              tassert(!s[1]);
               break;
             }
           ++argc;
         }
 
-      assert(saw_period);
+      tassert(saw_period);
 
       if (op->nargs >= 0)
-        assert(op->nargs == argc);
+        tassert(op->nargs == argc);
     }
 }
+
+#undef tassert
+
+static struct {
+  size_t size, used;
+  const struct primitive_ext **ops;
+  bool locked;
+} primitives;
 
 void runtime_define(const struct primitive_ext *op)
 {
   assert(op->nargs <= MAX_PRIMITIVE_ARGS);
+  assert(!primitives.locked);
 
   validate_typing(op);
 
@@ -184,7 +217,7 @@ void runtime_define(const struct primitive_ext *op)
   if (op->seclevel > 0)
     {
       prim = alloc_secure(op_count++, op);
-      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", op->name, op->help, 
+      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", op->name, op->help,
                        op->seclevel);
     }
   else
@@ -198,7 +231,46 @@ void runtime_define(const struct primitive_ext *op)
         }
       if (ops) fprintf(ops, "%-20s %s\n", op->name, op->help);
     }
+
+  if (primitives.used == primitives.size)
+    {
+      primitives.size = primitives.size ? primitives.size * 2 : 16;
+      primitives.ops = realloc(primitives.ops,
+                               primitives.size * sizeof primitives.ops[0]);
+    }
+  primitives.ops[primitives.used++] = op;
+
   system_define(op->name, prim);
+}
+
+static int cmp_ops(const void *_a, const void *_b)
+{
+  ulong a = (ulong)(*(const struct primitive_ext *const *)_a)->op;
+  ulong b = (ulong)(*(const struct primitive_ext *const *)_b)->op;
+  return a < b ? -1 : a > b;
+}
+
+static void sort_primitives(void)
+{
+  assert(!primitives.locked);
+  primitives.ops = realloc(primitives.ops,
+                           primitives.used * sizeof primitives.ops[0]);
+  primitives.size = primitives.used;
+  qsort(primitives.ops, primitives.used, sizeof primitives.ops[0],
+        cmp_ops);
+  primitives.locked = true;
+}
+
+const struct primitive_ext *lookup_primitive(ulong adr)
+{
+  assert(primitives.locked);
+  struct primitive_ext key;
+  key.op = (value (*)())adr;
+  void *keyptr = &key;
+  const struct primitive_ext **op = bsearch(
+    &keyptr, primitives.ops, primitives.used,
+    sizeof primitives.ops[0], cmp_ops);
+  return op ? (*op) : NULL;
 }
 
 #ifdef MUDLLE_INTERRUPT
@@ -228,66 +300,69 @@ static void catchint(int sig)
 
 #if defined(i386) && !defined(NOCOMPILER)
 
-#    ifdef SA_SIGINFO
+#    undef USE_SYS_UCONTEXT
+#    if defined(__GLIBC__) && (defined(REG_EIP) || __GLIBC_MINOR__ >= 3)
+#        include <sys/ucontext.h>
+#        define USE_SYS_UCONTEXT
+#    elif defined(__MACH__)
+#        include <sys/ucontext.h>
+#    elif defined(SA_SIGINFO)
 #        include <asm/ucontext.h>
-#    else
-#        if !defined(__GLIBC__) || __GLIBC__ < 2 || \
-                (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
-#    define sigcontext sigcontext_struct
-#    include <asm/sigcontext.h>
-#        elif (__GLIBC__ != 2 && __GLIBC_MINOR__ != 2)
-#    include <sigcontext.h>
-#        endif
+#    elif !defined(__GLIBC__) || __GLIBC__ < 2 || \
+          (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
+#        define sigcontext sigcontext_struct
+#        include <asm/sigcontext.h>
+#    elif (__GLIBC__ != 2 && __GLIBC_MINOR__ != 2)
+#        include <sigcontext.h>
 #    endif
 
+#ifdef __MACH__
+    typedef mcontext_t reg_context_t;
+    #define GETREG(ctx, reg, REG) (*(ctx))->__ss.__ ## reg
+    #define UCONTEXT_T ucontext_t
+#elif defined USE_SYS_UCONTEXT
+    typedef mcontext_t reg_context_t;
+    #define GETREG(ctx, reg, REG) (ctx)->gregs[REG_ ## REG]
+    #define UCONTEXT_T struct ucontext
+#else
+    typedef struct sigcontext reg_context_t;
+    #define GETREG(ctx, reg, REG) (ctx)->reg
+    #define UCONTEXT_T struct ucontext
+#endif
+
 #include <stddef.h>
-#include "builtins.h"
+#include "../builtins.h"
 
 #ifdef SA_SIGINFO
 static struct sigaction oldsegact;
+#ifdef __MACH__
+static struct sigaction oldbusact;
 #endif
-
-static struct primitive *get_ref_primitive(void)
-{
-  static int nenv;
-
-  if (nenv == 0)
-    nenv = global_lookup("ref");
-
-  struct primitive *prim = GVAR(nenv);
-  assert(TYPE(prim, type_primitive));
-  return prim;
-}
-
-static struct primitive *get_set_primitive(void)
-{
-  static int nenv;
-
-  if (nenv == 0)
-    nenv = global_lookup("set!");
-
-  struct primitive *prim = GVAR(nenv);
-  assert(TYPE(prim, type_primitive));
-  return prim;
-}
+#endif
 
 void got_real_segv(int sig)
 {
-  /* 
+  /*
    * reinstall the default handler, this will cause
    * a real crash (instead of the annoying abort
    * broken stack frame)
    */
 #ifdef SA_SIGINFO
-  sigaction(sig, &oldsegact, NULL);
+  if (sig == SIGSEGV)
+    sigaction(sig, &oldsegact, NULL);
+#ifdef __MACH__
+  if (sig == SIGBUS)
+    sigaction(sig, &oldbusact, NULL);
+#endif
+  abort();
 #else
   signal(sig, SIG_DFL);
 #endif
 }
 
-static INLINE void check_segv(int sig, struct sigcontext *scp)
+static inline void check_segv(int sig, reg_context_t *scp)
 {
-  const ubyte *eip = (const ubyte *)scp->eip;
+  const ubyte *eip = (const ubyte *)GETREG(scp, eip, EIP);
 
   if ((eip[0] == 0x80           /* cmpb $imm,object_type(reg) */
        && (eip[1] & 0xf8) == 0x78
@@ -298,38 +373,35 @@ static INLINE void check_segv(int sig, struct sigcontext *scp)
           && eip[3] == 5))      /* offsetof(struct obj, type) */
     {
       /* mudlle code */
-      if (eip  >= gcblock && eip < gcblock + gcblocksize)
+      if (eip >= gcblock && eip < gcblock + gcblocksize)
 	{
-	  ccontext.frame_end_sp = (ulong *)scp->esp;
-          /* sometimes contains a mudlle value */
-	  ccontext.frame_end_sp[-1] = 0;
-	  ccontext.frame_end_bp = (ulong *)scp->ebp;
-	  ccontext.retadr = (ulong)eip + 4; /* retadr points to next instr. */
+	  ccontext.frame_end_sp = (ulong *)GETREG(scp, esp, ESP);
+	  ccontext.frame_end_bp = (ulong *)GETREG(scp, ebp, EBP);
+          /* make stack trace printing start from the right place */
+	  ccontext.frame_end_sp[-1] = (ulong)eip;
 	  runtime_error(error_bad_type);
 	}
       /* bref and bset */
       if (eip >= (ubyte *)bref && eip < (ubyte *)bwglobal)
 	{
-          int is_set = eip >= (ubyte *)bset;
-          struct call_stack me;
-          me.type = call_c;
-          me.u.c.prim = is_set ? get_set_primitive() : get_ref_primitive();
-          me.u.c.nargs = is_set ? 3 : 2;
-          me.u.c.arg1 = (value)scp->eax;
-          me.u.c.arg2 = (value)scp->ecx;
-          me.u.c.arg3 = (value)scp->edx;
-          me.next = call_stack;
-          call_stack = &me;
-
-	  ccontext.frame_end_sp = (ulong *)scp->esp + 1;
-	  ccontext.frame_end_bp = (ulong *)scp->ebp;
-	  runtime_error(error_bad_type);
+	  ccontext.frame_end_sp = (ulong *)GETREG(scp, esp, ESP) + 1;
+	  ccontext.frame_end_bp = (ulong *)GETREG(scp, ebp, EBP);
+          bool is_set = eip >= (ubyte *)bset;
+          if (is_set)
+            set_runtime_error(error_bad_type,
+                              (value)GETREG(scp, eax, EAX),
+                              (value)GETREG(scp, ecx, ECX),
+                              (value)GETREG(scp, edx, EDX));
+          else
+            ref_runtime_error(error_bad_type,
+                              (value)GETREG(scp, eax, EAX),
+                              (value)GETREG(scp, ecx, ECX));
 	}
       /* bcall */
       if (eip >= (ubyte *)bcall && eip < (ubyte *)bcall_secure)
 	{
-	  ccontext.frame_end_sp = (ulong *)scp->esp + 1;
-	  ccontext.frame_end_bp = (ulong *)scp->ebp;
+	  ccontext.frame_end_sp = (ulong *)GETREG(scp, esp, ESP) + 1;
+	  ccontext.frame_end_bp = (ulong *)GETREG(scp, ebp, EBP);
 	  runtime_error(error_bad_function);
 	}
     }
@@ -340,7 +412,7 @@ static INLINE void check_segv(int sig, struct sigcontext *scp)
 #ifdef SA_SIGINFO
 static void catchsegv(int sig, siginfo_t *siginfo, void *_sigcontext)
 {
-  struct ucontext *sigcontext = (struct ucontext *)_sigcontext;
+  UCONTEXT_T *sigcontext = _sigcontext;
   check_segv(sig, &sigcontext->uc_mcontext);
 }
 #else
@@ -350,7 +422,7 @@ static void catchsegv(int sig, struct sigcontext scp)
 }
 #endif
 
-#endif
+#endif  /* i386 && !NOCOMPILER */
 
 #ifdef sparc
 #include "builtins.h"
@@ -489,6 +561,15 @@ void catchsegv(int sig, int code, struct sigcontext *scp, char *addr)
 #endif
 #endif
 
+void flag_check_failed(const struct primitive_ext *op, const char *name)
+{
+  abort();
+}
+
+STATIC_STRING(static_obj_empty_string, "");
+struct string *const static_empty_string
+  = GET_STATIC_STRING(static_obj_empty_string);
+
 void runtime_init(void)
 {
   ops = fopen("mudlle-functions", "w+");
@@ -508,7 +589,7 @@ void runtime_init(void)
 #ifdef SIGQUIT
     sigaction(SIGQUIT, &act, NULL);
 #endif
-  }    
+  }
 #else
   signal(SIGINT, catchint);
 #ifdef SIGQUIT
@@ -555,6 +636,9 @@ void runtime_init(void)
     if (!noaltstack)
       sact.sa_flags |= SA_ONSTACK;
     sigaction(SIGSEGV, &sact, &oldsegact);
+#ifdef __MACH__
+    sigaction(SIGBUS, &sact, &oldbusact);
+#endif
   }
 #else
   signal(SIGSEGV, (void (*)(int))catchsegv);
@@ -581,6 +665,9 @@ void runtime_init(void)
 #if 0
 #endif
   module_set("system", module_protected, 0);
+
+  sort_primitives();
+
   if (ops) fclose(ops);
   if (binops) fclose(binops);
 }

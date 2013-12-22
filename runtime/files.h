@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef FILES_H
-#define FILES_H
+#ifndef RUNTIME_FILES_H
+#define RUNTIME_FILES_H
 
 enum {
   FS_DEV     =  0,
@@ -36,7 +36,25 @@ enum {
   FS_CTIME   = 10,
   FS_BLKSIZE = 11,
   FS_BLOCKS  = 12,
+  FS_AFTIME  = 13,
+  FS_MFTIME  = 14,
+  FS_CFTIME  = 15,
   FILE_STAT_FIELDS
+};
+
+enum {
+  FSYS_BSIZE,
+  FSYS_FRSIZE,
+  FSYS_BLOCKS,
+  FSYS_BFREE,
+  FSYS_BAVAIL,
+  FSYS_FILES,
+  FSYS_FFREE,
+  FSYS_FAVAIL,
+  FSYS_FSID,
+  FSYS_FLAG,
+  FSYS_NAMEMAX,
+  FILE_SYSTEM_STAT_FIELDS
 };
 
 enum {
@@ -59,4 +77,4 @@ enum {
 void files_init(void);
 void poll_async_processes(void);
 
-#endif
+#endif /* RUNTIME_FILES_H */

@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,9 +19,10 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <string.h>
-#include <stdlib.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "alloc.h"
 #include "builtins.h"
@@ -35,7 +36,7 @@
 
 #ifdef AMIGA
 
-INLINE value invoke0(struct closure *c)
+inline value invoke0(struct closure *c)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c()
@@ -43,8 +44,6 @@ INLINE value invoke0(struct closure *c)
 */
 {
   value result;
-  struct gcpro gcpro1;
-
   GCPRO1(c);
   push_registers();
   UNGCPRO();
@@ -53,40 +52,38 @@ INLINE value invoke0(struct closure *c)
   return result;
 }
 
-INLINE value invoke1(struct closure *c, value arg)
+inline value invoke1(struct closure *c, value arg)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg)
    Returns: c(arg)'s result
 */
 {
-  struct gcpro gcpro1, gcpro2;
-  value result;
-
   GCPRO2(arg, c);
   push_registers();
   UNGCPRO();
 
-  result = mc_invoke(c, 1, arg, NULL, NULL, NULL);
+  value result = mc_invoke(c, 1, arg, NULL, NULL, NULL);
   pop_registers();
   return result;
 }
 
-INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
+inline value invoke1plus(struct closure *c, value arg, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
 {
-  struct gcpro gcpro1, gcpro2, gcpro3;
   struct vector *extra;
   value result;
   int nargs;
 
-  GCPRO2(arg, args); GCPRO(gcpro3, c);
-  push_registers();
-  UNGCPRO();
+  {
+    GCPRO3(arg, args, c);
+    push_registers();
+    UNGCPRO();
+  }
 
   nargs = 1 + vector_len(args);
   switch (nargs)
@@ -104,9 +101,11 @@ INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
       result = mc_invoke(c, 4, arg, args->data[0], args->data[1], args->data[2]);
       break;
     default:
-      GCPRO2(arg, args); GCPRO(gcpro3, c);
-      extra = (struct vector *)unsafe_allocate_record(type_internal, nargs - 3);
-      UNGCPRO();
+      {
+        GCPRO3(arg, args, c);
+        extra = (struct vector *)unsafe_allocate_record(type_internal, nargs - 3);
+        UNGCPRO();
+      }
       memcpy(extra->data, args->data + 2, (nargs - 3) * sizeof(value));
       result = mc_invoke(c, 4, arg, args->data[0], args->data[1], extra);
       break;
@@ -115,21 +114,22 @@ INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
   return result;
 }
 
-INLINE value invoke(struct closure *c, struct vector *args)
+inline value invoke(struct closure *c, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
 {
-  struct gcpro gcpro1, gcpro2;
   struct vector *extra;
   value result;
   int nargs;
 
-  GCPRO2(c, args);
-  push_registers();
-  UNGCPRO();
+  {
+    GCPRO2(c, args);
+    push_registers();
+    UNGCPRO();
+  }
 
   nargs = vector_len(args);
   switch (nargs)
@@ -150,12 +150,14 @@ INLINE value invoke(struct closure *c, struct vector *args)
       result = mc_invoke(c, 4, args->data[0], args->data[1], args->data[2], args->data[3]);
       break;
     default:
-      GCPRO2(c, args);
-      extra = (struct vector *)unsafe_allocate_record(type_internal, nargs - 3);
-      UNGCPRO();
-      memcpy(extra->data, args->data + 3, (nargs - 3) * sizeof(value));
-      result = mc_invoke(c, 4, args->data[0], args->data[1], args->data[2], extra);
-      break;
+      {
+        GCPRO2(c, args);
+        extra = (struct vector *)unsafe_allocate_record(type_internal, nargs - 3);
+        UNGCPRO();
+        memcpy(extra->data, args->data + 3, (nargs - 3) * sizeof(value));
+        result = mc_invoke(c, 4, args->data[0], args->data[1], args->data[2], extra);
+        break;
+      }
     }
   pop_registers();
   return result;
@@ -165,7 +167,7 @@ INLINE value invoke(struct closure *c, struct vector *args)
 
 #ifdef sparc
 
-INLINE value invoke0(struct closure *c)
+inline value invoke0(struct closure *c)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c()
@@ -175,7 +177,7 @@ INLINE value invoke0(struct closure *c)
   return mc_invoke(NULL, NULL, NULL, NULL, NULL, c, 0);
 }
 
-INLINE value invoke1(struct closure *c, value arg)
+inline value invoke1(struct closure *c, value arg)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg)
@@ -185,7 +187,7 @@ INLINE value invoke1(struct closure *c, value arg)
   return mc_invoke(arg, NULL, NULL, NULL, NULL, c, 1);
 }
 
-INLINE value invoke2(struct closure *c, value arg1, value arg2)
+inline value invoke2(struct closure *c, value arg1, value arg2)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg1, arg2)
@@ -195,7 +197,7 @@ INLINE value invoke2(struct closure *c, value arg1, value arg2)
   return mc_invoke(arg1, arg2, NULL, NULL, NULL, c, 2);
 }
 
-INLINE value invoke3(struct closure *c, value arg1, value arg2, value arg3)
+inline value invoke3(struct closure *c, value arg1, value arg2, value arg3)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(arg1, arg2, arg3)
@@ -205,7 +207,7 @@ INLINE value invoke3(struct closure *c, value arg1, value arg2, value arg3)
   return mc_invoke(arg1, arg2, arg3, NULL, NULL, c, 3);
 }
 
-INLINE value invoke4(struct closure *c, value arg1, value arg2, value arg3,
+inline value invoke4(struct closure *c, value arg1, value arg2, value arg3,
 		     value arg4)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
@@ -216,7 +218,7 @@ INLINE value invoke4(struct closure *c, value arg1, value arg2, value arg3,
   return mc_invoke(arg1, arg2, arg3, arg4, NULL, c, 4);
 }
 
-INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
+inline value invoke1plus(struct closure *c, value arg, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
@@ -225,6 +227,7 @@ INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
 {
   int nargs = 1 + vector_len(args);
 
+  CASSERT_EXPR(MAX_PRIMITIVE_ARGS == 5);
   switch (nargs)
     {
     case 1:
@@ -244,7 +247,7 @@ INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
     }
 }
 
-INLINE value invoke(struct closure *c, struct vector *args)
+inline value invoke(struct closure *c, struct vector *args)
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
    Effects: Executes c(args)
@@ -253,6 +256,7 @@ INLINE value invoke(struct closure *c, struct vector *args)
 {
   int nargs = vector_len(args);
 
+  CASSERT_EXPR(MAX_PRIMITIVE_ARGS == 5);
   switch (nargs)
     {
     case 0:
@@ -282,117 +286,61 @@ INLINE value invoke(struct closure *c, struct vector *args)
 #endif
 
 #ifdef NOCOMPILER
-INLINE value invoke0(struct closure *c)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c()
-   Returns: c()'s result
-*/
-{
-  return NULL;
-}
+value invoke0(struct closure *c) { return NULL; }
+#define DEF_INVOKE(N) \
+value invoke ## N(struct closure *c, PRIMARGS ## N) { return NULL; }
+DOPRIMARGS(DEF_INVOKE)
 
-INLINE value invoke1(struct closure *c, value arg)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg)
-   Returns: c(arg)'s result
-*/
-{
-  return NULL;
-}
+value invoke1plus(struct closure *c, value arg, struct vector *args)
+{ return NULL; }
 
-INLINE value invoke2(struct closure *c, value arg1, value arg2)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2)
-   Returns: c()'s result
-*/
-{
-  return NULL;
-}
+value invoke(struct closure *c, struct vector *args) { return NULL; }
+#endif  /* NOCOMPILER */
 
-INLINE value invoke3(struct closure *c, value arg1, value arg2, value arg3)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2, arg3)
-   Returns: c()'s result
-*/
-{
-  return NULL;
-}
-
-INLINE value invoke4(struct closure *c, value arg1, value arg2, value arg3, value arg4)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2, arg3, arg4)
-   Returns: c()'s result
-*/
-{
-  return NULL;
-}
-
-INLINE value invoke1plus(struct closure *c, value arg, struct vector *args)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(args)
-   Returns: c(args)'s result
-*/
-{
-  return NULL;
-}
-
-INLINE value invoke(struct closure *c, struct vector *args)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(args)
-   Returns: c(args)'s result
-*/
-{
-  return NULL;
-}
-#endif
-
-int seclevel_violator(value c)
+bool minlevel_violator(value c)
 {
   struct obj *o = c;
 
   switch (o->type)
     {
     case type_closure:
-      return seclevel_violator(((struct closure *)o)->code);
+      return minlevel_violator(((struct closure *)o)->code);
     case type_code:
-      return ((struct code *)o)->seclevel < minlevel;
     case type_mcode:
-      return ((struct mcode *)o)->seclevel < minlevel;
+      return ((struct code *)o)->seclevel < minlevel;
     default:
       return false;
     }
 }
 
-int callablep(value c, int nargs)
+bool callablep(value c, int nargs)
 /* Returns: false if c is not something that can be called with
-     nargs arguments.
+     nargs (>= 0) arguments.
 */
 {
-  struct obj *o = c;
-
   if (!pointerp(c))
     return false;
 
+  struct obj *o = c;
   switch (o->type)
     {
-    case type_closure: return true;
-    case type_secure:
-    case type_primitive: 
-      if (nargs < 0 || ((struct primitive *)o)->op->nargs == nargs)
-	return true;
-      return false;
-    case type_varargs: return true;
-    default:
-      break;
+    case type_closure: {
+      struct closure *cl = c;
+      struct vector *args = cl->code->arg_types;
+      if (args == NULL)
+        return true;            /* varargs */
+
+      assert(TYPE(args, type_vector));
+      return vector_len(args) == nargs;
     }
-  return false;
+    case type_secure:
+    case type_primitive:
+      return ((struct primitive *)o)->op->nargs == nargs;
+    case type_varargs:
+      return true;
+    default:
+      return false;
+    }
 }
 
 void callable(value c, int nargs)
@@ -400,19 +348,31 @@ void callable(value c, int nargs)
      nargs arguments (-1 only checks type of c).
 */
 {
-  struct obj *o = c;
-
   if (!pointerp(c))
     runtime_error(error_bad_function);
 
+  struct obj *o = c;
   switch (o->type)
     {
-    case type_closure: return;
+    case type_closure: {
+      if (nargs < 0)
+        return;
+
+      struct closure *cl = c;
+      struct vector *args = cl->code->arg_types;
+      if (args == NULL)         /* varargs */
+        return;
+      assert(TYPE(args, type_vector));
+      if (vector_len(args) == nargs)
+        return;
+
+      runtime_error(error_wrong_parameters);
+    }
     case type_secure:
       if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
 	runtime_error(error_security_violation);
       /* fall through */
-    case type_primitive: 
+    case type_primitive:
       if (nargs < 0 || ((struct primitive *)o)->op->nargs == nargs)
 	return;
       runtime_error(error_wrong_parameters);
@@ -423,254 +383,107 @@ void callable(value c, int nargs)
   runtime_error(error_bad_function);
 }
 
+/* counts how many times we've called mudlle from C */
+ulong mudlle_call_count;
+
 value call0(value c)
 /* Effects: Calls c with no arguments
    Returns: c's result
    Requires: callable(c, 0) does not fail.
 */
 {
-  struct obj *o = c;
-  value result;
+  ++mudlle_call_count;
 
-  /* Start with important case, explicitly */
-  if (o->type == type_closure && ((struct closure *)o)->code->o.type == type_mcode)
-    return invoke0(c);
-  else
-    {
-      switch (o->type)
-	{
-	case type_closure:
-	  do_interpret(c, 0);
-	  return stack_pop();
-
-	case type_secure: case type_primitive:
-	  ((struct primitive *)o)->call_count++;
-	  result = ((struct primitive *)o)->op->op();
-	  return result;
-
-	case type_varargs:
-	  {
-	    struct vector *args;
-
-	    ((struct primitive *)o)->call_count++;
-	    args = (struct vector *)unsafe_allocate_record(type_vector, 0);
-	    result = ((struct primitive *)o)->op->op(args, 0);
-	    return result;
-	  }
-	default: break;
-	}
-    }
-  abort();
-}
-
-value call1(value c, value arg)
-/* Effects: Calls c with argument arg
-   Returns: c's result
-   Requires: callable(c, 1) does not fail.
-*/
-{
-  struct obj *o = c;
-  struct gcpro gcpro1;
-  value result;
-
-  switch (o->type)
+  switch (((struct obj *)c)->type)
     {
     case type_closure:
       {
-	struct closure *cl = (struct closure *)o;
-
+	struct closure *cl = c;
 	if (cl->code->o.type == type_mcode)
-	  return invoke1(cl, arg);
-	else
-	  {
-	    GCPRO1(cl);
-	    stack_push(arg);
-	    UNGCPRO();
-	    do_interpret(cl, 1);
-	    return stack_pop();
-	  }
+	  return invoke0(cl);
+
+        do_interpret(cl, 0);
+        return stack_pop();
       }
 
     case type_secure: case type_primitive:
-      ((struct primitive *)o)->call_count++;
-      result = ((struct primitive *)o)->op->op(arg);
-      return result;
+      {
+        struct primitive *prim = c;
+        ++prim->call_count;
+        return prim->op->op();
+      }
 
     case type_varargs:
       {
-	struct vector *args;
-
-	((struct primitive *)o)->call_count++;
-	GCPRO1(arg);
-	args = (struct vector *)unsafe_allocate_record(type_vector, 1);
-	args->data[0] = arg;
-	UNGCPRO();
-	result = ((struct primitive *)o)->op->op(args, 1);
+        struct primitive *prim = c;
+        ++prim->call_count;
+        value (*op)() = prim->op->op;
+	struct vector *args
+          = (struct vector *)unsafe_allocate_record(type_vector, 0);
+	return op(args, 0);
       }
+
     default: break;
     }
   abort();
 }
 
-value call2(value c, value arg1, value arg2)
-/* Effects: Calls c with arguments arg1, arg2
-   Returns: c's result
-   Requires: callable(c, 2) does not fail.
-*/
-{
-  struct obj *o = c;
-  struct gcpro gcpro1, gcpro2;
-  value result;
+#define __STACK_PUSH(N) stack_push(__PRIMNAME(N))
+#define __VSET(N) args->data[N - 1] = __PRIMNAME(N)
 
-  switch (o->type)
-    {
-    case type_closure:
-      {
-	struct closure *cl = (struct closure *)o;
-
-	if (cl->code->o.type == type_mcode)
-	  return invoke2(cl, arg1, arg2);
-	else
-	  {
-	    GCPRO2(cl, arg2);
-	    stack_push(arg1);
-	    stack_push(arg2);
-	    UNGCPRO();
-	    do_interpret(cl, 2);
-	    return stack_pop();
-	  }
-      }
-
-    case type_secure: case type_primitive:
-      ((struct primitive *)o)->call_count++;
-      result = ((struct primitive *)o)->op->op(arg1, arg2);
-      return result;
-
-    case type_varargs:
-      {
-	struct vector *args;
-
-	((struct primitive *)o)->call_count++;
-	GCPRO2(arg1, arg2);
-	args = (struct vector *)unsafe_allocate_record(type_vector, 2);
-	args->data[0] = arg1;
-	args->data[1] = arg2;
-	UNGCPRO();
-	result = ((struct primitive *)o)->op->op(args, 2);
-	return result;
-      }
-    default: break;
-    }
-  abort();
+#define CALL_N(N)                                                       \
+value call ## N(value c, PRIMARGS ## N)                                 \
+/* Effects: Calls c with arguments arg1...argN                          \
+   Returns: c's result                                                  \
+   Requires: callable(c, N) does not fail.                              \
+*/                                                                      \
+{                                                                       \
+  ++mudlle_call_count;                                                  \
+                                                                        \
+  switch (((struct obj *)c)->type)                                      \
+    {                                                                   \
+    case type_closure:                                                  \
+      {                                                                 \
+        struct closure *cl = c;                                         \
+        if (cl->code->o.type == type_mcode)                             \
+          return invoke ## N(cl, PRIMARGNAMES ## N);                    \
+                                                                        \
+        GCPRO_N(N, PRIMARGNAMES ## N);                                  \
+        CONCATSEMI(N, __STACK_PUSH);                                    \
+        UNGCPRO();                                                      \
+        do_interpret(cl, N);                                            \
+        return stack_pop();                                             \
+      }                                                                 \
+                                                                        \
+    case type_secure: case type_primitive:                              \
+      {                                                                 \
+        struct primitive *prim = c;                                     \
+        ++prim->call_count;                                             \
+        return prim->op->op(PRIMARGNAMES ## N);                         \
+      }                                                                 \
+                                                                        \
+    case type_varargs:                                                  \
+      {                                                                 \
+        struct primitive *prim = c;                                     \
+        ++prim->call_count;                                             \
+        value (*op)() = prim->op->op;                                   \
+        GCPRO_N(N, PRIMARGNAMES ## N);                                  \
+        struct vector *args                                             \
+          = (struct vector *)unsafe_allocate_record(type_vector, N);    \
+        CONCATSEMI(N, __VSET);                                          \
+        UNGCPRO();                                                      \
+        return op(args, N);                                             \
+      }                                                                 \
+                                                                        \
+    default: break;                                                     \
+    }                                                                   \
+  abort();                                                              \
 }
 
-value call3(value c, value arg1, value arg2, value arg3)
-/* Effects: Calls c with arguments arg1, arg2, arg3
-   Returns: c's result
-   Requires: callable(c, 3) does not fail.
-*/
-{
-  struct obj *o = c;
-  struct gcpro gcpro1, gcpro2, gcpro3;
-  value result;
+DOPRIMARGS(CALL_N)
 
-  switch (o->type)
-    {
-    case type_closure:
-      {
-	struct closure *cl = (struct closure *)o;
-
-	if (cl->code->o.type == type_mcode)
-	  return invoke3(cl, arg1, arg2, arg3);
-	else
-	  {
-	    GCPRO2(cl, arg2); GCPRO(gcpro3, arg3);
-	    stack_push(arg1);
-	    stack_push(arg2);
-	    stack_push(arg3);
-	    UNGCPRO();
-	    do_interpret(cl, 3);
-	    return stack_pop();
-	  }
-      }
-
-    case type_secure: case type_primitive:
-      ((struct primitive *)o)->call_count++;
-      result = ((struct primitive *)o)->op->op(arg1, arg2, arg3);
-      return result;
-
-    case type_varargs:
-      {
-	struct vector *args;
-
-	((struct primitive *)o)->call_count++;
-	GCPRO2(arg1, arg2); GCPRO(gcpro3, arg3);
-	args = (struct vector *)unsafe_allocate_record(type_vector, 3);
-	args->data[0] = arg1;
-	args->data[1] = arg2;
-	args->data[2] = arg3;
-	UNGCPRO();
-	result = ((struct primitive *)o)->op->op(args, 3);
-      }
-    default: break;
-    }
-  abort();
-}
-
-value call4(value c, value arg1, value arg2, value arg3, value arg4)
-/* Effects: Calls c with arguments arg1, arg2, arg3, arg4
-   Returns: c's result
-   Requires: callable(c, 4) does not fail.
-*/
-{
-  struct obj *o = c;
-  struct gcpro gcpro1, gcpro2, gcpro3, gcpro4;
-  value result;
-
-  switch (o->type)
-    {
-    case type_closure:
-      {
-	struct closure *cl = (struct closure *)o;
-
-	if (cl->code->o.type == type_mcode)
-	  return invoke4(cl, arg1, arg2, arg3, arg4);
-	else
-	  {
-	    GCPRO2(cl, arg2); GCPRO(gcpro3, arg3); GCPRO(gcpro4, arg4);
-	    stack_push(arg1);
-	    stack_push(arg2);
-	    stack_push(arg3);
-	    stack_push(arg4);
-	    UNGCPRO();
-	    do_interpret(cl, 4);
-	    return stack_pop();
-	  }
-      }
-
-    case type_secure: case type_primitive:
-      ((struct primitive *)o)->call_count++;
-      result = ((struct primitive *)o)->op->op(arg1, arg2, arg3, arg4);
-      return result;
-
-    case type_varargs:
-      {
-	struct vector *args;
-
-	((struct primitive *)o)->call_count++;
-	GCPRO2(arg1, arg2); GCPRO(gcpro3, arg3);
-	args = (struct vector *)unsafe_allocate_record(type_vector, 4);
-	args->data[0] = arg1;
-	args->data[1] = arg2;
-	args->data[2] = arg3;
-	args->data[3] = arg4;
-	UNGCPRO();
-	result = ((struct primitive *)o)->op->op(args, 4);
-      }
-    default: break;
-    }
-  abort();
-}
+#define __VECT1ARG(N) (N == 1 ? arg : args->data[N - 2])
+#define __V1CALLOP(N) case N: return op(CONCATCOMMA(N, __VECT1ARG));
 
 value call1plus(value c, value arg, struct vector *args)
 /* Effects: Calls c with argument arg
@@ -681,80 +494,63 @@ value call1plus(value c, value arg, struct vector *args)
      become painful).
 */
 {
-  struct obj *o = c;
-  value result = NULL;
+  ++mudlle_call_count;
 
   int nargs = 1 + vector_len(args);
-  switch (o->type)
+  switch (((struct obj *)c)->type)
     {
     case type_closure:
       {
-	struct closure *cl = (struct closure *)o;
+	struct closure *cl = c;
 
 	if (cl->code->o.type == type_mcode)
 	  return invoke1plus(cl, arg, args);
-	else
-	  {
-            struct gcpro gcpro1, gcpro2;
-	    GCPRO2(cl, args);
-	    stack_push(arg);
-	    for (int i = 0; i < nargs - 1; i++) stack_push(args->data[i]);
-	    UNGCPRO();
 
-	    do_interpret(cl, nargs);
-	    return stack_pop();
-	  }
+        GCPRO2(cl, args);
+        stack_push(arg);
+        for (int i = 0; i < nargs - 1; ++i)
+          stack_push(args->data[i]);
+        UNGCPRO();
+
+        do_interpret(cl, nargs);
+        return stack_pop();
       }
 
     case type_secure: case type_primitive:
       {
-        struct primitive *prim = (struct primitive *)o;
-        prim->call_count++;
-        const struct primitive_ext *const op = prim->op;
-      switch (nargs)
-	{
-	case 1:
-	  result = op->op(arg);
-	  break;
-	case 2:
-	  result = op->op(arg, args->data[0]);
-	  break;
-	case 3:
-	  result = op->op(arg, args->data[0], args->data[1]);
-	  break;
-	case 4:
-	  result = op->op(arg, args->data[0], args->data[1], args->data[2]);
-	  break;
-	case 5:
-	  result = op->op(arg, args->data[0], args->data[1], args->data[2],
-			  args->data[3]);
-	  break;
-	default:
-	  assert(0);
-	}
-      return result;
+        struct primitive *prim = c;
+        ++prim->call_count;
+        value (*op)() = prim->op->op;
+        switch (nargs)
+          {
+            DOPRIMARGS(__V1CALLOP)
+          }
+        abort();
       }
 
     case type_varargs:
       {
-	struct vector *real_args;
-	struct primitive *prim = (struct primitive *)o;
+	struct primitive *prim = c;
+        ++prim->call_count;
+        value (*op)() = prim->op->op;
 
-        prim->call_count++;
-
-        struct gcpro gcpro1;
-	GCPRO1(arg);
-	real_args = (struct vector *)unsafe_allocate_record(type_vector, nargs);
+        GCPRO2(arg, args);
+	struct vector *real_args
+          = (struct vector *)unsafe_allocate_record(type_vector, nargs);
 	real_args->data[0] = arg;
-	memcpy(real_args->data + 1, args->data, (nargs - 1) * sizeof(value));
+	memcpy(real_args->data + 1, args->data, (nargs - 1) * sizeof (value));
 	UNGCPRO();
 
-	return prim->op->op(args, nargs);
+	return op(args, nargs);
       }
+
     default: break;
     }
   abort();
 }
+
+#define __VECTARG(N) (args->data[N - 1])
+#define __VCALLOP(N) case N: return op(CONCATCOMMA(N, __VECTARG));
 
 value call(value c, struct vector *args)
 /* Effects: Calls c with arguments args
@@ -762,67 +558,45 @@ value call(value c, struct vector *args)
    Requires: callable(c, vector_len(args)) does not fail.
 */
 {
-  struct obj *o = c;
   int nargs = vector_len(args);
+  if (nargs == 0)
+    return call0(c);
 
-  switch (o->type)
+  ++mudlle_call_count;
+
+  switch (((struct obj *)c)->type)
     {
     case type_closure:
       {
-	struct closure *cl = (struct closure *)o;
+	struct closure *cl = c;
 
 	if (cl->code->o.type == type_mcode)
 	  return invoke(cl, args);
-	else
-	  {
-            struct gcpro gcpro1, gcpro2;
-	    GCPRO2(cl, args);
-	    for (int i = 0; i < nargs; i++) stack_push(args->data[i]);
-	    UNGCPRO();
 
-	    do_interpret(cl, nargs);
-	    return stack_pop();
-	  }
+        GCPRO2(cl, args);
+        for (int i = 0; i < nargs; ++i)
+          stack_push(args->data[i]);
+        UNGCPRO();
+
+        do_interpret(cl, nargs);
+        return stack_pop();
       }
 
     case type_secure: case type_primitive:
       {
-        struct primitive *prim = (struct primitive *)o;
-        prim->call_count++;
-        const struct primitive_ext *op = prim->op;
-        value result;
-
-      switch (nargs)
-	{
-	case 0:
-	  result = op->op();
-	  break;
-	case 1:
-	  result = op->op(args->data[0]);
-	  break;
-	case 2:
-	  result = op->op(args->data[0], args->data[1]);
-	  break;
-	case 3:
-	  result = op->op(args->data[0], args->data[1], args->data[2]);
-	  break;
-	case 4:
-	  result = op->op(args->data[0], args->data[1], args->data[2],
-                          args->data[3]);
-	  break;
-	case 5:
-	  result = op->op(args->data[0], args->data[1], args->data[2],
-                          args->data[3], args->data[4]);
-	  break;
-	default:
-	  assert(0);
-	}
-      return result;
+        struct primitive *prim = c;
+        ++prim->call_count;
+        value (*op)() = prim->op->op;
+        switch (nargs)
+          {
+            DOPRIMARGS(__VCALLOP)
+          }
+        abort();
       }
     case type_varargs:
       {
-        struct primitive *prim = (struct primitive *)o;
-        prim->call_count++;
+        struct primitive *prim = c;
+        ++prim->call_count;
         return prim->op->op(args, nargs);
       }
 
@@ -831,42 +605,152 @@ value call(value c, struct vector *args)
   abort();
 }
 
+static struct vector *make_vargs(int argc, va_list vargs)
+{
+  if (argc == 0)
+    return (struct vector *)unsafe_allocate_record(type_vector, 0);
+
+  struct gcpro gcpros[argc];
+  value args[argc];
+  for (int i = 0; i < argc; ++i)
+    {
+      args[i] = va_arg(vargs, value);
+      GCPRO(gcpros[i], args[i]);
+    }
+  struct vector *v
+    = (struct vector *)unsafe_allocate_record(type_vector, argc);
+  UNGCPRO1(gcpros[0]);
+  memcpy(v->data, args, sizeof args);
+  return v;
+}
+
+#define __VARG(N) __PRIMARG(N) = me.u.c.args[N - 1] = va_arg(va, value)
+#define __INVOKE(N)                             \
+ case N:                                        \
+ {                                              \
+   CONCATSEMI(N, __VARG);                       \
+   result = invoke ## N(cl, PRIMARGNAMES ## N); \
+   goto done;                                   \
+ }
+#define __CALLOP(N)                             \
+ case N:                                        \
+ {                                              \
+   CONCATSEMI(N, __VARG);                       \
+   result = op(PRIMARGNAMES ## N);              \
+   goto done;                                   \
+ }
+
+static value callv(value c, int nargs, va_list va, const char *name)
+
+/* Effects: Calls c with argc arguments in va
+   Returns: c's result
+   Requires: callable(c, argc) does not fail.
+*/
+{
+  struct call_stack me;
+  me.next = call_stack;
+
+  if (name != NULL)
+    {
+      me.type = call_string;
+      me.u.c.u.name = name;
+      me.u.c.nargs = nargs;
+      call_stack = &me;
+    }
+
+  value result;
+
+  if (nargs == 0)
+    {
+      result = call0(c);
+      goto done;
+    }
+
+  if (nargs > MAX_PRIMITIVE_ARGS)
+    goto call_vector;
+
+  ++mudlle_call_count;
+
+  switch (((struct obj *)c)->type)
+    {
+    case type_closure:
+      {
+	struct closure *cl = c;
+
+	if (cl->code->o.type != type_mcode)
+          goto call_vector;
+        switch (nargs)
+          {
+            DOPRIMARGS(__INVOKE)
+          }
+        abort();
+      }
+
+    case type_secure: case type_primitive:
+      {
+        struct primitive *prim = c;
+        ++prim->call_count;
+        value (*op)() = prim->op->op;
+        switch (nargs)
+          {
+            DOPRIMARGS(__CALLOP)
+          }
+        abort();
+      }
+    case type_varargs:
+      goto call_vector;
+
+    default:
+      abort();
+    }
+
+ call_vector: ;
+  GCPRO1(c);
+  struct vector *argv = make_vargs(nargs, va);
+  me.u.c.nargs = 1;
+  me.u.c.args[0] = argv;
+  UNGCPRO();
+  result = call(c, argv);
+
+ done:
+  call_stack = me.next;
+  return result;
+}
+
 /* Calls with error trapping */
 
-static INLINE enum call_trace_mode call_trace_mode(void)
+static inline enum call_trace_mode call_trace_mode(void)
 {
-  if (catch_context)
+  if (catch_context && catch_context->call_trace_mode != call_trace_barrier)
     return catch_context->call_trace_mode;
   return call_trace_on;
 }
 
-struct val5 { value v1, v2, v3, v4, v5; };
-static value result;
+static value longjmp_result;
 
 static void docall0_setjmp(void *f)
 {
-  struct gcpro gcpro1;
   value buf;
 
   GCPRO1(f);
   buf = mjmpbuf();
-  result = call1(f, buf);
+  longjmp_result = call1(f, buf);
   UNGCPRO();
 }
 
 value msetjmp(value f)
 {
-  if (mcatch(docall0_setjmp, f, catch_context->call_trace_mode)) 
-    return result;
+  if (mcatch(docall0_setjmp, f, call_trace_mode()))
+    return longjmp_result;
   return NULL;
 }
 
 void mlongjmp(value buf, value x)
 {
   assert(is_mjmpbuf(buf));
-  
+
   exception_context = ((struct mjmpbuf *)buf)->context;
-  result = x;
+  longjmp_result = x;
   mthrow(SIGNAL_LONGJMP, x);
 }
 
@@ -877,109 +761,96 @@ void mthrow(long sig, value val)
   nosiglongjmp(catch_context->exception, sig);
 }
 
+struct call_info {
+  value c, result;
+  const char *name;
+  struct vector *args;
+};
+
 static void docall(void *x)
 {
-  struct val5 *args = x;
-
-  result = call(args->v1, args->v2);
+  struct call_info *info = x;
+  struct call_stack me;
+  me.next = call_stack;
+  if (info->name)
+    {
+      me.type = call_string;
+      me.u.c.u.name = info->name;
+      me.u.c.nargs = 1;
+      me.u.c.args[0] = info->args;
+      call_stack = &me;
+    }
+  info->result = call(info->c, info->args);
+  call_stack = me.next;
 }
 
-value mcatch_call(value c, struct vector *arguments)
+value mcatch_call(const char *name, value c, struct vector *arguments)
 {
-  struct val5 args;
-
-  args.v1 = c; args.v2 = arguments;
-  if (mcatch(docall, &args, call_trace_mode())) return result;
-  else return NULL;
+  struct call_info info = {
+    .c = c, .args = arguments, .name = name
+  };
+  if (mcatch(docall, &info, call_trace_mode()))
+    return info.result;
+  return NULL;
 }
 
-static void docall0(void *x)
+struct callv_info {
+  value c, result;
+  int argc;
+  va_list va;
+  const char *name;
+};
+
+static void docallv(void *_info)
 {
-  result = call0(x);
+  struct callv_info *info = _info;
+  info->result = callv(info->c, info->argc, info->va, info->name);
 }
 
-value mcatch_call0(value c)
+value mcatchv(const char *name, value c, int argc, ...)
 {
-  if (mcatch(docall0, c, call_trace_mode())) return result;
-  else return NULL;
+  struct callv_info info = {
+    .c = c,
+    .argc = argc,
+    .name = name
+  };
+  va_start(info.va, argc);
+  bool ok = mcatch(docallv, &info, call_trace_mode());
+  va_end(info.va);
+  return ok ? info.result : NULL;
 }
 
-static void docall1(void *x)
-{
-  struct val5 *args = x;
-
-  result = call1(args->v1, args->v2);
-}
-
-value mcatch_call1(value c, value arg)
-{
-  struct val5 args;
-
-  args.v1 = c; args.v2 = arg;
-  if (mcatch(docall1, &args, call_trace_mode())) return result;
-  else return NULL;
-}
-
-static void docall2(void *x)
-{
-  struct val5 *args = x;
-
-  result = call2(args->v1, args->v2, args->v3);
-}
-
-value mcatch_call2(value c, value arg1, value arg2)
-{
-  struct val5 args;
-
-  args.v1 = c; args.v2 = arg1; args.v3 = arg2;
-  if (mcatch(docall2, &args, call_trace_mode())) return result;
-  else return NULL;
-}
-
-static void docall3(void *x)
-{
-  struct val5 *args = x;
-
-  result = call3(args->v1, args->v2, args->v3, args->v4);
-}
-
-value mcatch_call3(value c, value arg1, value arg2, value arg3)
-{
-  struct val5 args;
-
-  args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3;
-  if (mcatch(docall3, &args, call_trace_mode())) return result;
-  else return NULL;
-}
-
-static void docall4(void *x)
-{
-  struct val5 *args = x;
-
-  result = call4(args->v1, args->v2, args->v3, args->v4, args->v5);
-}
-
-value mcatch_call4(value c, value arg1, value arg2, value arg3, value arg4)
-{
-  struct val5 args;
-
-  args.v1 = c; args.v2 = arg1; args.v3 = arg2; args.v4 = arg3; args.v5 = arg4;
-  if (mcatch(docall4, &args, call_trace_mode())) return result;
-  else return NULL;
-}
+struct call1plus_info {
+  value c, result;
+  value arg;
+  const char *name;
+  struct vector *args;
+};
 
 static void docall1plus(void *x)
 {
-  struct val5 *args = x;
-
-  result = call1plus(args->v1, args->v2, args->v3);
+  struct call1plus_info *info = x;
+  struct call_stack me;
+  me.next = call_stack;
+  if (info->name)
+    {
+      me.type = call_string;
+      me.u.c.u.name = info->name;
+      me.u.c.nargs = 2;
+      me.u.c.args[0] = info->arg;
+      me.u.c.args[1] = info->args;
+      call_stack = &me;
+    }
+  info->result = call1plus(info->c, info->arg, info->args);
+  call_stack = me.next;
 }
 
-value mcatch_call1plus(value c, value arg, struct vector *arguments)
+value mcatch_call1plus(const char *name, value c, value arg,
+                       struct vector *arguments)
 {
-  struct val5 args;
-
-  args.v1 = c; args.v2 = arg; args.v3 = arguments;
-  if (mcatch(docall1plus, &args, call_trace_mode())) return result;
+  struct call1plus_info info = {
+    .c = c, .arg = arg, .args = arguments, .name = name
+  };
+  if (mcatch(docall1plus, &info, call_trace_mode())) return info.result;
   else return NULL;
 }

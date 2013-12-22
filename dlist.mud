@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -27,7 +27,7 @@ defines dcons!, dremove!, dmerge!, dnext, dsnext, dprev, dsprev,
 // representation uses a triple cell: [ contents next prev ]
 // an empty list is represented by null
 
-dcons! = fn "`x `d1 -> `d2. Inserts `x in front of `d1 and returns new cell `d2" (x, d)
+dcons! = fn "`x `d1 -> `d2. Inserts `x in front of `d1 and returns new cell `d2" (x, {vector,null} d)
   [
     | new |
     if (d == null)
@@ -43,7 +43,7 @@ dcons! = fn "`x `d1 -> `d2. Inserts `x in front of `d1 and returns new cell `d2"
       ]
   ];
 
-dremove! = fn "`d1 `d2 -> `d3. Removes `d1 from list with head `d2. Returns new head `d3" (del, head)
+dremove! = fn "`d1 `d2 -> `d3. Removes `d1 from list with head `d2. Returns new head `d3" (vector del, vector head)
   if (del == head)
     if (del[1] == head) // last element!
       null
@@ -61,7 +61,7 @@ dremove! = fn "`d1 `d2 -> `d3. Removes `d1 from list with head `d2. Returns new 
     ];
 
 
-dmerge! = fn "`d1 `d2 -> `d3. List `d1 is inserted in front of list `d2. Returns list starting at `d1" (d1, d2)
+dmerge! = fn "`d1 `d2 -> `d3. List `d1 is inserted in front of list `d2. Returns list starting at `d1" ({vector,null} d1, {vector,null} d2)
   if (d1 == null) d2
   else if (d2 == null) d1
   else
@@ -80,13 +80,14 @@ dmerge! = fn "`d1 `d2 -> `d3. List `d1 is inserted in front of list `d2. Returns
     ];
 
 dnext = fn "`d1 -> `d2. Returns element after `d1" (vector d) d[1];
-dsnext = fn "`d1 `d2 -> `d3. Returns element after `d1 or null if at end of list. `d2 is list head" (vector d1, d2) if (d1[1] == d2) null else d1[1];
+dsnext = fn "`d1 `d2 -> `d3. Returns element after `d1 or null if at end of list. `d2 is list head" (vector d1, vector d2) if (d1[1] == d2) null else d1[1];
 dprev = fn "`d1 -> `d2. Returns element before `d1" (vector d) d[2];
-dsprev = fn "`d1 `d2 -> `d3. Returns element before `d1 or null if at beginning of list. `d2 is list head" (vector d1, d2) if (d1[2] == d2) null else d1[2];
+dsprev = fn "`d1 `d2 -> `d3. Returns element before `d1 or null if at beginning of list. `d2 is list head" (vector d1, vector d2)
+  if (d1[2] == d2) null else d1[2];
 dget = fn "`d -> `x. Returns contents of `d" (vector d) d[0];
-dset! = fn "`d `x -> . Sets contents of `d to `x" (d, x) d[0] = x;
+dset! = fn "`d `x -> . Sets contents of `d to `x" (vector d, x) d[0] = x;
 
-dlength = fn "`d -> `n. Returns number of elements in list `d" (d)
+dlength = fn "`d -> `n. Returns number of elements in list `d" ({vector,null} d)
   if (d == null) 0
   else
     [
@@ -101,7 +102,7 @@ dlength = fn "`d -> `n. Returns number of elements in list `d" (d)
       l
     ];
 
-dlist_to_list = fn "`d -> `l. Returns a conventional list from a doubly-linked one" (d)
+dlist_to_list = fn "`d -> `l. Returns a conventional list from a doubly-linked one" ({vector,null} d)
   if (d == null) null
   else
     [

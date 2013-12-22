@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -117,7 +117,7 @@ int module_unload(const char *name)
 	  struct string *v = mvars->data[i];
 
 	  /* Unset module vars */
-	  if (!integerp(v) && stricmp(name, v->str) == 0)
+	  if (pointerp(v) && stricmp(name, v->str) == 0)
 	    {
 	      mvars->data[i] = makeint(var_normal);
 	      GVAR(i) = NULL;
@@ -145,7 +145,7 @@ int module_load(const char *name)
     {
       struct string *mname = alloc_string(name);
 
-      mcatch_call1(GVAR(load_library), mname);
+      mcatch_call1("call-load-library", GVAR(load_library), mname);
     }
   return module_status(name);
 }
@@ -175,6 +175,7 @@ int module_vstatus(long n, struct string **name)
   struct string *v = mvars->data[n];
 
   if (integerp(v)) return intval(v);
+  if (v == NULL) return var_system_write;
 
   *name = v;
   return var_module;
@@ -184,13 +185,19 @@ int module_vset(long n, int status, struct string *name)
 /* Effects: Sets status of global variable n to status.
      name is the module name for status var_module
    Returns: true if successful, false if the change is impossible
-     (ie status was already var_module)
+     (i.e., status was already var_module or var_system_write)
 */
 {
-  if (!integerp(mvars->data[n])) return false;
+  assert(status >= 0 && status <= var_system_write);
+  assert((name != NULL) == (status == var_module));
+
+  if (GCONSTANT(n))
+    return false;
 
   if (status == var_module)
     mvars->data[n] = name;
+  else if (status == var_system_write)
+    mvars->data[n] = NULL;
   else
     mvars->data[n] = makeint(status);
 

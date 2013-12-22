@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -28,7 +28,11 @@
 
 struct env *environment;
 struct vector *env_values;
+/* map from global name to its index in mvars, env_values, and
+   global_names */
 struct table *global;
+/* variable type and ownership: NULL is var_system_write; type_string
+   is owning module; and integer is var_xxx (writable)*/
 struct vector *mvars;
 struct vector *global_names;
 
@@ -50,8 +54,6 @@ void global_init(void)
 
 static ulong global_add(struct string *name, value val)
 {
-  struct symbol *pos;
-  struct gcpro gcpro1, gcpro2;
   ulong aindex, old_size;
   struct vector *old_values = env_values;
 
@@ -71,7 +73,8 @@ static ulong global_add(struct string *name, value val)
 
       vec = alloc_vector(intval(environment->size));
 
-      memcpy(vec->data, global_names->data, global_names->o.size - sizeof(struct obj));
+      memcpy(vec->data, global_names->data,
+             global_names->o.size - sizeof (struct obj));
       global_names = vec;
 
 #if defined(i386) && !defined(NOCOMPILER)
@@ -84,8 +87,7 @@ static ulong global_add(struct string *name, value val)
   UNGCPRO();
   mvars->data[aindex] = makeint(var_normal);
   global_names->data[aindex] = name;
-  pos = table_add_fast(global, name, makeint(aindex));
-  pos->o.flags |= OBJ_READONLY; /* index of global vars never changes */
+  make_readonly(table_add_fast(global, name, makeint(aindex)));
 
   return aindex;
 }
@@ -102,8 +104,7 @@ ulong global_lookup(const char *name)
 
   if (table_lookup(global, name, &pos)) return (ulong)intval(pos->data);
 
-  mname = alloc_string(name);
-  mname->o.flags |= OBJ_READONLY;
+  mname = make_readonly(alloc_string(name));
   return global_add(mname, NULL);
 }
 
@@ -122,11 +123,7 @@ ulong mglobal_lookup(struct string *name)
   if (name->o.flags & OBJ_READONLY)
     tname = name;
   else
-    {
-      /* create read-only copy */
-      tname = mudlle_string_copy(name);
-      tname->o.flags |= OBJ_READONLY;
-    }
+    tname = make_readonly(mudlle_string_copy(name));
 
   return global_add(tname, NULL);
 }

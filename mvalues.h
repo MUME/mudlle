@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -19,9 +19,10 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef VALUES_H
-#define VALUES_H
+#ifndef MVALUES_H
+#define MVALUES_H
 
+#include <limits.h>
 #include <stddef.h>
 #include "types.h"
 
@@ -38,16 +39,24 @@
 #define uintval(obj) ((unsigned long)(obj) >> 1)
 #define makeint(i)   ((value)(((i) << 1) + 1))
 
-#define MAX_TAGGED_INT ((1 << 30) - 1)
-#define MIN_TAGGED_INT (-(1 << 30))
+#define MAX_MUDLLE_OBJECT_SIZE (16 * 1024 * 1024)
+#define MAX_VECTOR_SIZE ((MAX_MUDLLE_OBJECT_SIZE - sizeof (struct vector)) \
+                         / sizeof (value))
+#define MAX_STRING_SIZE (MAX_MUDLLE_OBJECT_SIZE - sizeof (struct string) - 1)
+
+#define TAGGED_INT_BITS (CHAR_BIT * sizeof (long) - 1)
+#define MAX_TAGGED_INT  (LONG_MAX >> 1)
+#define MIN_TAGGED_INT  (-MAX_TAGGED_INT - 1)
 
 #define OBJ_READONLY 1		/* Used for some values */
 #define OBJ_IMMUTABLE 2		/* Contains only pointers to other immutable
 				   objects.
-				   Its pointers are never modified after 
+				   Its pointers are never modified after
 				   allocation + initialisation (and all
 				   initialisation must be done before any other
 				   allocation) */
+#define OBJ_FLAG_0 4            /* Temporarily used to flag recursions  */
+#define OBJ_FLAG_1 8            /* Temporarily used to flag recursions  */
 
 /* True if x is immutable */
 #define immutablep(x) \
@@ -56,6 +65,13 @@
 /* True if x is readonly */
 #define readonlyp(x) \
   (!pointerp((x)) || (((struct obj *)(x))->flags & OBJ_READONLY) != 0)
+
+static inline value make_readonly(value v)
+{
+  if (!readonlyp(v))
+    ((struct obj *)v)->flags |= OBJ_READONLY;
+  return v;
+}
 
 /* How each class of object is structured */
 
@@ -100,47 +116,50 @@ struct gpermanent
 
 /* The code structures are somewhat machine-dependent */
 
-#if defined(i386) && !defined(NOCOMPILER)
 struct code
 {
   struct obj o;
+  struct string *varname;
+  struct string *filename;      /* Name on disk */
+  struct string *nicename;      /* Pretty-printed file name */
+  struct string *help;
+  struct vector *arg_types;
+  uword lineno;
+  uword seclevel;
+  ulong return_typeset;
+};
+
+#if defined(i386) && !defined(NOCOMPILER)
+struct icode
+{
+  struct code code;
   uword nb_constants;
   uword nb_locals;
   uword stkdepth;
-  uword seclevel;
-  uword lineno;
-  mtype return_type : 16;
+  uword dummy;
   ulong call_count;		/* Profiling */
-  ulong instruction_count;
-  struct string *varname;
-  struct string *filename;
-  struct string *help;
   struct string *lineno_data;
-  struct string *arg_types;
-  ulong dummy;
+  ulong instruction_count;
+  ulong dummy1;
   ubyte magic_dispatch[7];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
+  ubyte dummy2;
   struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
 struct mcode /* machine-language code object */
 {
-  struct obj o;
-  uword seclevel;
-  mtype return_type : 16;
-  struct string *filename;
-  struct string *varname;
-  struct string *help;
+  struct code code;
   struct string *linenos;
-  struct string *arg_types;
-  uword lineno;
+  ubyte closure_flags;          /* CLF_xxx flags */
+  ubyte dummy;
   uword code_length;		/* Length of machine code in words */
   uword nb_constants;
   uword nb_rel;
   ubyte *myself;		/* Self address, for relocation */
-  ubyte magic[8];		/* A magic pattern that doesn't occur in code. 
+  ubyte magic[8];		/* A magic pattern that doesn't occur in code.
 				   Offset must be multiple of 4 */
   ubyte mcode[/*code_length*/];
   /* following the machine code:
@@ -150,7 +169,7 @@ struct mcode /* machine-language code object */
 };
 
 CASSERT(mdispatch, (offsetof(struct mcode, mcode)
-                    == offsetof(struct code, magic_dispatch)));
+                    == offsetof(struct icode, magic_dispatch)));
 #endif  /* i386 && !NOCOMPILER */
 
 #ifdef sparc
@@ -160,8 +179,6 @@ struct code
   uword nb_constants;
   uword nb_locals;
   uword stkdepth;
-  uword seclevel;
-  uword lineno;
   ubyte filler[2];
   ulong call_count;		/* Profiling */
   ulong instruction_count;
@@ -179,10 +196,8 @@ struct code
 struct mcode /* machine-language code object */
 {
   struct obj o;
-  uword seclevel;
   uword nb_constants;
   uword code_length;		/* Length of machine code in words */
-  uword lineno;
   struct string *filename;
   struct string *varname;
   struct string *help;
@@ -202,16 +217,12 @@ struct code
   uword nb_constants;
   uword nb_locals;
   uword stkdepth;
-  uword seclevel;
   ulong call_count;		/* Profiling */
   ulong instruction_count;
-  struct string *varname;
-  struct string *filename;
-  struct string *help;
+  struct code_info info;
   ubyte magic_dispatch[6];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
-  uword lineno;
   struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
@@ -219,13 +230,9 @@ struct code
 struct mcode /* machine-language code object */
 {
   struct obj o;
-  uword seclevel;
   uword nb_constants;
   uword code_length;		/* Length of machine code in bytes */
-  uword lineno;
-  struct string *filename;
-  struct string *varname;
-  struct string *help;
+  struct code_info info;
   ubyte magic[8];		/* magic pattern that doesn't occur in code */
   ulong mcode[];                /* really of size code_length */
   /* the constant's offsets follow the machine code */
@@ -233,39 +240,27 @@ struct mcode /* machine-language code object */
 #endif  /* AMIGA */
 
 #ifdef NOCOMPILER
-struct code
+struct icode
 {
-  struct obj o;
+  struct code code;
   uword nb_constants;
   uword nb_locals;
   uword stkdepth;
-  uword seclevel;
-  uword lineno;
-  mtype return_type : 16;
+  uword dummy;
   ulong call_count;		/* Profiling */
-  ulong instruction_count;
-  struct string *varname;
-  struct string *filename;
-  struct string *help;
   struct string *lineno_data;
-  struct string *arg_types;
+  ulong instruction_count;
   struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
 struct mcode /* machine-language code object */
 {
-  struct obj o;
+  struct code code;
   /* Not used when no compiler around ... */
-  struct string *filename;
-  struct string *help;
-  struct string *varname;
-  struct string *arg_types;
-  uword lineno;
-  mtype return_type : 16;
-  uword seclevel;
+  ubyte closure_flags;          /* CLF_xxx flags */
   ubyte mcode[];
 };
 #endif  /* NOCOMPILER */
 
-#endif  /* VALUES_H */
+#endif  /* MVALUES_H */

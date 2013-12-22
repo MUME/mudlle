@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -26,7 +26,7 @@ requires system, sequences, dlist, misc, graph,
 defines mc:phase3, mc:myself
 
 reads mc:verbose, mc:infer_types
-writes tnargs, tncstargs, tnpartial, tnfull
+writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
 
 // VARIABLE CLASSES: Some notes on their effects on optimisation
 //   A function f uses:
@@ -59,7 +59,7 @@ writes tnargs, tncstargs, tnpartial, tnfull
 
 //  Some optimisations only care about writes. Ambiguous information currently
 //  doesn't distinguish between reads & writes of local variables (for globals
-//  & closures this can be specified by the 'globals' parameter to 
+//  & closures this can be specified by the 'globals' parameter to
 //  scan_ambiguous). The ambiguous information could be split to handle this.
 
 //  gdefs can be treated as constants, except for type inference.
@@ -124,27 +124,33 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	  dvar = mc:defined_var(ins);
 	  args = mc:arguments(ins, null);
 
-	  lforeach(fn (v)
-		    if (v[mc:v_class] == mc:v_closure)
-		      [
-			| base |
-
-			base = mc:var_base(v);
-			base[mc:v_lclosure_uses] =
-			  base[mc:v_lclosure_uses] | mc:closure_read;
-		      ],
-		  args);
+          if (ins[mc:i_class] == mc:i_vref)
+            lforeach(fn (v) [
+              | base |
+              base = mc:var_base(v);
+              base[mc:v_lclosure_uses] |=
+                (mc:vref_indirect | mc:closure_read | mc:closure_write
+                 | mc:local_write_once | mc:local_write_many);
+            ], args)
+          else
+            lforeach(fn (v)
+                     if (v[mc:v_class] == mc:v_closure)
+                     [
+                       | base |
+                       base = mc:var_base(v);
+                       base[mc:v_lclosure_uses] |= mc:closure_read;
+                     ],
+                     args);
 
 	  if (dvar && dvar[mc:v_class] == mc:v_closure)
 	    [
 	      | base |
 
 	      base = mc:var_base(dvar);
-	      base[mc:v_lclosure_uses] =
-		base[mc:v_lclosure_uses] | mc:closure_write;
+	      base[mc:v_lclosure_uses] |= mc:closure_write;
 	    ];
 	];
-	  
+
       lforeach
 	(fn (ifn)
 	   graph_nodes_apply
@@ -152,7 +158,7 @@ writes tnargs, tncstargs, tnpartial, tnfull
 	      cdr(ifn[mc:c_fvalue])),
 	 fns);
     ];
-	        
+
   represent_variables = fn (fns)
     // Types: fns: list of intermediate function
     // Effects: Works out which local variables must be indirect
@@ -225,22 +231,24 @@ writes tnargs, tncstargs, tnpartial, tnfull
 
 	  fcode = mc:new_fncode(ifn); // for modifications
 	  vmap = ifn[mc:c_fallvars];
-	  
+
 	  scan = ilist;
 	  loop
 	    [
 	      | il, ins, args, dvar, ndvar, class |
-	      
+
 	      il = dget(scan);
+              mc:lineno = il[mc:il_lineno];
 	      ins = il[mc:il_ins];
 	      class = ins[mc:i_class];
 	      if (ndvar = il[mc:il_defined_var]) dvar = vmap[ndvar]
 	      else dvar = false;
-	      
+
 	      // Add a fetch of each indirect arg (not for closures or
 	      // non-safe-write memory ops; the latter are only used for
 	      // non-indirect reasons)
 	      if (class != mc:i_closure &&
+                  class != mc:i_vref &&
                   (class != mc:i_memory
                    || ins[mc:i_mop] == mc:memory_write_safe) &&
 		  (args = lfilter(fn (v) v[mc:v_indirect],
@@ -254,14 +262,14 @@ writes tnargs, tncstargs, tnpartial, tnfull
 		else
 		  [
 		    | new, replist, label |
-		    
+
 		    mc:set_instruction(fcode, scan);
 		    new = dprev(scan);
 		    replist = null;
 		    while (args != null)
 		      [
 			| temp, arg |
-			
+
 			arg = car(args);
 			if (!assq(arg, replist)) // only fetch each var once
 			  [
@@ -273,12 +281,12 @@ writes tnargs, tncstargs, tnpartial, tnfull
 			args = cdr(args);
 		      ];
 		    new = dnext(new);	// new points to 1st added ins
-		    
+
 		    mc:replace_args(ins, replist);
-		    
+
 		    // may have added instructions at start
 		    if (scan == ilist) ilist = new;
-		    
+
 		    // move label of scan if any
 		    if (label = il[mc:il_label])
 		      [
@@ -286,19 +294,19 @@ writes tnargs, tncstargs, tnpartial, tnfull
 			mc:set_label(label, dget(new));
 		      ];
 		  ];
-	      
+
 	      // must come after arg, to make special assignment handling
 	      // work correctly (assignments of the form <ind1> := <ind2>
 	      // have already been replaced by <ind1> := <ind2>[0])
 	      if (dvar && dvar[mc:v_indirect]) // indirect destination
 		[
 		  | temp |
-		  
+
 		  // Special case: replacing '<indirect var> := x'
 		  if (class == mc:i_compute && ins[mc:i_aop] == mc:b_assign)
 		    [
 		      | x |
-		      
+
 		      // replaced by <indirect var>[0] := x
 		      x = car(ins[mc:i_aargs]);
 		      il[mc:il_ins] = vector(mc:i_memory,
@@ -313,19 +321,19 @@ writes tnargs, tncstargs, tnpartial, tnfull
 		      mc:replace_dest(ins, temp);
 		    ];
 		];
-	      
+
 	      scan = dnext(scan);
 	      if (scan == ilist) exit ilist
 	    ]
 	];
-      
+
       lforeach(indirection, fns);
       lforeach(fn (ifn)	// forward indirection to closure vars
 	      lforeach(fn (cvar)
 		      cvar[mc:v_indirect] = mc:var_base(cvar)[mc:v_indirect],
 		      ifn[mc:c_fclosure]),
 	      fns);
-      
+
       // add instructions to fetch and set indirect variables
       lforeach(fn (ifn)
 	      graph_nodes_apply(fn (n)
@@ -371,44 +379,41 @@ writes tnargs, tncstargs, tnpartial, tnfull
 		myself[mc:v_cparent] = mc:myself;
 	    ]
 	];
-	
+
       graph_nodes_apply
 	(fn (n) dforeach(detect_myself, graph_node_get(n)[mc:f_ilist]),
 	 cdr(ifn[mc:c_fvalue]));
     ];
-  
+
   mc:phase3 = fn "intermediate -> intermediate. Phase 3 of the compiler" (fns)
     [
       // makes basic blocks explicit
       lforeach(mc:split_blocks, fns);
-      
+
       compute_closure_uses(fns);
       mc:optimise_functions(fns);
 
       if (mc:verbose >= 2)
 	[
-	  display("Inferring types");
-	  newline();
+	  display("Inferring types\n");
 	];
       tnargs = tncstargs = tnpartial = tnfull = 0;
       lforeach(mc:infer_types, fns);
       if (mc:verbose >= 3)
 	[
-	  display("Complete type inference results:"); newline();
-	  display(format("%s args, of which %s constant, %s fully inferred, %s partially.", tnargs, tncstargs, tnfull, tnpartial));
-	  newline();
+	  display("Complete type inference results:\n");
+	  dformat("%s args, of which %s constant, %s fully inferred, %s partially.\n", tnargs, tncstargs, tnfull, tnpartial);
 	];
-      
+
       if (mc:verbose >= 2)
 	[
-	  display("Adding indirection");
-	  newline();
+	  display("Adding indirection\n");
 	];
       represent_variables(fns);
       lforeach(direct_recursion, fns);
-      
+
       if (mc:verbose >= 5)
 	lforeach(mc:display_blocks, fns);
     ];
-  
+
 ];

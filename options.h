@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -23,37 +23,32 @@
 #define OPTIONS_H
 
 /* Mudlle configuration */
-/* This files contains only #define's, it is used for both C and assembly code */
+/* This files contains only #defines used for both C and assembly code */
 
 
-/* Must also define INLINE, HAVE_MEMMOVE and stricmp as needed */
+/* Must also define stricmp as needed */
 
-#if defined(__GNUC__) || defined(AMIGA)
-#  define INLINE
-#else
-#  define INLINE
+#ifdef __MACH__
+#  define nosiglongjmp longjmp
+#  define nosigsetjmp setjmp
 #endif
 
 #ifdef sparc
 #  ifdef __SVR4
-#    define HAVE_MEMMOVE
 #    define stricmp strcasecmp
 #  endif
 #endif
 
 #ifdef hpux
-#  define HAVE_MEMMOVE
 #  define stricmp strcasecmp
 #endif
 
 #ifdef __sgi
 #  define stricmp strcasecmp
-#  define HAVE_MEMMOVE
 #endif
 
 #ifdef i386
 #  define stricmp strcasecmp
-#  define HAVE_MEMMOVE
 #  define GCQDEBUG
 #  define GCDEBUG_CHECK
 #endif
@@ -62,14 +57,10 @@
 #  define HAVE_ALLOCA_H
 #endif
 
-#ifdef AMIGA
-#  define HAVE_MEMMOVE
-#endif
-
 #ifndef PATH_MAX
 #  define PATH_MAX 1024
 #endif
-  
+
 /* GC configuration, basic parameters */
 /* More parameters are found in alloc.h (and some logic in alloc.c). */
 #define INITIAL_BLOCKSIZE (128*1024)
@@ -78,22 +69,7 @@
 #define GLOBAL_SIZE 512
 #define DEFAULT_SECLEVEL 0
 #define MUDLLE_INTERRUPT
-#undef PRINT_CODE
-
-#ifdef HAVE_MEMMOVE
-#  undef HAVE_MEMMOVE
-#  define HAVE_MEMMOVE 1
-#else
-#  define HAVE_MEMMOVE 0
-#endif
-
-
-
-#ifdef __GNUC__
-#  define NORETURN __attribute__ ((noreturn))
-#else
-#  define NORETURN
-#endif
+#define PRINT_CODE
 
 
 #ifdef sparc
@@ -107,7 +83,7 @@
 #    define HAVE_ALLOCA_H
 #    define nosigsetjmp _setjmp
 #    define nosiglongjmp _longjmp
-#    define HAVE_TM_ZONE
+#    define HAVE_STRUCT_TM_TM_ZONE
 #  endif
 #endif /* sparc */
 
@@ -149,7 +125,6 @@
 
 #ifdef WIN32
 #  define NOCOMPILER
-#  define HAVE_MALLOC_H
 #  define nosigsetjmp setjmp
 #  define nosiglongjmp longjmp
 #  define htonl __ntohl
@@ -160,10 +135,15 @@
 
 #ifdef AMIGA
 #  define HAVE_ALLOCA_H
-#  define HAVE_TM_ZONE
+#  define HAVE_STRUCT_TM_TM_ZONE
 #  define nosigsetjmp setjmp
 #  define nosiglongjmp longjmp
 #endif /* AMIGA */
+
+#ifdef __MACH__
+#  define USE_CCONTEXT
+#  define HAVE_CRYPT 1
+#endif
 
 /* Execution limits */
 

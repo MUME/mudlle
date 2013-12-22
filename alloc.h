@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -22,6 +22,7 @@
 #ifndef ALLOC_H
 #define ALLOC_H
 
+#include <stdlib.h>
 #include "valuelist.h"
 
 #undef ALLOC_STATS
@@ -37,37 +38,30 @@ void garbage_init(void);
 extern ubyte *gcblock;
 extern ulong gcblocksize;
 
-#define ALIGN(x, n) (((x) + (n) - 1) & ~((n) - 1))
+#define MUDLLE_ALIGN(x, n) (((x) + (n) - 1) & ~((n) - 1))
 #define CODE_ALIGNMENT 16
+
+extern ubyte *posgen0;
 
 #ifdef GCDEBUG
 extern ulong majorgen, minorgen;
 extern ubyte *endgen1;
+
 #ifdef GCDEBUG_CHECK
-#define GCCHECK(x)                                                      \
-  do                                                                    \
-    if (pointerp(x) &&                                                  \
-        ((struct obj *)(x))->generation !=                              \
-        (((struct obj *)(x))->generation & 1 ? minorgen : majorgen))    \
-     assert(0);                                                         \
-   while (0)
+static inline void gccheck_debug(value x)
+{
+  if (!pointerp(x))
+    return;
+  struct obj *o = x;
+  assert(o->generation == o->generation & 1 ? minorgen : majorgen);
+}
+#define GCCHECK(x) gccheck_debug(x)
 #else  /* ! GCDEBUG_CHECK */
 #define GCCHECK(x) ((void)0)
 #endif /* ! GCDEBUG_CHECK */
 #elif defined(GCQDEBUG)
-extern ulong maxobjsize;
-#define GCCHECK(x)                                                      \
-  do                                                                    \
-    if (pointerp(x) &&                                                  \
-        (((long)(x) & 2) ||                                             \
-         (((struct obj *)(x))->size > maxobjsize &&                     \
-          ((struct obj *)(x))->garbage_type != garbage_forwarded) ||    \
-         ((struct obj *)(x))->size < 8 ||                               \
-         ((struct obj *)(x))->garbage_type > garbage_mcode ||           \
-         ((struct obj *)(x))->type >= last_type ||                      \
-         ((struct obj *)(x))->flags & ~3))                              \
-    assert(0);                                                          \
-  while (0)
+void gccheck_qdebug(value x);
+#define GCCHECK(x) gccheck_qdebug(x)
 #else  /* ! GCDEBUG && ! GCQDEBUG */
 #define GCCHECK(x) ((void)0)
 #endif /* ! GCDEBUG && ! GCQDEBUG */
@@ -75,43 +69,74 @@ extern ulong maxobjsize;
 /* Provide temporary protection for some values */
 extern struct gcpro *gcpro;	/* Local (C) variables which need protection */
 
-struct gcpro 
-{
-    struct gcpro *next;
-    value *obj;
+struct gcpro {
+  struct gcpro *next;
+  value *obj;
 };
 
 #define GCPRO(gc, var) do {				\
   GCCHECK(var);						\
   (gc).next = gcpro;					\
   gcpro = &(gc);					\
-  (gc).obj = (value *)(void *)&(var);			\
+  (gc).obj = (void *)&(var);                            \
 } while(0)
 
-#define GCPRO1(var) GCPRO(gcpro1, var)
-#define GCPRO2(var1, var2) do {				\
-  GCPRO1(var1);						\
-  GCPRO(gcpro2, var2);					\
-} while (0)
-#define GCPRO3(var1, var2, var3) do {			\
-  GCPRO2(var1, var2);					\
-  GCPRO(gcpro3, var3);					\
-} while (0)
-#define GCPRO4(var1, var2, var3, var4) do {		\
-  GCPRO3(var1, var2, var3);				\
-  GCPRO(gcpro4, var4);					\
-} while (0)
-#define GCPRO5(var1, var2, var3, var4, var5) do {	\
-  GCPRO4(var1, var2, var3, var4);			\
-  GCPRO(gcpro5, var5);					\
-} while (0)
+#define __GCPROSTART struct gcpro gcpros[] = {
+#define __GCPRO_N(N, var) {                             \
+  .next = N == 1 ? gcpro : gcpros + N - 2,              \
+  .obj  = (GCCHECK(var), (void *)&(var))                \
+}
+#define __GCPROEND };                                   \
+  ((void)(gcpro = &gcpros[VLENGTH(gcpros) - 1]))
 
-#define UNGCPRO()    (gcpro = gcpro1.next)
-#define UNGCPRO1(gc) (gcpro = (gc).next)
+#define GCPRO1(var1)                                    \
+  __GCPROSTART                                          \
+  __GCPRO_N(1, var1),                                   \
+  __GCPROEND
+#define GCPRO2(var1, var2)                              \
+  __GCPROSTART                                          \
+  __GCPRO_N(1, var1),                                   \
+  __GCPRO_N(2, var2),                                   \
+  __GCPROEND
+#define GCPRO3(var1, var2, var3)                        \
+  __GCPROSTART                                          \
+  __GCPRO_N(1, var1),                                   \
+  __GCPRO_N(2, var2),                                   \
+  __GCPRO_N(3, var3),                                   \
+  __GCPROEND
+#define GCPRO4(var1, var2, var3, var4)                  \
+  __GCPROSTART                                          \
+  __GCPRO_N(1, var1),                                   \
+  __GCPRO_N(2, var2),                                   \
+  __GCPRO_N(3, var3),                                   \
+  __GCPRO_N(4, var4),                                   \
+  __GCPROEND
+#define GCPRO5(var1, var2, var3, var4, var5)            \
+  __GCPROSTART                                          \
+  __GCPRO_N(1, var1),                                   \
+  __GCPRO_N(2, var2),                                   \
+  __GCPRO_N(3, var3),                                   \
+  __GCPRO_N(4, var4),                                   \
+  __GCPRO_N(5, var5),                                   \
+  __GCPROEND
+#define GCPRO6(var1, var2, var3, var4, var5, var6)      \
+  __GCPROSTART                                          \
+  __GCPRO_N(1, var1),                                   \
+  __GCPRO_N(2, var2),                                   \
+  __GCPRO_N(3, var3),                                   \
+  __GCPRO_N(4, var4),                                   \
+  __GCPRO_N(5, var5),                                   \
+  __GCPRO_N(6, var6),                                   \
+  __GCPROEND
+
+#define GCPRO_N(N, vars) GCPRO ## N(vars)
+
+#define UNGCPRO()    ((void)(gcpro = gcpros[0].next))
+#define UNGCPRO1(gc) ((void)(gcpro = (gc).next))
 
 extern struct gcpro_list *gcpro_list; /* values which need protection */
 
-struct gcpro_list 
+struct gcpro_list
 {
     struct gcpro_list *next;
     valuelist *cl;
@@ -157,7 +182,7 @@ struct vector *get_staticpro_data(void);
    after a minor collection
 */
 
-  
+
 #define THRESHOLD_MAJOR_A 4
 #define THRESHOLD_MAJOR_B 5
 
@@ -169,7 +194,7 @@ struct vector *get_staticpro_data(void);
    available mem 0
 
 */
-   
+
 #define THRESHOLD_INCREASE_A 2
 #define THRESHOLD_INCREASE_B 3
 
@@ -205,7 +230,10 @@ void detect_immutability(void);
    Note: not extremely efficient, to be called only occasionnally
 */
 
-unsigned long gc_size(value x, unsigned long *mutble);
+struct gc_size {
+  ulong s_total, s_mutable, s_static;
+};
+void gc_size(value x, struct gc_size *size);
 /* Effects: Returns number of bytes accessible from x
      Sets mutable (if not NULL) to the # of mutable bytes in x
    Modifies: mutable
@@ -215,7 +243,7 @@ void *gc_save(value x, unsigned long *size);
 /* Effects: Saves a value x into a contiguous block of memory so
      that it can be reloaded by gc_load.
 
-     Not all types of data may be saved, some will be silently 
+     Not all types of data may be saved, some will be silently
      replaced by a `gone' value:
        - all external data (permanent & temporary)
        - code, closure
@@ -223,7 +251,7 @@ void *gc_save(value x, unsigned long *size);
        - internal
 
      Sharing of values reachable from x is preserved by gc_save/gc_load.
-     However, any sharing between values saved with separate calls to 
+     However, any sharing between values saved with separate calls to
      gc_save/gc_load is lost.
 
    Returns: A pointer to the block of memory containing x. This

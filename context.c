@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -22,16 +22,18 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
 #include "alloc.h"
+#include "builtins.h"
 #include "code.h"
-#include "stack.h"
-#include "global.h"
+#include "context.h"
 #include "error.h"
+#include "global.h"
+#include "stack.h"
+
+#include "runtime/basic.h"
 #include "runtime/runtime.h"
 #include "runtime/stringops.h"
-#include "runtime/basic.h"
-#include "builtins.h"
-#include "context.h"
 
 /* Function contexts */
 /* ----------------- */
@@ -46,11 +48,16 @@ struct catch_context *catch_context;
 
 struct ccontext ccontext;
 
-uword seclevel;
+uword internal_seclevel;
+bool seclevel_valid;
 
 long exception_signal;
 value exception_value;
 struct catch_context *exception_context;
+
+const struct session_info cold_session = {
+  .minlevel = 0
+};
 
 int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
 {
@@ -58,8 +65,6 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
   int ok;
 
 #ifdef AMIGA
-  struct gcpro gcpro1;
-
   context.old_activation_stack = activation_stack;
   context.old_registers_valid = registers_valid;
   GCPRO1(context.old_activation_stack);
@@ -71,7 +76,7 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
   context.old_gcpro = gcpro;
   context.old_stack_depth = stack_depth();
   context.old_call_stack = call_stack;
-  context.old_seclevel = seclevel;
+  context.old_seclevel = internal_seclevel;
 
   context._mjmpbuf = NULL;
 
@@ -79,7 +84,7 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
   catch_context = &context;
 
   if (nosigsetjmp(context.exception))
-    { 
+    {
       int extra_depth;
 
 #ifdef AMIGA
@@ -103,7 +108,7 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
 
       ok = false;
     }
-  else 
+  else
     {
       fn(x);
       exception_signal = 0;
@@ -111,7 +116,7 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
       assert(call_stack == context.old_call_stack);
     }
 
-  seclevel = context.old_seclevel;
+  set_seclevel(context.old_seclevel);
 
   /* handle setjmp context */
   if (context._mjmpbuf)
@@ -178,23 +183,18 @@ ulong mudlle_stack_limit, hard_mudlle_stack_limit;
 #endif
 
 void session_start(struct session_context *context,
-		   uword new_minlevel,
-		   Muser new_muduser, Mio new_mudout, Mio new_muderr)
+                   const struct session_info *info)
 {
   context->parent = session_context;
   session_context = context;
 
-  context->_muduser = new_muduser;
-  context->_mudout = new_mudout;
-  context->_muderr = new_muderr;
-  context->data = NULL;
+  context->_muduser = info->muser;
+  context->_mudout = info->mout;
+  context->_muderr = info->merr;
+
   context->call_count = MAX_CALLS;
   context->recursion_count = MAX_RECURSION;
-
-  context->old_minlevel = minlevel;
-  minlevel = new_minlevel;
-  context->old_xcount = xcount;
-  xcount = MAX_FAST_CALLS;	/* counter for machine code */
+  xcount = MAX_FAST_CALLS;
 
 #ifdef i386
   context->old_stack_limit = mudlle_stack_limit;
@@ -203,15 +203,19 @@ void session_start(struct session_context *context,
   if (mudlle_stack_limit < hard_mudlle_stack_limit)
     mudlle_stack_limit = hard_mudlle_stack_limit;
 #endif
+
+  context->old_minlevel = minlevel;
+  minlevel = info->minlevel;
+  context->old_xcount = xcount;
 }
 
 void session_end(void)
 {
-  xcount = session_context->old_xcount;
   minlevel = session_context->old_minlevel;
 #ifdef i386
   mudlle_stack_limit = session_context->old_stack_limit;
 #endif
+  xcount = session_context->old_xcount;
   session_context = session_context->parent;
 }
 
@@ -220,6 +224,9 @@ void unlimited_execution(void)
   /* Effectively remove execution limits for current session */
   session_context->recursion_count = session_context->call_count = 0;
   xcount = 0;
+#ifdef i386
+  mudlle_stack_limit = hard_mudlle_stack_limit;
+#endif
 }
 
 
@@ -237,7 +244,7 @@ void reset_context(void)
 
 struct list *mudcalltrace;	  /* list(cons(recipient, unhandled_only?)) */
 
-void add_call_trace(value v, int unhandled_only)
+void add_call_trace(value v, bool unhandled_only)
 {
   assert(TYPE(v, type_outputport) || TYPE(v, type_character));
 

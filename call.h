@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -24,35 +24,56 @@
 
 #include "types.h"
 
+#define DO1(op) op(1)
+#define DO2(op) DO1(op) op(2)
+#define DO3(op) DO2(op) op(3)
+#define DO4(op) DO3(op) op(4)
+#define DO5(op) DO4(op) op(5)
+#define __DO_N(N, op) DO ## N(op)
+#define DO_N(N, op) __DO_N(N, op)
+#define DOPRIMARGS(op) DO_N(MAX_PRIMITIVE_ARGS, op)
+
+#define CONCAT1(op, sep) op(1)
+#define CONCAT2(op, sep) CONCAT1(op, sep) SEP_ ## sep op(2)
+#define CONCAT3(op, sep) CONCAT2(op, sep) SEP_ ## sep op(3)
+#define CONCAT4(op, sep) CONCAT3(op, sep) SEP_ ## sep op(4)
+#define CONCAT5(op, sep) CONCAT4(op, sep) SEP_ ## sep op(5)
+
+#define SEP_COMMA ,
+#define SEP_SEMI  ;
+#define CONCATSEMI(N, op)  CONCAT ## N(op, SEMI)
+#define CONCATCOMMA(N, op) CONCAT ## N(op, COMMA)
+
+#define NVARARGS -1
+
+#define PRIMARGSNVARARGS value v0, ulong nargs
+#define PRIMARGNAMESNVARARGS v0, nargs
+
+#define __PRIMNAME(N) v ## N
+#define __PRIMARG(N) value __PRIMNAME(N)
+#define PRIMARGNAMES0
+#define PRIMARGNAMES1 CONCATCOMMA(1, __PRIMNAME)
+#define PRIMARGNAMES2 CONCATCOMMA(2, __PRIMNAME)
+#define PRIMARGNAMES3 CONCATCOMMA(3, __PRIMNAME)
+#define PRIMARGNAMES4 CONCATCOMMA(4, __PRIMNAME)
+#define PRIMARGNAMES5 CONCATCOMMA(5, __PRIMNAME)
+#define PRIMARGS0     void
+#define PRIMARGS1     CONCATCOMMA(1, __PRIMARG)
+#define PRIMARGS2     CONCATCOMMA(2, __PRIMARG)
+#define PRIMARGS3     CONCATCOMMA(3, __PRIMARG)
+#define PRIMARGS4     CONCATCOMMA(4, __PRIMARG)
+#define PRIMARGS5     CONCATCOMMA(5, __PRIMARG)
+
+extern ulong mudlle_call_count;
+
+/* Effects: Calls c with listed arguments
+   Returns: c's result
+   Requires: callable(c, N) does not fail.
+*/
 value call0(value c);
-/* Effects: Calls c with no arguments
-   Returns: c's result
-   Requires: callable(c, 0) does not fail.
-*/
-
-value call1(value c, value arg);
-/* Effects: Calls c with argument arg
-   Returns: c's result
-   Requires: callable(c, 1) does not fail.
-*/
-
-value call2(value c, value arg1, value arg2);
-/* Effects: Calls c with arguments arg1, arg2
-   Returns: c's result
-   Requires: callable(c, 2) does not fail.
-*/
-
-value call3(value c, value arg1, value arg2, value arg3);
-/* Effects: Calls c with arguments arg1, arg2, arg3
-   Returns: c's result
-   Requires: callable(c, 3) does not fail.
-*/
-
-value call4(value c, value arg1, value arg2, value arg3, value arg4);
-/* Effects: Calls c with arguments arg1, arg2, arg3, arg4
-   Returns: c's result
-   Requires: callable(c, 4) does not fail.
-*/
+#define DECL_CALL(N) value call ## N(value c, PRIMARGS ## N);
+DOPRIMARGS(DECL_CALL)
+#undef DECL_CALL
 
 value call1plus(value c, value arg, struct vector *args);
 /* Effects: Calls c with argument arg
@@ -74,13 +95,13 @@ void callable(value c, int nargs);
      nargs arguments.
 */
 
-int callablep(value c, int nargs);
+bool callablep(value c, int nargs);
 /* Returns: false if c is not something that can be called with
      nargs arguments.
 */
 
-int seclevel_violator(value c);
-/* Returns: true is calling c will cause a seclevel runtime error
+bool minlevel_violator(value c);
+/* Returns: true is calling c will cause a minlevel runtime error
 */
 
 /* as above, but trap errors */
@@ -89,48 +110,49 @@ int seclevel_violator(value c);
    Otherwise exception_signal and exception_value are set, and NULL is
    returned.
 */
-value mcatch_call0(value c);
-value mcatch_call1(value c, value arg);
-value mcatch_call2(value c, value arg1, value arg2);
-value mcatch_call3(value c, value arg1, value arg2, value arg3);
-value mcatch_call4(value c, value arg1, value arg2, value arg3, value arg4);
-value mcatch_call1plus(value c, value arg, struct vector *args);
-value mcatch_call(value c, struct vector *args);
+
+value mcatchv(const char *name, value c, int argc, ...);
+
+static inline value mcatch_call0(const char *name, value c)
+{
+  return mcatchv(name, c, 0);
+}
+
+#define DEF_MCATCH_CALL(N)                                      \
+static inline value mcatch_call ## N(                           \
+  const char *name,                                             \
+  value c, PRIMARGS ## N)                                       \
+{                                                               \
+  return mcatchv(name, c, N, CONCATCOMMA(N, __PRIMNAME));       \
+}
+DOPRIMARGS(DEF_MCATCH_CALL)
+#undef DEF_MCATCH_CALL
+
+value mcatch_call1plus(const char *name, value c, value arg,
+                       struct vector *args);
+value mcatch_call(const char *name, value c, struct vector *args);
+
+#define __CPRIMARG(N) args[N - 1]
+#define DEF_CALL_PRIMOP(N)                                              \
+static inline value call_primop ## N(value (*op)(), value *args)        \
+{                                                                       \
+  return op(CONCATCOMMA(N, __CPRIMARG));                                \
+}
+DOPRIMARGS(DEF_CALL_PRIMOP)
+#undef DEF_CALL_PRIMOP
+#undef __CPRIMARG
 
 /* Machine language interface */
 
 value invoke0(struct closure *c);
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c()
-   Returns: c()'s result
-*/
+#define DECL_INVOKE(N)                                          \
+value invoke ## N(struct closure *c, PRIMARGS ## N);
+DOPRIMARGS(DECL_INVOKE)
+#undef DECL_INVOKE
 
-value invoke1(struct closure *c, value arg);
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg)
-   Returns: c(arg)'s result
-*/
-
-value invoke2(struct closure *c, value arg1, value arg2);
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2)
-   Returns: c()'s result
-*/
-
-value invoke3(struct closure *c, value arg1, value arg2, value arg3);
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2, arg3)
-   Returns: c()'s result
-*/
-
-value invoke4(struct closure *c, value arg1, value arg2, value arg3, value arg4);
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2, arg3, arg4)
+   Effects: Executes c(arg1, ..., argN)
    Returns: c()'s result
 */
 
@@ -149,6 +171,8 @@ value invoke(struct closure *c, struct vector *args);
 */
 
 value msetjmp(value f);
-void mlongjmp(value buf, value x);
+void mlongjmp(value buf, value x) NORETURN;
+
+void mthrow(long sig, value val) NORETURN;
 
 #endif

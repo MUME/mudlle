@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -36,6 +36,7 @@ struct env_stack
   struct env_stack *next, *prev;
   struct locals_list *locals;
   uword size, max_size;		/* Current & max length of locals */
+  uword loop_depth;             /* Counts loop layers */
   varlist closure;
 };
 
@@ -83,13 +84,16 @@ void env_push(vlist locals, fncode fn)
 {
   struct env_stack *newp = allocate(fnmemory(fn), sizeof *newp);
 
-  newp->fn = fn;
-  newp->next = env_stack;
-  newp->prev = NULL;
-  newp->size = newp->max_size = vlist_length(locals);
-  if (locals) newp->locals = new_locals_list(fnmemory(fn), locals, 0, NULL);
-  else newp->locals = NULL;
-  newp->closure = NULL;
+  uword nlocals = vlist_length(locals);
+  *newp = (struct env_stack){
+    .fn       = fn,
+    .next     = env_stack,
+    .size     = nlocals,
+    .max_size = nlocals,
+    .locals   = (locals
+                 ? new_locals_list(fnmemory(fn), locals, 0, NULL)
+                 : NULL),
+  };
   if (env_stack) env_stack->prev = newp;
   env_stack = newp;
 }
@@ -106,22 +110,21 @@ varlist env_pop(uword *nb_locals)
 
 void env_block_push(vlist locals)
 {
-  uword nsize, i, last_set;
-
   /* Add locals */
   env_stack->locals = new_locals_list(fnmemory(env_stack->fn), locals,
 				      env_stack->size, env_stack->locals);
 
   /* Update size info, clears vars if necessary */
-  nsize = env_stack->size + vlist_length(locals);
-  last_set = nsize;
+  uword nsize = env_stack->size + vlist_length(locals);
+  uword last_set = nsize;
   if (env_stack->max_size < nsize)
     {
-      last_set = env_stack->max_size;
+      if (env_stack->loop_depth == 0)
+        last_set = env_stack->max_size;
       env_stack->max_size = nsize;
     }
-  for (i = env_stack->size; i < last_set; i++) ins1(op_clear_local, i,
-						    env_stack->fn);
+  for (uword i = env_stack->size; i < last_set; i++)
+    ins1(op_clear_local, i, env_stack->fn);
   env_stack->size = nsize;
 }
 
@@ -132,6 +135,16 @@ void env_block_pop(void)
      variable cells always can be) */
   /*env_stack->size -= vlist_length(env_stack->locals->locals);*/
   env_stack->locals = env_stack->locals->next;
+}
+
+void env_start_loop(void)
+{
+  ++env_stack->loop_depth;
+}
+
+void env_end_loop(void)
+{
+  --env_stack->loop_depth;
 }
 
 static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
@@ -176,7 +189,7 @@ static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
 }
 
 variable_class env_lookup(const char *name, ulong *offset,
-			  int do_read, int do_write)
+			  bool do_read, bool do_write)
 {
   if (strncasecmp(name, GLOBAL_ENV_PREFIX, strlen(GLOBAL_ENV_PREFIX)) == 0)
     name += strlen(GLOBAL_ENV_PREFIX);
@@ -200,7 +213,7 @@ variable_class env_lookup(const char *name, ulong *offset,
                 }
           }
       }
-  
+
   /* Not found, is global */
   *offset = global_lookup(name);
   return global_var;

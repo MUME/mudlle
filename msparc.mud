@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -50,7 +50,7 @@ defines
   sparc:umul, sparc:umulcc, sparc:smul, sparc:smulcc, sparc:sub, sparc:subcc,
   sparc:sll, sparc:srl, sparc:sra, sparc:load_sbyte, sparc:load_shword,
   sparc:load_ubyte, sparc:load_uhword, sparc:load_word, sparc:store_byte,
-  sparc:store_hword, sparc:store_word, sparc:save, sparc:restore, 
+  sparc:store_hword, sparc:store_word, sparc:save, sparc:restore,
   sparc:sethi, sparc:trap, sparc:branch, sparc:call_builtin, sparc:jmpl,
   sparc:register_constant, sparc:register_function, sparc:register_global,
   sparc:register_global_constant, sparc:register_primitive, sparc:new_label,
@@ -180,7 +180,7 @@ sparc:bvc = 15;
 sparc:bvs = 7;
 
 [
-  | ins_index, label_index, rnames, print_ins, rname, saddress, cnames, 
+  | ins_index, label_index, rnames, print_ins, rname, saddress, cnames,
     smixed, check, register, load_ins, store_ins, alu_ins, okleaf, leafarg,
     remoffset, add_ins, duplicate |
 
@@ -234,7 +234,7 @@ sparc:bvs = 7;
       if (found)
 	register(fcode, n, car(found));
     ];
-  
+
   sparc:copy_instruction = fn (fcode, il)
     [
       add_ins(fcode, il[sparc:il_ins]);
@@ -245,7 +245,7 @@ sparc:bvs = 7;
       duplicate(il, fcode, mc:a_kglobals + 2);
       duplicate(il, fcode, mc:a_primitives + 2);
     ];
-  
+
   // refs to g0-g7, l0-l1, i0-i7 and non-registers are ok in leaf routines.
   okleaf = fn (arg) !pair?(arg) || (arg = car(arg)) >= 24 || arg < 8 ||
     arg == 16 || arg == 17;
@@ -259,7 +259,7 @@ sparc:bvs = 7;
     //   Clears the current label
     [
       | newins, type |
-      
+
       // Add instruction
       newins = vector(fcode[1], ins, null, ins_index = ins_index + 1, 0);
 
@@ -273,7 +273,7 @@ sparc:bvs = 7;
       //   added.
       if (fcode[0] == null) fcode[0] = dcons!(newins, null)
       else dcons!(newins, fcode[0]); // insert before fcode[0]
-      
+
       // Set label if any
       if (fcode[1]) fcode[1][sparc:l_ins] = newins;
       fcode[1] = false;
@@ -292,7 +292,7 @@ sparc:bvs = 7;
   register = fn (fcode, n, info)
     // Registers info associated with last instructin added in list fcode[n]
     fcode[n] = (info . dget(dprev(fcode[0]))) . fcode[n];
-  
+
   // actual instructions:
   // subcc, or, load_word, save, restore, nop, sethi, store_word, store_halfword
   // branch, trap, call_builtin, ret
@@ -430,7 +430,7 @@ sparc:bvs = 7;
   sparc:new_label = fn "sparcode -> label. Returns a new unassigned label in sparcode"
     (fcode)
       vector(false, false, label_index = label_index + 1);
-  
+
   sparc:label = fn "sparcode label -> . Makes label point at the next instruction to\n\
 be generated in sparcode" (fcode, label)
       [
@@ -461,8 +461,8 @@ be generated in sparcode" (fcode, label)
   sparc:ins_list = fn "sparcode -> . Prints instruction list" (fcode)
     [
       | scan, ilist, ifind |
-      
-      ifind = fn (rlist, il, name) 
+
+      ifind = fn (rlist, il, name)
 	lexists?(fn (rinfo)
 	         if (cdr(rinfo) == il)
 	           [
@@ -480,8 +480,8 @@ be generated in sparcode" (fcode, label)
 
 	  il = dget(scan);
 	  if (il[sparc:il_label])
-	    display(format("%s:", sparc:slabel(il[sparc:il_label])));
-	  display(format("\t(%s) ", il[sparc:il_number]));
+	    dformat("%s:", sparc:slabel(il[sparc:il_label]));
+	  dformat("\t(%s) ", il[sparc:il_number]);
 
 	  ins = il[sparc:il_ins];
 	  ins[sparc:i_type] == sparc:ins_sethi &&
@@ -510,12 +510,12 @@ be generated in sparcode" (fcode, label)
       a2 = ins[sparc:i_arg2];
       a3 = ins[sparc:i_arg3];
 
-      opname = 
+      opname =
 	if (class == sparc:ins_alu)
 	  if (op >= sparc:op_cc + 16)
 	    '[0 0 0 0 0 "sll" "srl" "sra"][op - 32]
 	  else
-	    format("%s%s", 
+	    format("%s%s",
 		   '["add" "and" "or" "xor"
 		     "sub" "andn" "orn" "xorn"
 		     "addc" 0 "umul" "smul"
@@ -532,24 +532,24 @@ be generated in sparcode" (fcode, label)
 	else
 	  '[0 0 0 "sethi" "save" "restore" 0 0 "call" "jmpl"][class];
 
-      display(format("%s%s", opname,
+      dformat("%s%s", opname,
 		     [ | f | f = make_string(10 - string_length(opname));
-		       string_fill!(f, ? ); f ] ));
+		       string_fill!(f, ? ); f ] );
 
       if (class == sparc:ins_alu ||
 	  class == sparc:ins_save || class == sparc:ins_restore)
-        display(format("%s,%s,%s", rname(a1), smixed(a2), rname(a3)))
+        dformat("%s,%s,%s", rname(a1), smixed(a2), rname(a3))
       else if (class == sparc:ins_load || class == sparc:ins_jmpl)
-        display(format("%s,%s", saddress(a1, a2), rname(a3)))
+        dformat("%s,%s", saddress(a1, a2), rname(a3))
       else if (class == sparc:ins_store)
-        display(format("%s,%s", rname(a3), saddress(a1, a2)))
+        dformat("%s,%s", rname(a3), saddress(a1, a2))
       else if (class == sparc:ins_call)
-        if (info) display(format("%s[%s]", info, val))
+        if (info) dformat("%s[%s]", info, val)
 	else display(a1)
       else if (class == sparc:ins_sethi)
-        display(format("%s,%s",
+        dformat("%s,%s",
 		       if (info) format("%%hi(%s[%s])", info, val) else a1,
-		       rname(a2)))
+		       rname(a2))
       else if (class == sparc:ins_trap)
         display(saddress(a1, a2))
       else if (class == sparc:ins_branch)

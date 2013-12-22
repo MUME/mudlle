@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -22,17 +22,16 @@
 #ifndef LEXER_H
 #define LEXER_H
 
-#include "tokens.h"
+#include <stdio.h>
 
-extern YYSTYPE yylval;
-
-extern int lineno;
-extern const char *filename;
+extern int yylineno;
+extern const char *lexer_filename;
+extern const char *lexer_nicename;
 
 int yylex(void);
 
-void read_from_string(const char *str, const char *name);
-void read_from_file(FILE *f, const char *name);
-size_t convert_escape_char(const char *text, char *result);
+void read_from_string(const char *str, const char *afilename,
+                      const char *anicename);
+void read_from_file(FILE *f, const char *afilename, const char *anicename);
 
 #endif

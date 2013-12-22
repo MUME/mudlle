@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -23,7 +23,7 @@ library asparc // The sparc assembler
 requires system, dlist, msparc, sequences, graph, compiler
 defines sparc:assemble, sparc:reset_counters
 reads mc:verbose
-writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls, 
+writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
   nunfilled_branch, nunfilled_jump, nunfilled_call, nannull_filled
 [
   | set_offsets, remove_aliases, assemble, basic_code, ins_gen, setword,
@@ -55,7 +55,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	[
 	  sparc:ins_list(fcode);
 	  newline();
-	  display(format("nins %s, dlength %s\n", nins, dlength(ilist)));
+	  dformat("nins %s, dlength %s\n", nins, dlength(ilist));
 	];
       nins = nins + dlength(ilist);
       remove_aliases(ilist);
@@ -127,7 +127,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	//   at ilist
 	// Returns: The remains of ilist, i.e. all but the first basic block
 	[
-	  | readers, writer, ccreg, loads, stores, traps, inode, 
+	  | readers, writer, ccreg, loads, stores, traps, inode,
 	    adddep, readreg, writereg, addalldeps, setdelay |
 
 	  adddep = fn (from, to)
@@ -159,22 +159,22 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 		writer[r] = inode;
 		readers[r] = null;
 	      ];
-	  
+
 	  setdelay = fn (is, ilist)
 	    [
 	      | il, ins, nop |
-	      
+
 	      ilist = dnext(ilist);
 	      il = dget(ilist);
 	      ins = il[sparc:il_ins];
-	      
+
 	      is[is_delay] = il;
 	      is[is_delayfree] = ins[sparc:i_type] == sparc:ins_sethi &&
 		ins[sparc:i_arg2] == sparc:reg_g0; // a nop
-	      
+
 	      dnext(ilist)
 	    ];
-	  
+
 	  icount = 0;
 	  writer = make_vector(sparc:nregs + 1);
 	  readers = make_vector(sparc:nregs + 1);
@@ -182,12 +182,12 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	  loop
 	    [
 	      | il, inode, is, ins, itype |
-	      
+
 	      il = dget(ilist);
 	      ins = il[sparc:il_ins];
 	      //sparc:print_ins(ins, false, false); newline();
 	      itype = ins[sparc:i_type];
-	      
+
 	      is = vector(il, false, false, 0, 0, 0);
 	      inode = graph_add_node(depgraph, is);
 	      icount = icount + 1;
@@ -225,10 +225,10 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	      else if (itype == sparc:ins_save || itype == sparc:ins_restore)
 		[
 		  | r |
-		  
+
 		  readreg(inode, ins[sparc:i_arg1]);
 		  readreg(inode, ins[sparc:i_arg2]);
-		  
+
 		  r = car(sparc:reg_o0) . 0;
 		  while (car(r) <= car(sparc:reg_i7))
 		    [
@@ -236,7 +236,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 		      writereg(inode, r);
 		      set_car!(r, car(r) + 1);
 		    ];
-		  
+
 		  writereg(inode, ins[sparc:i_arg3]);
 		]
 	      else if (itype == sparc:ins_trap)
@@ -278,12 +278,12 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	      if (dget(ilist)[sparc:il_label]) exit ilist;
 	    ]
 	];
-      
+
       graph_roots = fn (graph)
 	// Types: graph: a graph
 	// Returns: The roots of graph, i.e. all nodes with no in-edges
 	lfilter(fn (node) graph_edges_in(node) == null, graph_nodes(graph));
-      
+
       graph_purge_node = fn (node)
 	// Types: node: a graph node
 	// Effects: Removes node and all its edges from the graph
@@ -292,7 +292,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	  lforeach(graph_remove_edge, graph_edges_out(node));
 	  graph_remove_node(node);
 	];
-      
+
       schedule_costs = fn (depgraph, roots)
 	// Types: depgraph: dependency graph
 	// Effects: Assigns scheduling costs to instructions in depgraph
@@ -302,11 +302,11 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	  setcost = fn (is)
 	    [
 	      | ins, itype, cost, op |
-	      
+
 	      ins = is[is_il][sparc:il_ins];
 	      //display("set cost "); sparc:print_ins(ins, false, false); newline();
 	      itype = ins[sparc:i_type];
-	      
+
 	      cost = 1;	// default cost
 	      if (itype == sparc:ins_alu)
 		[
@@ -321,16 +321,16 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	      else if (itype == sparc:ins_call || itype == sparc:ins_branch ||
 		       itype == sparc:ins_jmpl)
 		cost = 2; // encourages use of delay slot
-	      
+
 	      cost = cost * 2; // ultrasparc, 2-way superscalar
-	      
+
 	      is[is_time] = cost;
 	    ];
-	  
+
 	  compute_critical = fn (root)
 	    [
 	      | maxtime, is |
-	      
+
 	      is = graph_node_get(root);
 	      if (is[is_critical]) is[is_critical]
 	      else
@@ -347,7 +347,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 		  is[is_critical] = is[is_time] + maxtime
 		]
 	    ];
-	  
+
 	  compute_depends = fn (from)
 	    [
 	      | count |
@@ -362,40 +362,40 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 				0,
 				graph_edges_out(from))
 		  ];
-	      
+
 	      graph_clear_all_marks(depgraph);
 	      graph_node_get(from)[is_depends] = count(from);
 	    ];
-	  
+
 	  graph_nodes_apply(fn (node) setcost(graph_node_get(node)), depgraph);
 	  // The obvious n^2 algorithm. Is there a better one ?
 	  //graph_nodes_apply(fn (node) compute_depends(node), depgraph);
 	  lforeach(compute_critical, roots);
 	];
-      
+
       schedule_generate = fn (depgraph, roots)
 	[
 	  | t, newlist, ready, running, better, canrun, pick_ins, completed |
-	  
+
 	  t = 0;		// current "time"
 	  ready = roots;
 	  running = null;
 	  newlist = null;
-	  
+
 	  better = fn (i1, i2)
 	    [
 	      | is1, is2 |
-	      
+
 	      is1 = graph_node_get(i1); is2 = graph_node_get(i2);
 	      is1[is_critical] > is2[is_critical] ||
 	      is1[is_critical] == is2[is_critical] &&
 		is1[is_depends] > is2[is_depends]
 	    ];
-	  
+
 	  canrun = fn (i)
 	    [
 	      | is, ins, itype |
-		  
+
 	      is = graph_node_get(i);
 	      ins = is[is_il][sparc:il_ins];
 	      itype = ins[sparc:i_type];
@@ -408,17 +408,17 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 		else
 		  true	// can run anytime
 	    ];
-	      
+
 	  pick_ins = fn ()
 	    [
 	      | try, best |
-	      
+
 	      try = ready;
 	      best = false;
 	      while (try != null)
 		[
 		  | itry |
-		  
+
 		  itry = car(try);
 		  try = cdr(try);
 		  if (canrun(itry))
@@ -426,11 +426,11 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 		];
 	      best
 	    ];
-	  
+
 	  completed = fn (i)
 	    [
 	      | successors |
-	      
+
 	      successors = lmap(graph_edge_to, graph_edges_out(i));
 	      graph_purge_node(i);
 	      // Add all successors with no remaining dependences
@@ -439,15 +439,15 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 		       ready = newi . ready,
 		       successors);
 	    ];
-	  
+
 	  while (icount > 0)
 	    [
 	      | scheduled |
-	      
+
 	      if (scheduled = pick_ins())
 		[
 		  | delayed, sis, sil, label |
-		  
+
 		  ready = ldelete!(scheduled, ready);
 		  sis = graph_node_get(scheduled);
 		  sil = sis[is_il];
@@ -501,7 +501,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 				    true,
 				running);
 	    ];
-	  //display(format("adding %d\n", dlength(newlist)));
+	  //dformat("adding %d\n", dlength(newlist));
 	  newlist
 	];
 
@@ -514,9 +514,9 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	  ilist = schedule_dependences(ilist, depgraph);
 	  roots = graph_roots(depgraph);
 	  schedule_costs(depgraph, roots);
-	  //display(format("before %d\n", dlength(newlist)));
+	  //dformat("before %d\n", dlength(newlist));
 	  newlist = dmerge!(newlist, schedule_generate(depgraph, roots));
-	  //display(format("after %d\n", dlength(newlist)));
+	  //dformat("after %d\n", dlength(newlist));
 
 	  if (ilist == start) exit newlist;
 	]
@@ -530,7 +530,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 
       itype = ins[sparc:i_type];
       iop = ins[sparc:i_op];
-      
+
       itype == sparc:ins_alu && !(iop == sparc:op_sdiv || iop == sparc:op_udiv)
       // || itype == sparc:ins_sethi -- not ok, linker/gc need to find sethi/or
       // pair (one exception: sethi for a large integer constant, but not
@@ -603,7 +603,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	      else if (itype == sparc:ins_branch)
 		[
 		  // unconditional annulled branches have no delay slot ...
-		  ndelay_branch = 
+		  ndelay_branch =
 		    !(ins[sparc:i_arg2] && ins[sparc:i_op] == sparc:balways);
 		  if (ndelay_branch)
 		    nbranches = nbranches + 1
@@ -672,7 +672,7 @@ writes nins, nslots, nfilled, nbranches, nbalways, njumps, ncalls,
 	  delay_branch = ndelay_branch;
 	  delay_jump = ndelay_jump;
 	  candidate = ncandidate;
-	  
+
 	  scan = next;
 	  if (scan == ilist) exit ilist;
 	]

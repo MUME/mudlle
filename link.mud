@@ -1,17 +1,17 @@
-/* 
- * Copyright (c) 1993-2006 David Gay
+/*
+ * Copyright (c) 1993-2012 David Gay
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
  * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
  * THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY HAVE BEEN ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY SPECIFICALLY DISCLAIM ANY WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND DAVID
@@ -22,25 +22,27 @@
 library link // A linker.
 requires compiler, vars, system, sequences
 defines mc:prelink
-writes mc:this_module, mc:erred, mc:linkrun
+writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 [
 
-  | make_code, prelink, mstart, error, warning, append!, pmodule_class,
+  | make_code, prelink, mstart, mc_error, mc_warning, append!, pmodule_class,
     pmodule_name, pmodule_imports, pmodule_defines, pmodule_reads,
     pmodule_writes, pmodule_body, prelinked_module_fields, pfn_code, pfn_help,
     pfn_varname, pfn_filename, pfn_lineno, pfn_subfns, pfn_constants,
     pfn_builtins, pfn_globals, pfn_kglobals, pfn_primitives,
-    pfn_rel_primitives, pfn_return_type, pfn_linenos, pfn_arg_types,
-    prelinked_function_fields, check_presence, check_dependencies, dependencies,
+    pfn_rel_primitives, pfn_return_type, pfn_linenos, pfn_arg_typesets,
+    pfn_flags, pfn_nicename, prelinked_function_fields,
+    check_presence, check_dependencies, dependencies,
     depend_immutable, depend_none, depend_primitive, depend_type,
-    depend_closure, depend_integer, depend_signature, dependency,
-    check_dependency, check_present, map, foreach, pmodule_protect |
+    depend_closure, depend_value, dependency,
+    check_dependency, check_present, map, foreach, pmodule_protect,
+    set_this_filenames |
 
   // Linker:
 
   // The prelinker accepts the results of phase4 and produces a
   // prelinked module (pmodule), which can be saved with save_data.
-  
+
   // The linker takes a prelinked module, checks everything, and then
   // links the module into the current environment. Finally it runs
   // the generated code, and updates the module's status.
@@ -74,7 +76,7 @@ writes mc:this_module, mc:erred, mc:linkrun
   pfn_code = 0;			// machine code (string)
   pfn_help = 1;			// help (string or null)
   pfn_varname = 2;		// varname (string or null)
-  pfn_filename = 3;		// filename (string or null)
+  pfn_nicename = 3;		// pretty-printed filename (string or null)
   pfn_lineno = 4;		// line number (int)
   // references (all of the form list of <info> . offset,
   // where offset is an integer offset into code
@@ -87,16 +89,18 @@ writes mc:this_module, mc:erred, mc:linkrun
   pfn_rel_primitives = 11;	// relative prims (list of string . offset)
   pfn_return_type = 12;         // return type
   pfn_linenos = 13;             // line number information
-  pfn_arg_types = 14;           // string of argument types (false for vararg)
-  prelinked_function_fields = 15;
+  pfn_arg_typesets = 14;        // vector of arg typesets; false for vararg
+  pfn_flags = 15;               // clf_xxx flags
+  pfn_filename = 16;		// filename (string or null)
+  prelinked_function_fields = 17;
 
   // Linking
   // -------
 
   // linkrun can unload anything, hence it should only depend on stuff in
   // system and local vars while running
-  error = mc:error;
-  warning = mc:warning;
+  mc_error = mc:error;
+  mc_warning = mc:warning;
   append! = lappend!;
   map = lmap;
   foreach = lforeach;
@@ -114,19 +118,17 @@ writes mc:this_module, mc:erred, mc:linkrun
 
       res = false;
       mc:erred = false;
-      mc:this_module = prelinked_module;
+      mc:this_module = null;
       if (mstart(prelinked_module, seclev))
 	[
 	  if (!mc:erred) // run only if no errors
 	    [
 	      | code |
-	  
-	      code = make_code(prelinked_module[pmodule_body], seclev);
-	      res = null;
-	      catch_error(fn () [
-		make_closure(code)();
-		res = true;
-	      ], false);
+
+	      code = make_closure(make_code(prelinked_module[pmodule_body],
+                                            seclev));
+	      res = true;
+	      trap_error(code, fn (n) res = null, call_trace_barrier, true)
 	    ];
 
 	  if (mname)
@@ -138,36 +140,54 @@ writes mc:this_module, mc:erred, mc:linkrun
 		detect_immutability();
 	      ]
 	    else
-	      module_set!(mname, 
+	      module_set!(mname,
 			  if (res == true) module_loaded else module_error,
 			  seclev);
 	];
 
       mc:this_module = null;
+      mc:this_filenames = null;
 
       res
     ];
 
+  set_this_filenames = fn (m)
+    [
+      | b |
+      b = m[pmodule_body];
+      mc:this_filenames = b[pfn_filename] . b[pfn_nicename]
+    ];
+
+  | module_describe |
+  module_describe = fn (vstatus)
+    if (string?(vstatus))
+      format("belongs to the %s module", vstatus)
+    else if (vstatus == var_system_write)
+      "cannot be written from mudlle"
+    else
+      error(error_abort);
+
   mstart = fn (m, seclev)
     [
-      | mname |
-
       if (vlength(m) != prelinked_module_fields
-          || vlength(m[pmodule_body]) != prelinked_function_fields)
+          || vlength(m[pmodule_body]) != prelinked_function_fields
+          || !vector?(m[pmodule_body][pfn_arg_typesets]))
         [
-          display(format("%s: object file has bad version%n", m[pmodule_name]));
+          dformat("%s: object file has bad version%n", m[pmodule_name]);
           exit<function> false;
         ];
 
+      set_this_filenames(m);
+
+      | mname |
       mname = m[pmodule_name];
       if (mname)
 	[
 	  // unload it
 	  if (module_seclevel(mname) > seclev)
 	    [
-	      display(format("cannot unload module %s (seclevel %s vs %s)%n",
-			     mname,
-			     module_seclevel(mname), seclev));
+	      dformat("cannot unload module %s (seclevel %s vs %s)%n",
+                      mname, module_seclevel(mname), seclev);
 	      exit<function> false;
 	    ];
 	  if (!module_unload(mname))
@@ -185,21 +205,22 @@ writes mc:this_module, mc:erred, mc:linkrun
 	   minfo = symbol_get(mod);
 	   erred = mc:erred;
 	   mstatus = module_require(iname);
-	   mc:this_module = m; // could be squashed by module_require
+	   mc:this_module = null; // could be set by module_require
+           set_this_filenames(m);
 	   mc:erred = erred;
 
 	   if (mstatus < module_loaded)
 	     [
 	       if (mstatus == module_loading)
-		 error("loop in requires of %s", iname)
+		 mc_error("loop in requires of %s", iname)
 	       else
-		 error("failed to load %s", iname);
+		 mc_error("failed to load %s", iname);
 	     ]
 	   else if (car(minfo) == module_loaded)
 	     check_presence(cdr(minfo), iname)
 	   else if (car(minfo) == module_protected)
 	     if (mstatus != module_protected)
-	       error("%s is not protected anymore", iname)
+	       mc_error("%s is not protected anymore", iname)
 	     else
 	       check_dependencies(cdr(minfo), iname);
 	 ],
@@ -215,9 +236,9 @@ writes mc:this_module, mc:erred, mc:linkrun
 	   vstatus = module_vstatus(n);
 
 	   if (!module_vset!(n, mname))
-	     error("cannot define %s: belongs to module %s", var, vstatus)
+	     mc_error("cannot define %s: %s", var, module_describe(vstatus))
 	   else if (vstatus == var_write)
-	     warning("%s was writable", var);
+	     mc_warning("%s was writable", var);
 	 ],
 	 m[pmodule_defines]);
 
@@ -229,8 +250,8 @@ writes mc:this_module, mc:erred, mc:linkrun
 	   n = global_lookup(var);
 
 	   if (!module_vset!(n, var_write))
-	     error("cannot write %s: belongs to module %s",
-		   var, module_vstatus(n));
+             mc_error("cannot write %s: %s", var,
+                      module_describe(module_vstatus(n)));
 	 ],
 	 m[pmodule_writes]);
 
@@ -255,7 +276,7 @@ writes mc:this_module, mc:erred, mc:linkrun
 	       if (check_present(v, n, mod)) check_dependency(d, n);
 	     ],
 	     deps);
-		   
+
   make_code = fn (prelinked_fn, seclev)
     [
       | csts |
@@ -279,7 +300,9 @@ writes mc:this_module, mc:erred, mc:linkrun
 	   prelinked_fn[pfn_rel_primitives],
            prelinked_fn[pfn_return_type],
            prelinked_fn[pfn_linenos],
-           prelinked_fn[pfn_arg_types])
+           prelinked_fn[pfn_arg_typesets],
+           prelinked_fn[pfn_flags],
+           prelinked_fn[pfn_nicename])
     ];
 
   // Prelinking
@@ -293,7 +316,7 @@ writes mc:this_module, mc:erred, mc:linkrun
     //   If protect is true, module is marked as "protected"
     // Returns: Prelinked module
     vector(mod[mc:m_class],
-	   protect and true,
+	   !!protect,
 	   mod[mc:m_name],
 	   dependencies(mod[mc:m_imports]),
 	   lmap(fn (v) v[mc:mv_name], mod[mc:m_defines]),
@@ -310,16 +333,16 @@ writes mc:this_module, mc:erred, mc:linkrun
       table_foreach
 	(fn (imp)
 	 [
-	   | minfo |
+	   | mstatus, syms |
 
-	   minfo = symbol_get(imp);
-	   if (car(minfo) == module_loaded)
+	   @[mstatus _ syms] = symbol_get(imp);
+	   if (mstatus == module_loaded)
 	     // weak dependencies: symbols must simply exist
 	     // simply keep list of symbol names
-	     set_cdr!(minfo, lmap(fn (v) v[mc:v_name], cdr(minfo)))
-	   else if (car(minfo) == module_protected)
+             symbol_set!(imp, mstatus . lmap(fn (v) v[mc:v_name], syms))
+	   else if (mstatus == module_protected)
 	     // strong dependencies: may depend on type, value, etc of symbol
-	     set_cdr!(minfo, lmap(fn (v) dependency(v), cdr(minfo)));
+             symbol_set!(imp, mstatus . lmap(fn (v) dependency(v), syms))
 	 ],
 	 imports);
 
@@ -330,22 +353,31 @@ writes mc:this_module, mc:erred, mc:linkrun
     // Types: top: assembled intermediate function
     // Returns: Prelinked form of function top
     [
-      | info, arg_types, list_to_string |
-      
-      list_to_string = fn (args)
-        smap!(fn (n) [ n = car(args); args = cdr(args); n ],
-              make_string(llength(args)));
-      
-      arg_types = if (top[mc:c_fvarargs]) null
-      else list_to_string(top[mc:c_fargtypes]);
+      | info, arg_typesets, arg_typesets_from_list, flags |
+
+      arg_typesets_from_list = fn (args)
+        [
+          | v |
+          v = make_vector(llength(args));
+          for (|i| i = 0; args != null; [ ++i; args = cdr(args) ])
+            v[i] = car(args);
+          check_immutable(protect(v))
+        ];
+
+      arg_typesets = if (top[mc:c_fvarargs]) null
+      else arg_typesets_from_list(top[mc:c_fargtypesets]);
 
       info = cdr(top[mc:c_fvalue]);
+
+      flags = clf_compiled;
+      if (top[mc:c_fnoescape])
+        flags |= clf_noescape;
 
       vector(car(top[mc:c_fvalue]),     // code as string
 	     top[mc:c_fhelp],           // help string
 	     if (top[mc:c_fvar]) top[mc:c_fvar][mc:v_name] else null,
                                         // variable function stored in
-	     top[mc:c_ffilename],
+	     top[mc:c_fnicename],
 	     top[mc:c_flineno],
 	     lmap(fn (foffset) prelink(car(foffset)) . cdr(foffset),
 		  info[mc:a_subfns]),   // sub-functions
@@ -355,9 +387,11 @@ writes mc:this_module, mc:erred, mc:linkrun
 	     info[mc:a_kglobals],       // globals (constant)
 	     info[mc:a_primitives],     // absolute primitives
 	     info[mc:a_rel_primitives], // relative primitives
-             top[mc:c_freturn_type],    // return type
+             top[mc:c_freturn_typeset], // return typeset
              info[mc:a_linenos],        // line numbers
-             arg_types)                 // argument types
+             arg_typesets,              // argument types
+             flags,                     // flags
+             top[mc:c_ffilename])
     ];
 
 
@@ -370,16 +404,15 @@ writes mc:this_module, mc:erred, mc:linkrun
   depend_none = 0;		// no checks
   depend_primitive = 2;		// primitive: type, args, flags, and signature
   depend_type = 4;		// type
-  depend_integer = 6;		// integer with given value
-  depend_closure = 8;		// closure with return value
-  // future dependencies:
-  depend_signature = 10;	// function with compatible signature
+  depend_value = 6;		// variable with given value compared using
+  				// equal?()
+  depend_closure = 8;		// closure with argument and return types
 
   dependency = fn (v)
     // Types: v: global constant variable
     // Returns: dependency information for constant global v
     [
-      | val, name, type |
+      | val, name, type, immutable_flag |
 
       // Currently, we extract the maximum possible dependencies.
       // However, the code generation could simply record in v what
@@ -389,18 +422,22 @@ writes mc:this_module, mc:erred, mc:linkrun
       val = global_value(v[mc:v_goffset]);
       type = typeof(val);
 
+      immutable_flag = if (immutable?(val)) depend_immutable else 0;
+
       if (type == type_primitive || type == type_varargs
           || type == type_secure)
 	vector(name, depend_primitive, type, primitive_nargs(val),
                primitive_flags(val), primitive_type(val))
       else if (type == type_closure)
-        vector(name, depend_closure, closure_return_type(val),
-               closure_arguments(val))
-      else if (type == type_integer)
-	vector(name, depend_integer, val)
+        vector(name,
+               depend_closure | immutable_flag,
+               closure_return_typeset(val),
+               closure_arguments(val),
+               closure_flags(val))
+      else if (type == type_integer || type == type_float)
+	vector(name, depend_value, val)
       else // type dependency
-	vector(name, depend_type | (if (immutable?(val)) depend_immutable else 0),
-	       type)
+	vector(name, depend_type | immutable_flag, type)
     ];
 
   check_dependency = fn (d, n)
@@ -408,49 +445,59 @@ writes mc:this_module, mc:erred, mc:linkrun
     // Effects: checks that dependency d is still valid
     //   giving appropriate error messages
     [
-      | name, val, dtype, myequal? |
+      | name, val, dtype, check_cargs |
 
-      myequal? = fn (a, b)
-        if (typeof(a) != typeof(b))
-          false
-        else if (pair?(a))
-          myequal?(car(a), car(b)) && myequal?(cdr(a), cdr(b))
-        else if (string?(a))
-          string_cmp(a, b) == 0
-        else
-          a == b;
+      // return true if 'dep' and 'current' closure arguments are
+      // compatible
+      check_cargs = fn ({null,vector} dep, {null,vector} current)
+        [
+          if (dep == null)
+            exit<function> current == null;
+          if (current == null)
+            exit<function> false;
+
+          | len |
+          len = vector_length(dep);
+          if (len != vector_length(current))
+            exit<function> false;
+          for (|i| i = 0; i < len; ++i)
+            if (~dep[i] & current[i])
+              exit<function> false;
+          true
+        ];
 
       name = d[0];
       val = global_value(n);
       dtype = d[1] & ~depend_immutable;
 
       if ((d[1] & depend_immutable) && !immutable?(val))
-	error("%s is not a constant anymore", name)
+	mc_error("%s is not immutable anymore", name)
       else if (dtype == depend_primitive)
 	[
 	  if (typeof(val) != d[2] ||
 	      primitive_nargs(val) != d[3] ||
 	      d[4] & ~primitive_flags(val) ||
-              !myequal?(d[5], primitive_type(val)))
-	    error("primitive %s has suffered an incompatible change", name);
+              !equal?(d[5], primitive_type(val)))
+	    mc_error("primitive %s has suffered an incompatible change", name);
 	]
       else if (dtype == depend_closure)
 	[
-	  if (vector_length(d) != 4 ||
+	  if (vector_length(d) != 5 ||
               !closure?(val) ||
-              (d[2] != stype_any && d[2] != closure_return_type(val)) ||
-              !myequal?(d[3], closure_arguments(val)))
-	    error("closure %s has suffered an incompatible change", name);
+              (~d[2] & closure_return_typeset(val)) ||
+              !check_cargs(d[3], closure_arguments(val)) ||
+              (d[4] & ~closure_flags(val)))
+	    mc_error("closure %s has suffered an incompatible change", name);
 	]
-      else if (dtype == depend_integer)
+      else if (dtype == depend_value)
 	[
-	  if (val != d[2])
-	    error("%s is not %s anymore", name, d[2]);
+	  if (!equal?(val, d[2]))
+	    mc_error("%s is not %w anymore", name, d[2]);
 	]
       else if (dtype == depend_type)
 	[
 	  if (typeof(val) != d[2])
-	    error("the type of %s has changed (was %s, now %s)",
+	    mc_error("the type of %s has changed (was %s, now %s)",
 		  name, type_names[d[2]], type_names[typeof(val)]);
 	];
       // add other dtypes here...
@@ -466,11 +513,11 @@ writes mc:this_module, mc:erred, mc:linkrun
       vstatus = module_vstatus(n);
       if (!string?(vstatus) || string_icmp(vstatus, mod) != 0)
 	[
-	  error("%s does not belong to %s anymore", v, mod);
+	  mc_error("%s does not belong to %s anymore", v, mod);
 	  false
 	]
       else
 	true
-    ];	
+    ];
 
 ];

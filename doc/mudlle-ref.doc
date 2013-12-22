@@ -39,7 +39,7 @@ but the following will cause a runtime error:
   modulo(3)	  // Bad number of arguments
 
 If the result type is omitted (eg as in 'newline: -> ') it means that
-the function returns an unspecified value (ie nothing useful). 
+the function returns an unspecified value (ie nothing useful).
 
 If the parameter list ends with '...' it means that the function
 accepts a variable number of parameters, as in
@@ -99,7 +99,7 @@ be any of the following:
   comments may also span multiple lines if delimited by /* and */. These
   comments nest (this is not the same as the C behaviour).
 
-- integers: integers range from -2^30 to 2^30 - 1 and are entered 
+- integers: integers range from -2^30 to 2^30 - 1 and are entered
   as usual in base 10.
 
   You can also get the ASCII code for a particular character with
@@ -133,7 +133,7 @@ keywords are surrounded by quotes (')):
 
 mudlle_file : simple | library | module ;
 
-simple : expression_list 
+simple : expression_list
 
 module : MODULE optional_symbol requires reads writes block optional_semi
 
@@ -197,7 +197,7 @@ variable_list1 : variable_list1 ',' variable  | variable
 
 indexed_ref : simple_expression '[' expression ']'
 
-op_expression : 
+op_expression :
   op_expression '.'  op_expression |
   op_expression '||' op_expression |
   op_expression OR   op_expression |
@@ -260,7 +260,7 @@ block :
 
 The op_expression above does not specify the associativity or priority
 of the operators. All operators except '.' associate to the left ('.'
-associates to the right). The priorities are as follows, from highest 
+associates to the right). The priorities are as follows, from highest
 to lowest:
 
   NOT, !, ~, (unary) -
@@ -300,12 +300,12 @@ The following types are defined in mudlle:
 
   Lists in mudlle follow the traditional Lisp representation based on
   the concept of 'pairs'. A pair is just what it's name implies: a pair
-  of values. 
+  of values.
 
   Lists are just a convention on the use of pairs: to pass a list to a
   function you pass it a pair. The first element of the pair is
   considered to be the first element of the list. The second element of
-  the pair is expected to be either: 
+  the pair is expected to be either:
 
   - null (the null value), which means that this is the end of the list.
 
@@ -386,7 +386,7 @@ constants:
   type_symbol, type_table, type_private, type_object, type_character, type_gone,
   type_outputport, type_mcode, type_null
 
-Most of these values should not be seen... (specifically: type_code, 
+Most of these values should not be seen... (specifically: type_code,
 type_variable, type_internal, type_outputport, type_mcode). type_closure,
 type_primitive, type_varargs and type_secure all count as functions.
 
@@ -564,7 +564,7 @@ the constant itself. For example:
 
 The value of a constant may not be modified, eg
 
-  a = "abcdef"; a[2] = ?z 
+  a = "abcdef"; a[2] = ?z
 
 produces a runtime error.
 
@@ -647,7 +647,7 @@ functions (see the function reference below) and is otherwise ignored.
 
 The parameters introduce formal names for the variables which will
 contain the function's arguments, for use within the 'expression'.
-These variables are created when the function is called and have 
+These variables are created when the function is called and have
 indefinite extent (they will continue existing as long as necessary).
 Their scope is the 'expression'.
 
@@ -668,7 +668,7 @@ following code is quite legal, though bad practice:
   fn (int i) [ a = i; i = "fun"; i + " no?" ]
 
 The none type matches no value, null only matches null, gone only
-"gone values" (see the MUME documentation) and any matches everything. 
+"gone values" (see the MUME documentation) and any matches everything.
 They are present for completeness.
 
 Some examples:
@@ -766,13 +766,13 @@ correctly:
 
   This should return a vector of n independent summing functions. Instead
   they all share a single sum variable. The following code does work:
-	
+
     make_functions = fn (n)
       [
 	| v, i |
 
 	v = make_vector(n);
-	for(0, n - 1, 
+	for(0, n - 1,
 	    fn (i)
 	      [
 	        | sum |
@@ -822,7 +822,7 @@ exit, i.e. you cannot do:
     <exit_f1> [
       | f2 |
 
-      f2 = fn () 
+      f2 = fn ()
         if (a) exit<exit_f1> false;
 
       ...;
@@ -1070,7 +1070,7 @@ apropos(string) to get help on all functions whose name
 contains 'string', for example
 
   apropos("sub")
-  RESULT: 
+  RESULT:
     substring
     Primitive: s1 n1 n2 -> s2. Extract substring of s starting at n1 of length n2.
     The first character is numbered 0
@@ -1263,7 +1263,7 @@ and others, may be used).
 display, write and examine display varying amounts of information on
 their parameter, display the least, examine the most.
 
-If a value is too complex to be printed (e.g. a circular list), 
+If a value is too complex to be printed (e.g. a circular list),
 write, display and examine will simply print '<complex>'. The same
 applies to format, except that it will return the string "<complex>".
 
@@ -1276,7 +1276,7 @@ manipulation functions.
   ref: x1 x2 -> x3. Generic interface to lookup operations,
   same as x1[x2]
 
-  set!: x1 x2 x3 -> . Generic interface to set operations, 
+  set!: x1 x2 x3 -> . Generic interface to set operations,
   same as x1[x2] = x3
 
   error: n -> . Causes error n", 1, (value errno)
@@ -1284,7 +1284,7 @@ manipulation functions.
   catch_error: fn b -> x. Executes fn() and returns its result. If an error
   occurs, returns the error number. If b is true, error messages are suppressed
 
-  handle_error: fn1 fn2 -> x. Executes fn1(). If an error occurs, calls 
+  handle_error: fn1 fn2 -> x. Executes fn1(). If an error occurs, calls
   fn2(errno). Returns result of fn1 or fn2
 
   readonly?: x -> b. Returns true if x is a read-only value (attempts to modify

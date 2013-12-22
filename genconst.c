@@ -1,8 +1,10 @@
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 
 #include "context.h"
 #include "error.h"
+#include "mvalues.h"
 
 #define PR(name, value) ((void)printf("#define %-24s %11zu\n", #name, (value)))
 
@@ -21,10 +23,10 @@ int main(int argc, char **argv)
   PR(object_info,          (offsetof(struct obj, size)
                             + sizeoffield(struct obj, size)));
   PR(object_flags,         offsetof(struct obj, flags));
-  
+
   PR(pair_size,            sizeof (struct list));
 
-  PR(mcode_seclevel,       offsetinobj(struct mcode, seclevel));
+  PR(mcode_seclevel,       offsetinobj(struct mcode, code.seclevel));
   PR(function_offset,      offsetinobj(struct mcode, mcode));
 
   PR(primitive_op,         offsetinobj(struct primitive, op));
@@ -40,12 +42,12 @@ int main(int argc, char **argv)
   PR(cc_frame_end_bp,      offsetof(struct ccontext, frame_end_bp));
   PR(cc_callee,            offsetof(struct ccontext, callee));
   PR(cc_caller,            offsetof(struct ccontext, caller));
-  PR(cc_retadr,            offsetof(struct ccontext, retadr));
   PR(cc_SIZE,              sizeof (struct ccontext));
 #endif
 
   PR(cs_next,              offsetof(struct call_stack, next));
   PR(cs_type,              offsetof(struct call_stack, type));
+  PR(cs_u,                 offsetof(struct call_stack, u));
 
 #  include "genconstdefs.h"
 

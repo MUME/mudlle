@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 1993-2006 David Gay and Gustav Hållberg
+ * Copyright (c) 1993-2012 David Gay and Gustav Hållberg
  * All rights reserved.
- * 
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose, without fee, and without written agreement is hereby granted,
  * provided that the above copyright notice and the following two paragraphs
  * appear in all copies of this software.
- * 
+ *
  * IN NO EVENT SHALL DAVID GAY OR GUSTAV HALLBERG BE LIABLE TO ANY PARTY FOR
  * DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
  * OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF DAVID GAY OR
  * GUSTAV HALLBERG HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * DAVID GAY AND GUSTAV HALLBERG SPECIFICALLY DISCLAIM ANY WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
  * FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN
@@ -25,80 +25,85 @@
 #include <string.h>
 #include <limits.h>
 
-#include "mvalues.h"
-#include "runtime.h"
-#include "mudlle-float.h"
+#include "../mvalues.h"
 
-#if defined(HAVE_LPKIT_LPKIT_H)
+#include "mudlle-float.h"
+#include "runtime.h"
+
+#if defined HAVE_LPKIT_LPKIT_H
 #  include <lpkit/lpkit.h>
-#elif defined(HAVE_LP_SOLVE_LPKIT_H)
+#elif defined HAVE_LP_SOLVE_LPKIT_H
 #  include <lp_solve/lpkit.h>
 #  undef FAILURE
-#elif defined(HAVE_LPSOLVE_LP_LIB_H)
+#elif defined HAVE_LPSOLVE_LP_LIB_H
 #  include <lpsolve/lp_lib.h>
 #  undef FAILURE
 #else
-#  warning lp-solve library (lpk) missing
 #endif
 
-#if defined(MUME)
-#include "strategy.h"
+#if MAJORVERSION == 5 && MINORVERSION == 5 && RELEASE == 0
+/* fix warning due to broken header file */
+INLINE MYBOOL is_bb_rule(lprec *lp, int bb_rule) UNUSED;
+INLINE MYBOOL is_bb_rule(lprec *lp, int bb_rule) { return 0; }
 #endif
 
-#if defined(sparc) && !defined(linux)
+
+#if defined sparc && !defined linux
 #include <ieeefp.h>
 
 static int isinf(double x)
 {
   int class = fpclass(x);
-
-  return class == FP_NINF ? -1 : class == FP_PINF ? 1 : 0;
+  return class == FP_NINF || class == FP_PINF;
 }
 #endif
 
-#define FUNFUNC(name)                                   \
-  TYPEDOP(f ## name, 0,                                 \
-          "`f1 -> `f2. Returns " #name "(`f1)", 1,      \
-	  (value f), OP_LEAF | OP_NOESCAPE, "[on].o")   \
-{                                                       \
-  return makefloat(name(floatval(f)));                  \
+#define FUNFUNC(name)                                           \
+TYPEDOP(f ## name, 0,                                           \
+        "`f1 -> `f2. Returns " #name "(`f1)", 1,                \
+        (value f), OP_LEAF | OP_NOESCAPE | OP_CONST, "D.d")     \
+{                                                               \
+  return makefloat(name(floatval(f)));                          \
 }
 
 #define FBINFUNC(name, fname)                                   \
-  TYPEDOP(f ## name, 0,                                         \
-          "`f1 `f2 -> `f3. Returns " #name "(`f1, `f2)", 2,     \
-	  (value f1, value f2), OP_LEAF | OP_NOESCAPE,          \
-          "[on][on].o")                                         \
+TYPEDOP(f ## name, 0,                                           \
+        "`f1 `f2 -> `f3. Returns " #name "(`f1, `f2)", 2,       \
+        (value f1, value f2),                                   \
+        OP_LEAF | OP_NOESCAPE | OP_CONST,                       \
+        "DD.d")                                                 \
 {                                                               \
   return makefloat(fname(floatval(f1), floatval(f2)));          \
-}
+}                                                               \
 
 #define FBINOP(name, op)                                \
-  TYPEDOP(f ## name, 0,                                 \
-          "`f1 `f2 -> `f3. Returns `f1 " #op " `f2", 2, \
-	  (value f1, value f2), OP_LEAF | OP_NOESCAPE,  \
-          "[on][on].o")                                 \
+TYPEDOP(f ## name, 0,                                   \
+        "`f1 `f2 -> `f3. Returns `f1 " #op " `f2", 2,   \
+        (value f1, value f2),                           \
+        OP_LEAF | OP_NOESCAPE | OP_CONST,               \
+        "DD.d")                                         \
 {                                                       \
   return makefloat(floatval(f1) op floatval(f2));       \
 }
 
 TYPEDOP(isfloatp, "float?", "`x -> `b. Returns TRUE if `x is a float",
         1, (value x),
-        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "x.n")
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, type_float));
 }
 
 TYPEDOP(isffinitep, "ffinite?",
-        "`f -> `b. Returns TRUE if `f is neither infinite or not-a-number",
-        1, (value x), OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "[on].n")
+        "`f -> `b. Returns TRUE if `f is neither infinite nor"
+	" Not a Number (NaN).",
+        1, (value x), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  return makebool(finite(floatval(x)));
+  return makebool(isfinite(floatval(x)));
 }
 
 TYPEDOP(isfnanp, "fnan?",
-        "`f -> `b. Returns TRUE if `f is not-a-number (NaN)", 1, (value x),
-        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "[on].n")
+        "`f -> `b. Returns TRUE if `f is Not a Number (NaN).", 1, (value x),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
   return makebool(isnan(floatval(x)));
 }
@@ -106,25 +111,28 @@ TYPEDOP(isfnanp, "fnan?",
 TYPEDOP(isfinfp, "finf?", "`f -> `n. Returns -1 if `f is negative infinity"
         " (-Inf) or 1 for positive infinity (Inf), or 0 otherwise",
         1, (value x),
-        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "[on].n")
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  return makeint(isinf(floatval(x)));
+  double d = floatval(x);
+  if (!isinf(d))
+    return makeint(0);
+  return makeint(signbit(d) ? -1 : 1);
 }
 
 TYPEDOP(fabs, 0, "`f1 -> `f2. Returns | `f1 |", 1,
-        (value f), OP_LEAF | OP_NOESCAPE, "[on].o")
+        (value f), OP_LEAF | OP_NOESCAPE, "D.d")
 {
   return makefloat(fabs(floatval(f)));
 }
 
 TYPEDOP(fneg, 0, "`f1 -> `f2. Returns -`f1", 1,
-        (value f), OP_LEAF | OP_NOESCAPE, "[on].o")
+        (value f), OP_LEAF | OP_NOESCAPE, "D.d")
 {
   return makefloat(-floatval(f));
 }
 
 TYPEDOP(frandom, 0, " -> `f. Returns a random value in [0, 1)", 0,
-        (void), OP_LEAF | OP_NOESCAPE, ".o")
+        (void), OP_LEAF | OP_NOESCAPE, ".d")
 {
 #ifdef WIN32
   return makefloat(rand() / (RAND_MAX + 1.0));
@@ -133,32 +141,34 @@ TYPEDOP(frandom, 0, " -> `f. Returns a random value in [0, 1)", 0,
 #endif
 }
 
-TYPEDOP(fsign, 0, "`f -> `n. Returns -1 for negative `f, 1 for positive,"
-        " 0 for `f == 0. Error for not-a-number (NaN)", 1,
-        (value f), OP_LEAF | OP_NOESCAPE, "[on].n")
+TYPEDOP(fsign, 0, "`f -> `n. Returns -1 for negative `f (including negative"
+        " zero), 1 for positive, 0 for `f == 0. Signals an error if `f is"
+        " Not a Number (NaN).",
+        1, (value f), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
   double d = floatval(f);
-  
+
   if (isnan(d))
     runtime_error(error_bad_value);
 
-  return makeint(d < 0 ? -1 : d > 0 ? 1 : 0);
+  return makeint(signbit(d) ? -1 : d > 0 ? 1 : 0);
 }
 
-TYPEDOP(ftoi, 0, "`f -> `n. Returns int(`f). Error if out of range",
-        1, (value f), 
-        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "[on].n")
+TYPEDOP(ftoi, 0, "`f -> `n. Returns int(`f). Signals an error if `f is out"
+        " of range or Not a Number (NaN).",
+        1, (value f),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
   double d = floatval(f);
 
-  if (d >= MAX_TAGGED_INT + 1 || d <= MIN_TAGGED_INT - 1)
+  if (isnan(d) || d >= MAX_TAGGED_INT + 1 || d <= MIN_TAGGED_INT - 1)
     runtime_error(error_bad_value);
 
   return makeint((long)d);
 }
 
 TYPEDOP(itof, 0, "`n -> `f. Returns the integer `n as a float", 1, (value n),
-        OP_LEAF | OP_NOESCAPE, "n.o")
+        OP_LEAF | OP_NOESCAPE, "n.d")
 {
   ISINT(n);
   return makefloat((double)intval(n));
@@ -167,10 +177,10 @@ TYPEDOP(itof, 0, "`n -> `f. Returns the integer `n as a float", 1, (value n),
 TYPEDOP(atof, 0, "`s -> `f. Converts string to float."
         " Returns `s if conversion failed",
         1, (struct string *s),
-        OP_LEAF | OP_NOESCAPE, "s.[os]")
+        OP_LEAF | OP_NOESCAPE, "s.[ds]")
 {
   double d;
-  
+
   TYPEIS(s, type_string);
   if (!mudlle_strtofloat(s->str, &d))
     return s;
@@ -178,69 +188,18 @@ TYPEDOP(atof, 0, "`s -> `f. Converts string to float."
     return makefloat(d);
 }
 
-TYPEDOP(ftoa, 0, "`f -> `s. Converts float to a 0f... string."
-        " See `format_float", 1, (value f),
-        OP_LEAF | OP_NOESCAPE, "[on].s")
-{
-  char buf[20];
-  union {
-    double d;
-    long   l[2];
-  } u;
-  
-  u.d = floatval(f);
-
-  snprintf(buf, sizeof buf, "0f%08lx%08lx", u.l[1], u.l[0]);
-  return alloc_string(buf);
-}
-
-TYPEDOP(format_float, 0,
-        "`f `s0 -> `s1. Format float `f using string `s0 (printf format"
-        " specifier eEgGf) into `s1",
-        2, (value f, struct string *s), OP_LEAF | OP_NOESCAPE,
-        "[on]s.s")
-{
-  double d = floatval(f);
-  char *sp, buf[128];
-  static const char flags[] = "#0- +";
-  static const char formats[] = "eEfgG";
-
-  TYPEIS(s, type_string);
-
-  sp = s->str;
-
-  if (*sp++ != '%') 
-    runtime_error(error_bad_value);
-
-  while(strchr(flags, *sp))
-    ++sp;
-
-  while(*sp >= '0' && *sp <= '9')
-    ++sp;
-  if (*sp == '.')
-    {
-      ++sp;
-      while(*sp >= '0' && *sp <= '9') ++sp;
-    }
-
-  if (!strchr(formats, *sp) || *(sp + 1)) 
-    runtime_error(error_bad_value);
-
-  snprintf(buf, sizeof buf, s->str, d);
-  return alloc_string(buf);
-}
-
 TYPEDOP(fpow, 0, "`f1 `f2 -> `f3. Returns `f1 raised to the power of `f2",
-        2, (value f1, value f2), OP_LEAF | OP_NOESCAPE, "[on][on].o")
+        2, (value f1, value f2), OP_LEAF | OP_NOESCAPE, "DD.d")
 {
   double d1 = floatval(f1), d2 = floatval(f2);
   return makefloat(pow(d1, d2));
 }
 
 TYPEDOP(fcmp, 0, "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
-        " 1 if `f1 > `f2",
-        2, (value f1, value f2), OP_LEAF | OP_NOESCAPE | OP_NOALLOC,
-        "[on][on].n")
+        " 1 if `f1 > `f2. Signals an error if either `f1 or `f2 is"
+        " Not a Number (NaN).",
+        2, (value f1, value f2), OP_LEAF | OP_NOALLOC | OP_NOESCAPE,
+        "DD.n")
 {
   double d1 = floatval(f1), d2 = floatval(f2);
 
@@ -252,29 +211,32 @@ TYPEDOP(fcmp, 0, "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
     return makeint(1);
 
   runtime_error(error_bad_value);
-
-  NOTREACHED;
 }
 
-VAROP(lp_solve, 0,
-      "`v1[f]:objective `v2[v[f]]:constraints [`n1:minmax `v3[f]:lower_bound"
-      " `v4[f]:upper_bound `v5[b]:integer?] -> `v[f]|`n. Maximize objective"
-      " function `v1, given constraints `v2 and optional lower-upper bounds"
-      " `v3 and `v4 (default between 0 and +INF). `v2 is a vector of"
-      " constraints, each constraint is expressed as [`weights `sign `rhs]"
-      " where `sign <, =, > 0 if constraint must be <, =, > `rhs."
-      " Nonzero elements of `v5 correspond to integer variables."
-      " If `n1 <= 0, minimize objective function instead of maximizing."
-      " The function returns the optimal vector or a numerical error code"
-      " (see `LP_* constants).",
-      OP_LEAF)
+static const typing lp_solve_tset = {
+  "vv.[vn]", "vvn.[vn]", "vvnv.[vn]", "vvnvv.[vn]", "vvnvvv.[vn]", NULL
+};
+FULLOP(lp_solve, 0,
+       "`v1[f]:objective `v2[v[f]]:constraints [`n1:minmax `v3[f]:lower_bound"
+       " `v4[f]:upper_bound `v5[b]:integer?] -> `v[f]|`n. Maximize objective"
+       " function `v1, given constraints `v2 and optional lower-upper bounds"
+       " `v3 and `v4 (default between 0 and +INF). `v2 is a vector of"
+       " constraints, each constraint is expressed as [`weights `sign `rhs]"
+       " where `sign <, =, > 0 if constraint must be <, =, > `rhs."
+       " Nonzero elements of `v5 correspond to integer variables."
+       " If `n1 <= 0, minimize objective function instead of maximizing."
+       " The function returns the optimal vector or a numerical error code"
+       " (see `LP_* constants).",
+       NVARARGS, (struct vector *args, ulong nargs), 0,
+       OP_LEAF | OP_NOESCAPE, lp_solve_tset, static)
 {
   int variables, constraints, i, j;
   struct vector *objective, *constr_matrix;
   struct vector *lower_bound, *upper_bound, *intvar;
   struct vector *c;
+#ifdef HAVE_LIB_LPK
   int min_max = 1;
-
+#endif
   const int MAX_VARIABLES = 100;
   const int MAX_CONSTRAINTS = 100;
 
@@ -282,7 +244,6 @@ VAROP(lp_solve, 0,
   lprec *lp;
   float f;
   int rc;
-  struct gcpro gcpro1;
   struct vector *r;
 #endif
 
@@ -306,7 +267,9 @@ VAROP(lp_solve, 0,
   if (nargs >= 3)
     {
       ISINT(args->data[2]);
+#ifdef HAVE_LIB_LPK
       min_max = intval(args->data[2]);
+#endif
     }
 
   if (nargs >= 4)
@@ -364,7 +327,7 @@ VAROP(lp_solve, 0,
 #ifdef HAVE_LIB_LPK
   /* Set up linear programming problem */
   lp = make_lp(constraints, variables);
-  
+
   /* Choose maximization or minimization */
   if (min_max > 0)
     set_maxim(lp);
@@ -444,6 +407,8 @@ FUNFUNC(acos)
 
 FUNFUNC(ceil)
 FUNFUNC(floor)
+FUNFUNC(round)
+FUNFUNC(trunc)
 
 FBINFUNC(atan2, atan2)
 FBINFUNC(hypot, hypot)
@@ -471,6 +436,8 @@ void float_init(void)
 
   DEFINE(fceil);
   DEFINE(ffloor);
+  DEFINE(ftrunc);
+  DEFINE(fround);
 
   DEFINE(fatan2);
   DEFINE(fhypot);
@@ -485,12 +452,10 @@ void float_init(void)
   DEFINE(fabs);
   DEFINE(fsign);
 
-  DEFINE(ftoa);
   DEFINE(ftoi);
   DEFINE(itof);
   DEFINE(fcmp);
   DEFINE(atof);
-  DEFINE(format_float);
 
   DEFINE(frandom);
 
@@ -512,10 +477,10 @@ void float_init(void)
   DEFCONST(M_LOG10E);
   DEFCONST(HUGE_VAL);
 
-  /* lp_solve return codes. 
+  /* lp_solve return codes.
    * Not all of these are currently in use, but let's reserve the names... */
 
-#if defined(HAVE_LPKIT_LPKIT_H) || defined(HAVE_LP_SOLVE_LPKIT_H)
+#if defined MILP_FAIL
   system_define("LP_OPTIMAL",       makeint(OPTIMAL));
   system_define("LP_MILP_FAIL",     makeint(MILP_FAIL));
   system_define("LP_INFEASIBLE",    makeint(INFEASIBLE));
@@ -525,7 +490,7 @@ void float_init(void)
   system_define("LP_FEAS_FOUND",    makeint(FEAS_FOUND));
   system_define("LP_NO_FEAS_FOUND", makeint(NO_FEAS_FOUND));
   system_define("LP_BREAK_BB",      makeint(BREAK_BB));
-#elif defined(HAVE_LPSOLVE_LP_LIB_H)
+#elif defined DEGENERATE
   system_define("LP_OPTIMAL",       makeint(OPTIMAL));
   system_define("LP_SUBOPTIMAL",    makeint(SUBOPTIMAL));
   system_define("LP_INFEASIBLE",    makeint(INFEASIBLE));
@@ -536,5 +501,7 @@ void float_init(void)
   system_define("LP_TIMEOUT",       makeint(TIMEOUT));
   system_define("LP_RUNNING",       makeint(RUNNING));
   system_define("LP_PRESOLVED",     makeint(PRESOLVED));
+#elif HAVE_LIB_LPK
+ #error Cannot tell which set of LP_xxx constants to use
 #endif
 }

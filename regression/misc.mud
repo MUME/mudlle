@@ -16,5 +16,3 @@ regresseval("minint1", "(fn (n) n == minint)(0)", 0);
 
 eval("[ | y | x = fn () y; y = 5 ]");
 regress("closurevars", x(), 5);
-
-
