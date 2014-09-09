@@ -23,11 +23,10 @@ library phase4 // Phase 4: code generation
 requires system, sequences, misc, graph, compiler, vars, ins3, mp,
   flow, phase3, optimise
 defines mc:phase4
-reads mc:verbose
+reads mc:verbose, mc:disassemble
 writes mc:lineno
 [
-  | clear_igraph, make_igraph, allocate_registers, live_copy_block,
-    live_copy, cgen_function, cgen_code |
+  | clear_igraph, make_igraph, allocate_registers, cgen_function, cgen_code |
 
 
   clear_igraph = fn (vars)
@@ -109,12 +108,15 @@ writes mc:lineno
 	      | ins, class |
 
 	      ins = il[mc:il_ins];
+              if (!mp:uses_scratch?(ins))
+                exit<function> null;
+
 	      class = ins[mc:i_class];
 
 	      if (class == mc:i_call
-                  || (class == mc:i_branch &&
-                      (ins[mc:i_bop] == mc:branch_equal
-                       || ins[mc:i_bop] == mc:branch_nequal)))
+                  || (class == mc:i_branch
+                      && (ins[mc:i_bop] == mc:branch_equal
+                          || ins[mc:i_bop] == mc:branch_nequal)))
 		[
 		  | survive_call |
 
@@ -147,8 +149,13 @@ writes mc:lineno
 		  // but is the simplest test
 
 		  // operations that imply allocation use scratch regs
-		  if (class == mc:i_closure ||
-		      class == mc:i_compute && ins[mc:i_aop] == mc:b_cons)
+		  if (class == mc:i_closure
+                      || (class == mc:i_compute
+                          && vfind?(ins[mc:i_aop],
+                                    sequence(mc:b_cons,
+                                             mc:b_pcons,
+                                             mc:b_vector,
+                                             mc:b_sequence))))
 		    survives = live_in
 		  else
 		    survives = bintersection(live_in, live_out);
@@ -451,16 +458,6 @@ writes mc:lineno
       ainfo
     ];
 
-  live_copy_block = fn (il, live_in, live_out, x)
-    [
-      il[mc:il_live_in] = live_in;
-      il[mc:il_live_out] = live_out;
-    ];
-
-  live_copy = fn (ifn)
-    graph_nodes_apply(fn (n) mc:rscan_live(live_copy_block, null, graph_node_get(n)),
-		      cdr(ifn[mc:c_fvalue]));
-
   cgen_function = fn (ifn)
     // Types: ifn: intermediate function with flow graph
     // Effects: Generates the actual machine code function for ifn, and stores
@@ -475,9 +472,6 @@ writes mc:lineno
 
       mc:recompute_vars(ifn, false);
       mc:flow_live(ifn);
-      // Copy liveness info to instructions
-      //live_copy(ifn);
-      // TBD: Replace other uses of rscan_live
 
       ainfo = allocate_registers(ifn);
       if (mc:verbose >= 3)
@@ -499,13 +493,16 @@ writes mc:lineno
 	  dformat("selected ainfo is %s\n", ainfo);
 	];
 
-      if (mc:verbose >= 4)
+      if (mc:verbose >= 4 || mc:disassemble)
 	[
 	  dformat("Code of function %s(%s)\n",
-			 ifn[mc:c_fnumber], mc:fname(ifn));
-	  mc:ins_list1(ifn[mc:c_fvalue]);
-	  newline();
-	];
+                  ifn[mc:c_fnumber], mc:fname(ifn));
+          if (mc:verbose >= 4)
+            [
+              mc:ins_list1(ifn[mc:c_fvalue]);
+              newline();
+            ]
+        ];
 
       code = mp:mgen_preamble(ifn, ainfo);
       dforeach(fn (il)

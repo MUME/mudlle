@@ -44,19 +44,20 @@ static void show_function(struct closure *c);
 
 #  define HELP_PREFIX ""
 
-TYPEDOP(help, HELP_PREFIX "help",
-        "`f -> . Prints help on function `f", 1, (value v),
-        OP_LEAF | OP_NOESCAPE, "x.")
+SECTOP(help, HELP_PREFIX "help",
+       "`f -> . Prints help on function `f", 1, (value v),
+       1,
+       OP_LEAF | OP_NOESCAPE, "x.")
 {
-  if (TYPE(v, type_primitive) || TYPE(v, type_varargs))
+  struct primitive *op = v; /* Only valid for type_{sec,prim,va} */
+  if (TYPE(v, type_secure)
+      || (TYPE(v, type_primitive) && op->op->flags & OP_FASTSEC))
     {
-      struct primitive *op = v;
-      pputs(op->op->help, mudout);
-    }
-  else if (TYPE(v, type_secure))
-    {
-      struct primitive *op = v;
       pprintf(mudout, "Secure %d: %s", op->op->seclevel, op->op->help);
+    }
+  else if (TYPE(v, type_primitive) || TYPE(v, type_varargs))
+    {
+      pputs(op->op->help, mudout);
     }
   else if (TYPE(v, type_closure)) show_function(v);
   else pprintf(mudout, "This variable isn't executable\n");
@@ -64,11 +65,12 @@ TYPEDOP(help, HELP_PREFIX "help",
   undefined();
 }
 
-TYPEDOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
-	1, (value v),
-	OP_LEAF | OP_NOESCAPE, "f.[su]")
+SECTOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
+       1, (value v),
+       1,
+       OP_LEAF | OP_NOESCAPE, "f.[su]")
 {
-  if (TYPE(v, type_primitive) || TYPE(v, type_varargs) || TYPE(v, type_secure))
+  if (is_any_primitive(v))
     {
       struct primitive *op = v;
 
@@ -88,15 +90,14 @@ TYPEDOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
         }
       return alloc_string(op->op->help);
     }
-  if (TYPE(v, type_closure))
-    {
-      struct closure *c = v;
-      return c->code->help;
-    }
-  runtime_error(error_bad_type);
+
+  TYPEIS(v, type_closure);
+  struct closure *c = v;
+  return c->code->help;
 }
 
-TYPEDOP(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
+TYPEDOP(defined_in, 0, "`f -> `v. Returns information on where `f (any"
+        " primitive, closure, code, or mcode) is defined as"
         " [`nicename, `lineno, `filename].",
         1, (value fn),
         OP_LEAF | OP_NOESCAPE, "[fo].v")
@@ -115,8 +116,7 @@ TYPEDOP(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
       filename = code->filename;
       lineno   = code->lineno;
     }
-  else if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
-	   TYPE(fn, type_secure))
+  else if (is_any_primitive(fn))
     {
       struct primitive *prim = fn;
       nicename = filename = alloc_string(prim->op->filename);
@@ -135,11 +135,11 @@ TYPEDOP(defined_in, 0, "`f -> `v. Returns information on where `f is defined"
   return v;
 }
 
-TYPEDOP(set_use_nicename, "set_use_nicename!",
-        "`b -> . Set whether to (only) use nicenames for call traces and"
-        " compiler messages. Cf. `use_nicename().",
-        1, (value enable),
-        OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "x.")
+UNSAFETOP(set_use_nicename, "set_use_nicename!",
+          "`b -> . Set whether to (only) use nicenames for call traces and"
+          " compiler messages. Cf. `use_nicename().",
+          1, (value enable),
+          OP_LEAF | OP_NOESCAPE | OP_NOALLOC, "x.")
 {
   use_nicename = istrue(enable);
   undefined();
@@ -153,11 +153,11 @@ TYPEDOP(use_nicename, 0, "-> `b. True if (only) nicenames will be used"
   return makebool(use_nicename);
 }
 
-UNSAFEOP(closure_variables, 0,
-	 "`f -> `v. Returns a vector of the closure variable values of"
-         " function `f",
-	 1, (struct closure *fn),
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(closure_variables, 0,
+          "`f -> `v. Returns a vector of the closure variable values of"
+          " function `f",
+          1, (struct closure *fn),
+          OP_LEAF | OP_NOESCAPE, "f.v")
 {
   ulong nbvar, i;
   struct vector *res;
@@ -187,25 +187,18 @@ TYPEDOP(function_seclevel, 0, "`f -> `n. Returns the security level of the"
         " function `f",
 	1, (value fn), OP_LEAF | OP_NOESCAPE, "f.n")
 {
-  if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs))
-    return makeint(0);
-
-  if (TYPE(fn, type_secure))
+  if (is_any_primitive(fn))
     return makeint(((struct primitive *)fn)->op->seclevel);
 
-  if (TYPE(fn, type_closure))
-    {
-      struct closure *c = fn;
-      return makeint(c->code->seclevel);
-    }
-
-  runtime_error(error_bad_type);
+  TYPEIS(fn, type_closure);
+  struct closure *c = fn;
+  return makeint(c->code->seclevel);
 }
 
-TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
-        " otherwise",
+TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f (any primitive,"
+        " closure, code, or mcode) if available; false otherwise.",
 	1, (value fn),
-	OP_LEAF | OP_NOESCAPE, "[fo].S")
+	OP_LEAF | OP_NOESCAPE, "[fo].[sz]")
 {
   struct string *name = NULL;
 
@@ -215,8 +208,7 @@ TYPEDOP(function_name, 0, "`f -> `s. Returns name of `f if available, false"
       goto got_name;
     }
 
-  if (TYPE(fn, type_primitive) || TYPE(fn, type_varargs) ||
-      TYPE(fn, type_secure))
+  if (is_any_primitive(fn))
     {
       struct primitive *op = fn;
       return alloc_string(op->op->name);
@@ -259,9 +251,7 @@ TYPEDOP(profile, 0, "`f -> `x. Returns profiling information for `f:"
       return alloc_list(makeint(c->call_count),
                         makeint(c->instruction_count));
     }
-  if (TYPE(fn, type_primitive)
-      || TYPE(fn, type_secure)
-      || TYPE(fn, type_varargs))
+  if (is_any_primitive(fn))
     return makeint(((struct primitive *)fn)->call_count);
   runtime_error(error_bad_type);
 }
@@ -287,11 +277,12 @@ static int instr(char *s1, char *in)
   return false;
 }
 
-TYPEDOP(apropos, HELP_PREFIX "apropos",
-        "`s -> . Finds all global variables whose name contains"
-        " the substring `s and prints them (with help)",
-        1, (struct string *s),
-        OP_LEAF | OP_NOESCAPE, "s.")
+SECTOP(apropos, HELP_PREFIX "apropos",
+       "`s -> . Finds all global variables whose name contains"
+       " the substring `s and prints them (with help)",
+       1, (struct string *s),
+       1,
+       OP_LEAF | OP_NOESCAPE, "s.")
 {
   TYPEIS(s, type_string);
 
@@ -310,9 +301,7 @@ TYPEDOP(apropos, HELP_PREFIX "apropos",
 	  GCPRO(gcpro3, v);
 	  output_value(mudout, prt_display, false, sym->name);
 	  pputs("\n  ", mudout);
-	  if (TYPE(v, type_primitive)
-              || TYPE(v, type_secure)
-              || TYPE(v, type_varargs))
+	  if (is_any_primitive(v))
 	    {
 	      struct primitive *op = v;
 
@@ -396,9 +385,11 @@ TYPEDOP(gcstats, 0, " -> `v. Returns GC statistics: vector(`minor_count,"
   return v;
 }
 
-OPERATION(reset_gcstats, "reset_gcstats!", " -> . Reset short GC statistics",
-          0, (void),
-	  OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+FULLOP(reset_gcstats, "reset_gcstats!", " -> . Reset short GC statistics",
+       0, (void),
+       1,
+
+       OP_LEAF | OP_NOALLOC | OP_NOESCAPE, NULL, static)
 {
   memset(gcstats.anb, 0, sizeof gcstats.anb);
   memset(gcstats.asizes, 0, sizeof gcstats.asizes);
@@ -456,15 +447,13 @@ TYPEDOP(gc_hash, 0,
 
 #endif
 
-UNSAFEOP(garbage_collect, 0, "`n -> . Does a forced garbage collection,"
-	 " asserting room for `n bytes of allocations before another"
-	 " garbage collection has to be done.",
-	 1, (value n),
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(garbage_collect, 0, "`n -> . Does a forced garbage collection,"
+          " asserting room for `n bytes of allocations before another"
+          " garbage collection has to be done.",
+          1, (value n),
+          OP_LEAF | OP_NOESCAPE, "n.")
 {
-  ISINT(n);
-
-  garbage_collect(intval(n));
+  garbage_collect(GETINT(n));
   undefined();
 }
 

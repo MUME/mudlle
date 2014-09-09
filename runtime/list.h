@@ -23,11 +23,17 @@
 #define RUNTIME_LIST_H
 
 #include "../types.h"
+#include "../utils.h"
 
 void list_init(void);
 
 struct list;
 value code_setcar(struct list *l, value x);
 value code_setcdr(struct list *l, value x);
+
+static inline struct list *mudlle_reverse_list(struct list *l)
+{
+  return reverse_list_internal(l, offsetof(struct list, cdr));
+}
 
 #endif /* RUNTIME_LIST_H */

@@ -59,6 +59,7 @@ context (in that case the current value is in global variable x).
 #include <setjmp.h>
 
 #include "types.h"
+#include "mvalues.h"
 
 
 enum call_trace_mode {
@@ -82,15 +83,31 @@ struct ccontext
 #ifdef i386
 struct ccontext {
   ulong *frame_start;
-  /* The last mudlle stack frame can be found between sp and bp.
-     If bp is 0, sp instead points to where the last mudlle frame bp
-     was pushed by call/push %ebp/mov %esp,%ebp. */
+  /* Use ccontext_frame() to extract the real sp/bp for this frame */
   ulong *frame_end_sp;
   ulong *frame_end_bp;
   /* Space to save callee and caller saved registers */
   value callee[2];
   value caller[2];
 };
+
+static inline void ccontext_frame(const struct ccontext *cc,
+                                  ulong **bpp, ulong **spp)
+{
+  ulong *sp = cc->frame_end_sp;
+  ulong *bp = cc->frame_end_bp;
+  if ((ulong)bp <= 1)
+    {
+      /* esp points to the stack position where the previous ebp
+         was pushed by the push %ebp/mov %esp,%ebp preamble */
+      ulong c_args = (ulong)bp + 2;
+      bp = (ulong *)*sp;
+      sp += c_args;
+    }
+  *bpp = bp;
+  *spp = sp;
+}
+
 #endif
 
 #ifdef sparc
@@ -104,7 +121,14 @@ struct ccontext {
 
 extern struct ccontext ccontext;
 
-extern uword internal_seclevel; /* Security level of the function */
+/* Security level of a calling function when directly calling a secure
+   or vararg. DEFAULT_SECLEVEL otherwise. */
+extern uword internal_seclevel;
+/* Lowest seclevel seen in current call chain. A mudlle int so it
+   cheaply can be pushed to the stack. */
+extern value maxseclevel;
+/* Set to true whenever a secure or vararg was the most recently
+   called primitive. */
 extern bool seclevel_valid;
 
 static inline uword get_seclevel(void)
@@ -117,6 +141,20 @@ static inline void set_seclevel(uword seclevel)
 {
   internal_seclevel = seclevel;
 }
+
+value seclevel_to_maxseclevel(int seclev);
+uword get_effective_seclevel(void);
+
+/* Does not require a valid seclevel (ie. to be called from a secure primitive)
+ * if seclev < LEGACY_SECLEVEL. Useful for OP_FASTSEC OPs. */
+static inline bool effective_seclevel_below(uword seclev)
+{
+  if (seclev >= LEGACY_SECLEVEL)
+    return get_effective_seclevel() < seclev;
+  else
+    return intval(maxseclevel) < seclev;
+}
+
 
 /* Used only by byte-coded functions and C primitives (not used for,
    nor updated by, compiled code) */
@@ -160,6 +198,26 @@ struct call_stack
 
 extern struct call_stack *call_stack;
 
+#ifdef USE_CCONTEXT
+
+static inline struct ccontext *next_ccontext(const struct ccontext *cc)
+{
+  /* See START_INVOKE: the first (invoke) stack frame contains ebx, esi, edi,
+     the non-union field of struct call_stack, parent ccontext, and then invoke
+     arguments. */
+  return (struct ccontext *)((char *)(cc->frame_start - 3)
+                             - offsetof(struct call_stack, u)
+                             - sizeof *cc);
+}
+
+/* The invoke arguments are below here. */
+static inline ulong *ccontext_argsend(const struct ccontext *cc)
+{
+  return (ulong *)next_ccontext(cc);
+}
+
+#endif  /* USE_CCONTEXT */
+
 /* Catch context */
 /* ------------- */
 
@@ -179,6 +237,7 @@ struct catch_context
   int old_stack_depth;
   struct gcpro *old_gcpro;
   uword old_seclevel;
+  value old_maxseclevel;
 #ifdef AMIGA
   struct vector *old_activation_stack;
   int old_registers_valid;
@@ -219,12 +278,14 @@ struct session_context
   struct oport *_mudout, *_muderr;
   muser_t _muduser;
   uword old_minlevel;
+  uword old_maxseclevel;
   ulong old_xcount;
   ulong call_count;
   ulong recursion_count;
 #ifdef i386
   ulong old_stack_limit;
 #endif
+  struct gcpro *old_gcpro;
 };
 
 extern struct session_context *session_context;
@@ -243,6 +304,8 @@ extern ulong hard_mudlle_stack_limit, mudlle_stack_limit;
 
 struct session_info {
   uword minlevel;
+  /* See session_context.seclevel */
+  uword maxseclevel;
   muser_t muser;
   struct oport *mout, *merr;
 };
@@ -251,6 +314,8 @@ extern const struct session_info cold_session;
 
 void session_start(struct session_context *newp,
                    const struct session_info *info);
+void cold_session_start(struct session_context *context,
+                        uword seclevel);
 void session_end(void);
 
 void unlimited_execution(void);

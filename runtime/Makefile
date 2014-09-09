@@ -22,9 +22,9 @@
 # disable built-in rules
 .SUFFIXES:
 
-OBJS=  basic.o arith.o bool.o symbol.o runtime.o io.o string.o	 \
-       list.o vector.o support.o bitset.o debug.o files.o float.o \
-       bigint.o pattern.o mudllecst.o xml.o
+OBJS:=arith.o basic.o bigint.o bitset.o bool.o debug.o files.o	\
+        io.o list.o mudlle-float.o mudllecst.o pattern.o		\
+        runtime.o string.o support.o symbol.o vector.o xml.o
 
 $(OBJS): CFLAGS+=$(PRIMITIVE_CFLAGS)
 
@@ -33,7 +33,7 @@ SRC = $(OBJS:%.o=%.c)
 CSTFILES = files.h io.h ../error.h ../module.h ../types.h
 
 ifneq ($(USE_XML),)
-CPPFLAGS += -I/usr/include/libxml2
+CPPFLAGS += -isystem /usr/include/libxml2
 CSTFILES += xml.h
 endif
 

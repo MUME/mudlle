@@ -25,6 +25,7 @@ int main(int argc, char **argv)
   PR(object_flags,         offsetof(struct obj, flags));
 
   PR(pair_size,            sizeof (struct list));
+  PR(variable_size,        sizeof (struct variable));
 
   PR(mcode_seclevel,       offsetinobj(struct mcode, code.seclevel));
   PR(function_offset,      offsetinobj(struct mcode, mcode));

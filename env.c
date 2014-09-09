@@ -28,6 +28,7 @@ struct locals_list
   struct locals_list *next;
   uword index;
   vlist locals;
+  bool statics;
 };
 
 struct env_stack
@@ -55,13 +56,14 @@ static varlist new_varlist(block_t heap, variable_class vclass,
 }
 
 static struct locals_list *new_locals_list(block_t heap, vlist vars, uword idx,
-					   struct locals_list *next)
+					   struct locals_list *next, bool statics)
 {
   struct locals_list *newp = allocate(heap, sizeof *newp);
 
   newp->next = next;
   newp->index = idx;
   newp->locals = vars;
+  newp->statics = statics;
 
   return newp;
 }
@@ -91,8 +93,8 @@ void env_push(vlist locals, fncode fn)
     .size     = nlocals,
     .max_size = nlocals,
     .locals   = (locals
-                 ? new_locals_list(fnmemory(fn), locals, 0, NULL)
-                 : NULL),
+                 ? new_locals_list(fnmemory(fn), locals, 0, NULL, false)
+                 : NULL)
   };
   if (env_stack) env_stack->prev = newp;
   env_stack = newp;
@@ -108,11 +110,12 @@ varlist env_pop(uword *nb_locals)
   return closure;
 }
 
-void env_block_push(vlist locals)
+void env_block_push(vlist locals, bool statics)
 {
   /* Add locals */
   env_stack->locals = new_locals_list(fnmemory(env_stack->fn), locals,
-				      env_stack->size, env_stack->locals);
+				      env_stack->size, env_stack->locals,
+                                      statics);
 
   /* Update size info, clears vars if necessary */
   uword nsize = env_stack->size + vlist_length(locals);
@@ -189,8 +192,10 @@ static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
 }
 
 variable_class env_lookup(const char *name, ulong *offset,
-			  bool do_read, bool do_write)
+			  bool do_read, bool do_write,
+                          bool *is_static)
 {
+  *is_static = false;
   if (strncasecmp(name, GLOBAL_ENV_PREFIX, strlen(GLOBAL_ENV_PREFIX)) == 0)
     name += strlen(GLOBAL_ENV_PREFIX);
   else
@@ -209,6 +214,7 @@ variable_class env_lookup(const char *name, ulong *offset,
                     vars->was_read = true;
                   if (do_write)
                     vars->was_written = true;
+                  *is_static = scope->statics;
                   return env_close(env, pos, offset);
                 }
           }

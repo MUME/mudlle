@@ -26,7 +26,7 @@ requires system, sequences, dlist, misc, graph,
 defines mc:phase3, mc:myself
 
 reads mc:verbose, mc:infer_types
-writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
+writes mc:lineno, mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 
 // VARIABLE CLASSES: Some notes on their effects on optimisation
 //   A function f uses:
@@ -170,7 +170,7 @@ writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
 	[
 	  | locals |
 
-	  mc:flow_ambiguous(ifn, mc:closure_read | mc:closure_write);
+	  mc:flow_ambiguous(ifn, mc:f_ambiguous_rw);
 	  locals = ifn[mc:c_flocals]; // candidates
 	  // all locals assigned in closures must be indirect
 	  /*lforeach(fn (v) v[mc:v_indirect] = true, locals);
@@ -212,7 +212,7 @@ writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
 			    indirect = local[mc:v_indirect] = true
 			],
 			null, graph_node_get(n), mc:new_varset(ifn),
-			mc:closure_read | mc:closure_write),
+                        mc:f_ambiguous_rw),
 		 cdr(ifn[mc:c_fvalue]));
 	    ];
 
@@ -256,9 +256,11 @@ writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
 		// Special case: replacing 'x := <indirect var>'
 		if (class == mc:i_compute && ins[mc:i_aop] == mc:b_assign)
 		  // replaced by x := <indirect var>[0]
-		  il[mc:il_ins] = ins = vector(class = mc:i_memory,
-					       mc:memory_read,
-					       car(args), 0, dvar)
+                  [
+                    il[mc:il_ins] = ins = mc:make_memory_ins(
+                      mc:memory_read, car(args), 0, dvar);
+                    class = ins[mc:i_class]
+                  ]
 		else
 		  [
 		    | new, replist, label |
@@ -309,9 +311,8 @@ writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
 
 		      // replaced by <indirect var>[0] := x
 		      x = car(ins[mc:i_aargs]);
-		      il[mc:il_ins] = vector(mc:i_memory,
-					     mc:memory_write,
-					     dvar, 0, x);
+		      il[mc:il_ins] = mc:make_memory_ins(
+                        mc:memory_write, dvar, 0, x);
 		    ]
 		  else
 		    [
@@ -397,12 +398,13 @@ writes mc:lineno, tnargs, tncstargs, tnpartial, tnfull
 	[
 	  display("Inferring types\n");
 	];
-      tnargs = tncstargs = tnpartial = tnfull = 0;
+      mc:tnargs = mc:tncstargs = mc:tnpartial = mc:tnfull = 0;
       lforeach(mc:infer_types, fns);
       if (mc:verbose >= 3)
 	[
 	  display("Complete type inference results:\n");
-	  dformat("%s args, of which %s constant, %s fully inferred, %s partially.\n", tnargs, tncstargs, tnfull, tnpartial);
+	  dformat("%s args, of which %s constant, %s fully inferred, %s partially.\n",
+                  mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial);
 	];
 
       if (mc:verbose >= 2)

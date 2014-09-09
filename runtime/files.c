@@ -244,7 +244,7 @@ static value build_file_stat(struct stat *sb)
 UNSAFETOP(file_stat, 0, "`s -> `v. Returns status of file `s, or false for"
           " failure. See the `FS_xxx constants and `file_lstat().",
           1, (struct string *fname),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vn]")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
 {
   struct stat sb;
 
@@ -310,7 +310,7 @@ UNSAFETOP(file_lstat, 0,
           " Returns FALSE for failure. See the `FS_xxx constants and"
           " `file_stat()",
           1, (struct string *fname),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vn]")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
 {
   struct stat sb;
 
@@ -350,7 +350,7 @@ UNSAFETOP(file_utime, 0,
 UNSAFETOP(readlink, 0,
           "`s1 -> `s2. Returns the contents of symlink `s, or FALSE "
           "for failure", 1, (struct string *lname),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.S")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
 {
   struct stat sb;
   TYPEIS(lname, type_string);
@@ -423,7 +423,7 @@ UNSAFETOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
 
 TYPEDOP(strerror, 0, "`n -> `s. Returns an error string corresponding to"
         " errno `n, or `false if there is no such errno.",
-        1, (value merrno), OP_LEAF | OP_NOESCAPE, "n.S")
+        1, (value merrno), OP_LEAF | OP_NOESCAPE, "n.[sz]")
 {
   const char *s = strerror(GETINT(merrno));
   return s ? alloc_string(s) : makebool(false);
@@ -431,7 +431,7 @@ TYPEDOP(strerror, 0, "`n -> `s. Returns an error string corresponding to"
 
 TYPEDOP(getenv, 0, "`s0 -> `s1|false. Return the value of the environment"
         " variable `s0, or false if no match.",
-        1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.S")
+        1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
 {
   TYPEIS(s, type_string);
   char *r = getenv(s->str);
@@ -642,11 +642,13 @@ UNSAFETOP(file_append, 0,
 }
 
 #ifndef WIN32
-TYPEDOP(passwd_file_entries, 0,
-        " -> `l. Returns a list of [ `pw_name `pw_uid "
-        "`pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of "
-        "/etc/passwd. Cf. `getpwent(3)",
-        0, (void), OP_LEAF | OP_NOESCAPE, ".l")
+SECTOP(passwd_file_entries, 0,
+       " -> `l. Returns a list of [ `pw_name `pw_uid "
+       "`pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of "
+       "/etc/passwd. Cf. `getpwent(3)",
+       0, (void),
+       1,
+       OP_LEAF | OP_NOESCAPE, ".l")
 {
   struct list *res = NULL;
   struct passwd *pw;
@@ -689,11 +691,13 @@ TYPEDOP(passwd_file_entries, 0,
   return res;
 }
 
-TYPEDOP(group_file_entries, 0,
-        " -> `l. Returns a list of [ `gr_name `gr_gid "
-        "( `gr_mem ... ) ] from the contents of /etc/group."
-        " Cf. `getgrent(3)",
-        0, (void), OP_LEAF | OP_NOESCAPE, ".l")
+SECTOP(group_file_entries, 0,
+       " -> `l. Returns a list of [ `gr_name `gr_gid "
+       "( `gr_mem ... ) ] from the contents of /etc/group."
+       " Cf. `getgrent(3)",
+       0, (void),
+       1,
+       OP_LEAF | OP_NOESCAPE, ".l")
 {
   struct list *res = NULL, *l = NULL;
   struct group *grp;

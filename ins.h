@@ -28,7 +28,7 @@ typedef struct _fncode *fncode;
 #include "calloc.h"
 #include "code.h"
 
-fncode new_fncode(int toplevel);
+fncode new_fncode(bool toplevel);
 /* Returns: A new function code structure (in which code for functions
      may be generated and in which constants may be stored).
    Warning: calls to new_fncode/delete_fncode must be matched in a stack-like
@@ -43,7 +43,7 @@ block_t fnmemory(fncode fn);
 /* Returns: memory block for fn
  */
 
-int fntoplevel(fncode fn);
+bool fntoplevel(fncode fn);
 /* Returns: true if 'fn' is the toplevel function
  */
 

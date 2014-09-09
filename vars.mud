@@ -30,10 +30,14 @@ defines
   mc:v_lclosure_uses, mc:closure_read, mc:closure_write, mc:local_write_once,
   mc:local_write_many, mc:local_write_many_nonnull, mc:vref_indirect,
   mc:v_closure, mc:v_cparent, mc:v_constant, mc:v_kvalue, mc:v_global_constant,
-  mc:var_make_local, mc:var_make_dglobal, mc:var_make_global,
-  mc:var_make_constant, mc:var_base, mc:var_value, mc:alias_base, mc:alias,
-  mc:var_make_closure, mc:var_make_kglobal, mc:v_global_define, mc:in_reg,
-  mc:get_reg
+  mc:make_kglobal, mc:var_make_local, mc:var_make_dglobal, mc:var_make_global,
+  mc:var_make_constant, mc:var_base, mc:var_value, mc:var_const_value,
+  mc:alias_base, mc:alias,
+  mc:var_make_static, mc:var_make_function,
+  mc:var_make_closure, mc:var_make_kglobal, mc:v_global_define, mc:v_function,
+  mc:v_fvalue, mc:v_static, mc:v_sparent,
+  mc:in_reg, mc:get_reg
+reads mc:fname
 
 [
 // Variable handling.
@@ -41,7 +45,7 @@ defines
 // Variables are represented by a vector, as follows:
 // Variable structure:
 //   [0] : class (mc:v_global, mc:v_local, mc:v_closure, mc:v_constant,
-//                mc:v_global_constant, mc:v_global_define)
+//                mc:v_global_constant, mc:v_global_define, mc:v_static)
 //   [1] : name (string)
 //   [2] : class dependent data
 //   [3..n] : other data
@@ -99,6 +103,12 @@ mc:v_global_constant = 4; // from protected module
 mc:v_global_define = 5; // from own or loaded module
  // uses mc:v_goffset
 
+mc:v_function = 6;              // local function
+ mc:v_fvalue = 2;               // fvalue
+
+// these are always resolved by phase1
+mc:v_static = 7;
+ mc:v_sparent = 2;               // corresponding local/closure
 [
   | globals, kglobals, dglobals, vindex, make_global |
 
@@ -123,8 +133,7 @@ mc:v_global_define = 5; // from own or loaded module
 	    [
 	      | gvar |
 
-	      gvar = vector(type, name, n,
-			    vindex = vindex + 1, false, null, false);
+	      gvar = vector(type, name, n, ++vindex, false, null, false);
 	      globals[name] = gvar
 	    ]
 	];
@@ -135,14 +144,22 @@ mc:v_global_define = 5; // from own or loaded module
 
   mc:var_make_dglobal = make_global(dglobals, mc:v_global_define);
 
+  mc:make_kglobal = fn (name) mc:var_make_kglobal(name, global_lookup(name));
+
   mc:var_make_constant = fn "x -> var. Returns a new constant variable with value x" (x)
-    vector(mc:v_constant, "", x, vindex = vindex + 1, false, null, false);
+    vector(mc:v_constant, "", x, ++vindex, false, null, false);
 
   mc:var_make_local = fn "s -> var. Returns a new local variable (name s)" (name)
-    vector(mc:v_local, name, 0, vindex = vindex + 1, false, null, false);
+    vector(mc:v_local, name, 0, ++vindex, false, null, false);
+
+  mc:var_make_static = fn "v -> var. Returns a new static with parent v" (vector v)
+    vector(mc:v_static, v[mc:v_name], v, ++vindex, false, null, false);
+
+  mc:var_make_function = fn "v -> var. Returns a new local for function v" (vector v)
+    vector(mc:v_function, false, v, ++vindex, false, null, false);
 
   mc:var_make_closure = fn "s var1 -> var2. Returns a new closure variable (name s) with parent var1" (name, parent)
-    vector(mc:v_closure, name, parent, vindex = vindex + 1, false, null, false);
+    vector(mc:v_closure, name, parent, ++vindex, false, null, false);
 
   mc:var_base = fn "var1 -> var2. Returns the real local variable of closure var var1" (v)
     [
@@ -151,7 +168,13 @@ mc:v_global_define = 5; // from own or loaded module
       v
     ];
 
-  mc:var_value = fn "var -> x. Returns value of constant variable var" (v)
+  mc:var_value = fn "var -> x. Returns value of constant variable var, or null for non-consts." (v)
+    if (v[mc:v_class] == mc:v_constant)
+      v[mc:v_kvalue]
+    else
+      null;
+
+  mc:var_const_value = fn "var -> x. Returns value of constant variable var" (v)
     v[mc:v_kvalue];
 
   mc:alias_base = fn "var1 -> var2. Returns the variable var1 is aliased to" (v)
@@ -173,7 +196,7 @@ mc:v_global_define = 5; // from own or loaded module
       base =
 	[
 	  class = var[mc:v_class];
-	  if (class == mc:v_global) format("global %s(%s)", var[mc:v_name], var[mc:v_number])
+	  if (class == mc:v_global) format("global %s(%d)", var[mc:v_name], var[mc:v_number])
 	  else if (class == mc:v_global_constant) format("kglobal %s", var[mc:v_name])
 	  else if (class == mc:v_global_define) format("dglobal %s", var[mc:v_name])
 	  else if (class == mc:v_constant) format("%w", var[mc:v_kvalue])
@@ -183,13 +206,15 @@ mc:v_global_define = 5; // from own or loaded module
 	      type = if (var[mc:v_indirect]) "indirect" else "local";
 
 	      if (string_length(var[mc:v_name]) > 0)
-		format("%s %s(%s)", type, var[mc:v_number], var[mc:v_name])
+		format("%s %d(%s)", type, var[mc:v_number], var[mc:v_name])
 	      else
-		format("%s %s", type, var[mc:v_number])
+		format("%s %d", type, var[mc:v_number])
 	    ]
 	  else if (class == mc:v_closure)
-	    format("%s %s(%s)", if (var[mc:v_indirect]) "indclosure" else "closure",
+	    format("%s %d(%s)", if (var[mc:v_indirect]) "indclosure" else "closure",
 		   var[mc:v_number], mc:svar(var[mc:v_cparent]))
+          else if (class == mc:v_function)
+            format("fn %s", mc:fname(var[mc:v_fvalue]))
 	  else fail();
 	];
 

@@ -30,7 +30,8 @@ defines mc:c_class, mc:c_lineno,
 
   mc:c_cvalue,
 
-  mc:c_freturn_typeset, mc:c_fhelp, mc:c_fargs, mc:c_fvarargs, mc:c_fvalue,
+  mc:c_freturn_typeset, mc:c_freturn_itype, mc:c_fhelp, mc:c_fargs,
+  mc:c_fvarargs, mc:c_fvalue,
   mc:c_flineno, mc:c_ffilename, mc:c_fnicename, mc:c_fargtypesets, mc:c_fvar,
   mc:c_flocals, mc:c_flocals_write, mc:c_fclosure, mc:c_fclosure_write,
   mc:c_fglobals, mc:c_fglobals_write, mc:c_fnoescape, mc:c_fnumber, mc:c_fmisc,
@@ -57,22 +58,22 @@ defines mc:c_class, mc:c_lineno,
   mc:b_cdr, mc:parser_builtins,
 
   mc:b_slength, mc:b_vlength, mc:b_iadd, mc:b_typeof, mc:b_loop_count,
-  mc:b_max_loop_count, mc:b_symbol_name, mc:b_symbol_get, mc:builtins,
-  mc:builtin_names,
-
-  mc:m_class, mc:m_plain, mc:m_module, mc:m_library, mc:m_name, mc:m_imports,
-  mc:m_defines, mc:m_reads, mc:m_writes, mc:m_body, mc:m_filename,
-  mc:m_nicename,
+  mc:b_max_loop_count, mc:b_symbol_name, mc:b_symbol_get, mc:b_vector,
+  mc:b_sequence, mc:b_pcons,
+  mc:builtins, mc:builtin_names,
 
   mc:a_builtins, mc:a_constants, mc:a_subfns, mc:a_globals, mc:a_kglobals,
-  mc:a_primitives, mc:a_linenos, mc:a_rel_primitives,
+  mc:a_primitives, mc:a_linenos, mc:a_rel_primitives, mc:a_seclevs,
+  mc:a_info_fields,
 
   mc:fname, mc:error, mc:warning, mc:sort_messages,
 
   mc:mv_gidx, mc:mv_name, mc:mv_used, mc:mv_lineno,
   mc:muse_read, mc:muse_write,
 
-  mc:register_call_check, mc:lookup_call_check
+  mc:register_call_check, mc:lookup_call_check,
+
+  mc:apply_functions
 
 reads mc:this_filenames, mc:this_module, mc:this_function, mc:lineno
 writes mc:erred
@@ -84,22 +85,6 @@ writes mc:erred
 
   sort_messages? = false;
   message_count = 0;
-
-  // Structure of parse tree returned by mudlle_parse:
-  mc:m_class = 0;		// module class
-   mc:m_plain = 0;		// old-style, no defines, requires, etc
-   mc:m_module = 1;		// a library w/o any defines (name optional)
-   mc:m_library = 2;		// a full library
-
-  mc:m_name = 1;		// module name (string or false)
-  mc:m_imports = 2;		// imported modules
-                                //   vector(module_status, lineno, syms)
-  mc:m_defines = 3;		// defined variables
-  mc:m_reads = 4;		// read variables
-  mc:m_writes = 5;		// written variables
-  mc:m_body = 6;		// module body (component)
-  mc:m_filename = 7;            // module file name
-  mc:m_nicename = 8;            // module pretty-printed file name
 
   // the variable lists above are lists of (name . type) from mudlle_parse,
   // and vector(gidx, name, used) after mstart()
@@ -131,7 +116,7 @@ writes mc:erred
    mc:c_cvalue = 2;		// value of constant (any type)
 
   // mc:c_closure - a function
-   mc:c_freturn_typeset = 2;	// return typeset
+   mc:c_freturn_typeset = 2;	// return value typeset
    mc:c_fhelp = 3;		// help string (string or null)
    mc:c_fargs = 4;		// argument names (list of (string . type),
                                 //     after phase1: list of var)
@@ -143,6 +128,7 @@ writes mc:erred
 
    // Added by phase1
    mc:c_fargtypesets = 10;	// argument typesets (list of typeset)
+   mc:c_freturn_itype = 22;	// return value itypes
    mc:c_fvar = 11;		// variable in which function is stored
    mc:c_flocals = 12;		// local variables (list of var)
    mc:c_flocals_write = 13;	// local variables (list of var) (those
@@ -234,7 +220,10 @@ writes mc:erred
   mc:b_max_loop_count = 36;
   mc:b_symbol_name = 37;
   mc:b_symbol_get = 38;
-  mc:builtins = 39;
+  mc:b_vector = 39;
+  mc:b_sequence = 40;
+  mc:b_pcons = 41;
+  mc:builtins = 42;
 
   mc:builtin_names =
     '[ 0 0 "==" "!=" "<" "<=" ">" ">="
@@ -242,7 +231,7 @@ writes mc:erred
        "-" "!" "~" 0 0 0 0 "ref" "set" "." ""
        "car" "cdr" "slength" "vlength" "i+"
        "typeof" "loop_count" "max_loop_count"
-       "symbol_name" "symbol_get" ];
+       "symbol_name" "symbol_get" "vector" "sequence" "pcons" ];
   assert(vlength(mc:builtin_names) == mc:builtins);
 
   // Format of information returned with assembled code
@@ -254,6 +243,8 @@ writes mc:erred
   mc:a_primitives = 5;
   mc:a_linenos = 6;
   mc:a_rel_primitives = 7;
+  mc:a_seclevs = 8;
+  mc:a_info_fields = 9;
 
  // strange unload effects (see comment before linkun in link.mud)
   m_filename = mc:m_filename;
@@ -263,6 +254,20 @@ writes mc:erred
   c_fnicename = mc:c_fnicename;
   c_fvar = mc:c_fvar;
   v_name = mc:v_name;
+
+  // [ function f-index argv-index ] where argv-index null means no arguments
+  mc:apply_functions = '[
+    [,apply 0 1]
+    [,session 0 ()]
+    [,with_minlevel 1 ()]
+    [,with_output 1 ()]
+  ];
+  vforeach(fn (v) [
+    | p |
+    p = v[0];
+    assert(primitive_flags(p) & OP_APPLY);
+    lforeach(fn (sig) assert(sig[-1] == ?x), primitive_type(p))
+  ], mc:apply_functions);
 
   simple_fname = fn (ifn)
     if (c_fvar < vector_length(ifn) && ifn[c_fvar])

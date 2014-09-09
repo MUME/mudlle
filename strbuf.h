@@ -102,7 +102,9 @@ static inline void sb_addnc(strbuf_t *sb, int c, size_t n)
 /* add character */
 static inline void sb_addc(strbuf_t *sb, int c)
 {
-  sb_addnc(sb, c, 1);
+  sb_makeroom(sb, 1);
+  sb->buf[sb->used++] = c;
+  sb->buf[sb->used] = 0;
 }
 
 /* initialize strbuf */

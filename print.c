@@ -26,8 +26,6 @@
 #include <stdlib.h>
 
 #include "alloc.h"
-#include "call.h"
-#include "context.h"
 #include "global.h"
 #include "ins.h"
 #include "print.h"
@@ -45,7 +43,7 @@
 static jmp_buf print_complex;
 
 struct print_config {
-  prt_level level;
+  enum prt_level level;
   size_t    maxlen;             /* not (size_t)-1 implies string oport */
   size_t    count;
 };
@@ -79,7 +77,7 @@ static void write_string(struct oport *p, struct print_config *config,
   ulong l = string_len(print);
 
   if (config->level == prt_display)
-    pswrite(p, print, 0, l);
+    pswrite_substring(p, print, 0, l);
   else
     {
       long idx = 0;
@@ -394,7 +392,7 @@ static void write_table(struct oport *f, struct print_config *config,
       switch (config->level)
         {
         case prt_examine: break;
-        case prt_print:
+        case prt_write:
           if (config->maxlen != (size_t)-1)
             break;
           /* fallthrough */
@@ -431,7 +429,7 @@ static void write_object(struct oport *f, struct print_config *config,
 
 static void write_integer(struct oport *f, long v, size_t maxlen)
 {
-  char buf[INTSTRLEN];
+  char buf[INTSTRSIZE];
   char *s = int2str(buf, 10, (ulong)v, true);
   size_t slen = strlen(s);
   opwrite(f, s, maxlen < slen ? maxlen : slen);
@@ -484,15 +482,31 @@ static void write_private(struct oport *f, struct grecord *val)
 static void _print_value(struct oport *f, struct print_config *config,
                          value v, bool toplev)
 {
-  static const char visible_in[][last_type] = {
-    /* display */
-    { 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1 },
-    /* write */
-    { 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1 },
-    /* examine */
-    { 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1 }
+  static const bool hidden[][last_type] = {
+    [prt_display] = {
+      [type_code]       = true,
+      [type_variable]   = true,
+      [type_internal]   = true,
+      [type_symbol]     = true,
+      [type_table]      = true,
+      [type_gone]       = true,
+      [type_outputport] = true,
+      [type_mcode]      = true,
+    },
+    [prt_write] = {
+      [type_code]       = true,
+      [type_internal]   = true,
+      [type_gone]       = true,
+      [type_outputport] = true,
+      [type_mcode]      = true,
+    },
+    [prt_examine] = {
+      [type_internal]   = true,
+      [type_gone]       = true,
+      [type_outputport] = true,
+      [type_mcode]      = true,
+    }
   };
-  CASSERT_EXPR(last_type == 23); /* type_null is on purpose left out above */
 
   check_cutoff(f, config);
 
@@ -510,12 +524,12 @@ static void _print_value(struct oport *f, struct print_config *config,
   struct obj *obj = v;
 
   assert(obj->type < last_type);
-  if (!visible_in[config->level][obj->type])
+  if (hidden[config->level][obj->type])
     pprintf(f, "{%s}", mtypenames[obj->type]);
   else
     switch (obj->type)
       {
-      default: assert(0);
+      default: abort();
       case type_string: write_string(f, config, v); break;
       case type_symbol:
         {
@@ -545,7 +559,7 @@ static void _print_value(struct oport *f, struct print_config *config,
                   long idx = intval(r0);
                   assert(idx >= 0 && idx < intval(environment->used));
                   struct string *n = GNAME(idx);
-                  pswrite(f, n, 0, string_len(n));
+                  pswrite(f, n);
                   break;
                 }
               if (!pointerp(r0))
@@ -576,24 +590,13 @@ static void _print_value(struct oport *f, struct print_config *config,
                 }
               if (TYPE(rec->data[1], type_vector))
                 {
-                  static bool here;
-                  if (here)
-                    {
-                      pputs("<recursion in custom>", f);
-                      break;
-                    }
                   struct vector *fns = (struct vector *)rec->data[1];
                   assert(vector_len(fns) == 3);
-                  here = true;
-                  struct string *str = mcatch_call1(
-                    "call-custom-reference-desc", fns->data[0], r0);
-                  here = false;
-                  if (exception_signal
-                      || !TYPE(str, type_string)
-                      || string_len(str) == 0)
-                    pputs("<error in custom>", f);
-                  else
-                    pswrite(f, str, 0, string_len(str));
+                  struct string *desc = fns->data[0];
+                  assert(TYPE(desc, type_string));
+                  pputs("&<", f);
+                  pswrite(f, desc);
+                  pputc('>', f);
                   break;
                 }
               _print_value(f, config, r0, false);
@@ -614,7 +617,29 @@ static void _print_value(struct oport *f, struct print_config *config,
         }
       case type_private: write_private(f, v); break;
       case type_code: write_code(f, config, v); break;
-      case type_closure: write_closure(f, config, v); break;
+      case type_primitive: case type_secure: case type_varargs:
+        {
+          struct primitive *prim = v;
+          pputs(prim->op->name, f);
+          pputs("()", f);
+          break;
+        }
+      case type_closure:
+        {
+          struct closure *cl = v;
+          struct code *code = cl->code;
+          if (config->level == prt_examine)
+            write_closure(f, config, v);
+          else
+            {
+              if (code->varname)
+                pswrite(f, code->varname);
+              else
+                pputs("fn", f);
+              pputs("()", f);
+            }
+          break;
+        }
       case type_table: write_table(f, config, v, toplev); break;
       case type_pair: write_list(f, config, v, toplev); break;
       case type_vector: write_vector(f, config, v, toplev); break;
@@ -625,7 +650,7 @@ static void _print_value(struct oport *f, struct print_config *config,
       }
 }
 
-void output_value_cut(struct oport *f, prt_level level, bool no_quote,
+void output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
                       value v, size_t maxlen)
 {
   if (!f) return;
@@ -662,7 +687,12 @@ void output_value_cut(struct oport *f, prt_level level, bool no_quote,
         if (string_port_length(p) >= maxlen)
           port_append_substring(f, p, 0, maxlen);
         else
-          opwrite(f, "<complex>", maxlen < 9 ? maxlen : 9);
+          {
+            strbuf_t sb = sb_initf("<complex %s>", mtypenames[TYPEOF(v)]);
+            size_t len = sb_len(&sb);
+            opwrite(f, sb_str(&sb), maxlen < len ? maxlen : len);
+            sb_free(&sb);
+          }
       else
         {
           _print_value(p, &config, v, !no_quote);
@@ -673,7 +703,7 @@ void output_value_cut(struct oport *f, prt_level level, bool no_quote,
     }
 }
 
-void output_value(struct oport *f, prt_level level, bool no_quote, value v)
+void output_value(struct oport *f, enum prt_level level, bool no_quote, value v)
 {
   output_value_cut(f, level, no_quote, v, (size_t)-1);
 }
@@ -707,11 +737,11 @@ void describe_fn(strbuf_t *sb, value v)
 
         GCPRO3(op, name, filename);
         if (name)
-          pswrite(op, name, 0, string_len(name));
+          pswrite(op, name);
         else
           pputs("<fn>", op);
         pputs("() [", op);
-        pswrite(op, filename, 0, string_len(filename));
+        pswrite(op, filename);
         pprintf(op, ":%ld]", lineno);
         UNGCPRO();
         return;

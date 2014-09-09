@@ -26,13 +26,26 @@
 #include <stddef.h>
 #include "types.h"
 
-/* Objects are either integers or pointers to more complex things (like
-   variables) The low order bit differentiates between the 2, 0 for pointers, 1
-   for integers If the object is a pointer, it is directly valid, if an integer
-   the low order bit must be ignored */
+/* Objects are either null, integers or pointers to more complex things (like
+   variables). Null is represented by NULL. Integers have the lowest bit set.
+   Anything else is a pointer to an object (struct obj *). */
 
 #define pointerp(obj) ((obj) && ((long)(obj) & 1) == 0)
 #define integerp(obj) (((long)(obj) & 1) == 1)
+
+static inline bool is_function(value v)
+{
+  if (!pointerp(v))
+    return false;
+  return (1U << ((struct obj *)v)->type) & TYPESET_FUNCTION;
+}
+
+static inline bool is_any_primitive(value p)
+{
+  if (!pointerp(p))
+    return false;
+  return ((struct obj *)p)->garbage_type == garbage_primitive;
+}
 
 /* Make & unmake integers */
 #define intval(obj)  ((long)(obj) >> 1)
@@ -102,18 +115,6 @@ struct gtemp
   void *external;
 };
 
-/* A pointer to a permanent external data structure.
-   These are identified by a unique # so that they can be found again
-   after reboot.
-*/
-struct gpermanent
-{
-  struct obj o;
-  ulong nb;
-  void *external;
-  ulong call_count;
-};
-
 /* The code structures are somewhat machine-dependent */
 
 struct code
@@ -123,7 +124,7 @@ struct code
   struct string *filename;      /* Name on disk */
   struct string *nicename;      /* Pretty-printed file name */
   struct string *help;
-  struct vector *arg_types;
+  struct vector *arg_types;     /* null for varargs */
   uword lineno;
   uword seclevel;
   ulong return_typeset;
@@ -136,15 +137,14 @@ struct icode
   uword nb_constants;
   uword nb_locals;
   uword stkdepth;
-  uword dummy;
+  uword dummy0;
   ulong call_count;		/* Profiling */
   struct string *lineno_data;
   ulong instruction_count;
-  ulong dummy1;
-  ubyte magic_dispatch[7];	/* Machine code jump to interpreter.
+  ulong dummy1[2];
+  ubyte magic_dispatch[8];	/* Machine code jump to interpreter.
 				   This is at the same offset as mcode
 				   in struct mcode */
-  ubyte dummy2;
   struct obj *constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
@@ -152,19 +152,21 @@ struct icode
 struct mcode /* machine-language code object */
 {
   struct code code;
+  ulong code_length;		/* Length of machine code in words */
   struct string *linenos;
-  ubyte closure_flags;          /* CLF_xxx flags */
-  ubyte dummy;
-  uword code_length;		/* Length of machine code in words */
   uword nb_constants;
   uword nb_rel;
-  ubyte *myself;		/* Self address, for relocation */
+  uword return_itype;
+  ubyte closure_flags;          /* CLF_xxx flags */
+  ubyte dummy;
+  struct mcode *myself;		/* Self address, for relocation */
   ubyte magic[8];		/* A magic pattern that doesn't occur in code.
 				   Offset must be multiple of 4 */
   ubyte mcode[/*code_length*/];
-  /* following the machine code:
+  /* Following the machine code:
        - nb_constants offsets of contants in mcode
        - nb_rel relative addresses of C functions in mcode
+       Each offset is a uword if code_length <= (uword)~0; otherwise a long.
   */
 };
 

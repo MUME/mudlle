@@ -30,7 +30,7 @@ load("interface.mud") &&
 [
   load_library = fn (s)
     [
-      dformat("loading %s\n", s);
+      silent == true || dformat("loading %s\n", s);
       fload(s + ".obj");
     ];
 ] &&

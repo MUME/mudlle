@@ -97,7 +97,7 @@ static inline value invoke_stack(struct closure *c, int nargs);
 
 #define IEARLY_ERROR(n) do {			\
   SAVE_OFFSET();				\
-  early_runtime_error(n);			\
+  interpreted_early_runtime_error(n);           \
 } while (0)
 
 void do_interpret(struct closure *fn, int nargs)
@@ -148,8 +148,14 @@ void do_interpret(struct closure *fn, int nargs)
   static ulong instruction_number;
   ulong start_ins = instruction_number;
 
-  if (me.u.mudlle.code->code.seclevel < minlevel)
-    early_runtime_error(error_security_violation);
+  uword seclev = me.u.mudlle.code->code.seclevel;
+  if (seclev < minlevel)
+    interpreted_early_runtime_error(error_security_violation);
+
+  value mseclev = seclevel_to_maxseclevel(seclev);
+  value old_maxseclevel = maxseclevel;
+  if ((long)mseclev < (long)old_maxseclevel)
+    maxseclevel = mseclev;
 
   stack_reserve(me.u.mudlle.code->stkdepth); /* Ensure enough space on stack */
   RESTORE_STACK();
@@ -246,14 +252,14 @@ void do_interpret(struct closure *fn, int nargs)
       case op_execute_primitive1:
 	C_START_CALL(1, GVAR(INSUWORD()));
 	C_SETARG(0, FAST_POP());
-	set_seclevel(me.u.mudlle.code->code.seclevel);
+	set_seclevel(seclev);
 	C_END_CALL(op->op(C_ARG(0)));
 	break;
       case op_execute_primitive2:
 	C_START_CALL(2, GVAR(INSUWORD()));
 	C_SETARG(1, FAST_POP());
 	C_SETARG(0, FAST_POP());
-	set_seclevel(me.u.mudlle.code->code.seclevel);
+	set_seclevel(seclev);
 	C_END_CALL(op->op(C_ARG(0), C_ARG(1)));
 	break;
 
@@ -301,7 +307,8 @@ void do_interpret(struct closure *fn, int nargs)
 
 	  case type_secure:
 	    C_START_CALL(nargs, (struct primitive *)called);
-	    if (DEFAULT_SECLEVEL < op->seclevel)
+	    if (DEFAULT_SECLEVEL < op->seclevel
+                || intval(maxseclevel) < op->seclevel)
 	      IEARLY_ERROR(error_security_violation);
 	    goto execute_primitive;
 
@@ -370,8 +377,8 @@ void do_interpret(struct closure *fn, int nargs)
 	assert(pointerp(called) && called->type == type_secure);
 
 	C_START_CALL(nargs, (struct primitive *)called);
-	set_seclevel(me.u.mudlle.code->code.seclevel);
-	if (me.u.mudlle.code->code.seclevel < op->seclevel)
+	set_seclevel(seclev);
+	if (seclev < op->seclevel || intval(maxseclevel) < op->seclevel)
 	  IEARLY_ERROR(error_security_violation);
 	goto execute_primitive;
 
@@ -397,7 +404,7 @@ void do_interpret(struct closure *fn, int nargs)
 	     protected modules (normally system) */
 	  assert(pointerp(called) && called->type == type_varargs);
 
-	  set_seclevel(me.u.mudlle.code->code.seclevel);
+	  set_seclevel(seclev);
 
 	  struct primitive *pop = (struct primitive *)called;
 
@@ -523,7 +530,16 @@ void do_interpret(struct closure *fn, int nargs)
       case op_clear_local: ((struct variable *)LOCAL)->vvalue = NULL; break;
       case op_recall + local_var:   RECALL(LOCAL);               break;
       case op_recall + closure_var: RECALL(CLOSURE);             break;
-      case op_recall + global_var:  FAST_PUSH(GVAR(INSUWORD())); break;
+      case op_recall + global_var:
+        {
+          ulong goffset = INSUWORD();
+
+          SAVE_OFFSET();
+          check_global_read(goffset);
+
+          FAST_PUSH(GVAR(goffset));
+          break;
+        }
       case op_vref   + local_var:   VREF(LOCAL);                 break;
       case op_vref   + closure_var: VREF(CLOSURE);               break;
       case op_vref   + global_var:  abort();                     break;
@@ -533,7 +549,9 @@ void do_interpret(struct closure *fn, int nargs)
 	{
 	  ulong goffset = INSUWORD();
 
-	  if (GCONSTANT(goffset)) IERROR(error_variable_read_only);
+	  SAVE_OFFSET();
+	  check_global_write(goffset);
+
 	  GVAR(goffset) = FAST_GET(0);
 	  break;
 	}
@@ -708,12 +726,9 @@ void do_interpret(struct closure *fn, int nargs)
       case op_typecheck + stype_function:
 	{
 	  value arg1 = FAST_GET(INSUBYTE());
-	  if (!pointerp(arg1)) IERROR(error_bad_type);
 
-	  mtype type = ((struct obj *)arg1)->type;
-	  if (!(type == type_closure || type == type_primitive ||
-		type == type_varargs || type == type_secure))
-	    IERROR(error_bad_type);
+	  if (!is_function(arg1))
+	    IERROR(error_bad_function);
 	  break;
 	}
 
@@ -730,6 +745,8 @@ void do_interpret(struct closure *fn, int nargs)
       }
   }
  done:
+  maxseclevel = old_maxseclevel;
+
   call_stack = me.next;
 
   me.u.mudlle.code->instruction_count += instruction_number - start_ins;

@@ -30,8 +30,9 @@
 #include "lexer.h"
 #include "mparser.h"
 #include "mudlle.h"
-#include "tokens.h"
 #include "utils.h"
+
+#  include "tokens.h"
 
 /* We never wrap into another file */
 #define YY_SKIP_YYWRAP
@@ -55,9 +56,10 @@ static int string_read(char *buf, int max_size);
 static bool convert_escape_char(const char **textp, char *result);
 
 static YY_BUFFER_STATE mbuf;
-static int line_read;
-static const char *line;
-static int length;
+static bool line_read;
+static const char *lexer_string;
+static const char *const *lexer_strings;
+static int lexer_string_length;
 const char *lexer_filename;
 const char *lexer_nicename;
 
@@ -81,6 +83,7 @@ static const struct lkeyword keywords[] = {
   { "requires", IMPORTS },
   { "reads",    READS },
   { "writes",   WRITES },
+  { "static",   STATIC },
   { "defines",  DEFINES }
 };
 #define NKEYWORDS (sizeof keywords / sizeof(struct lkeyword))
@@ -306,21 +309,54 @@ CHAR_NAME       N\{[^\}\"\n]*\}?
 
 static int string_read(char *abuf, int max_size)
 {
-  int cnt;
+  int total = 0;
+  for (;;)
+    {
+      if (lexer_string == NULL)
+        return total;
 
-  cnt = max_size;
-  if (cnt > length) cnt = length;
+      int cnt = (lexer_string_length < max_size
+                 ? lexer_string_length
+                 : max_size);
+      memcpy(abuf, lexer_string, cnt);
+      max_size -= cnt;
+      lexer_string += cnt;
+      lexer_string_length -= cnt;
+      total += cnt;
+      if (max_size == 0)
+        return total;
+      abuf += cnt;
 
-  memcpy(abuf, line, cnt);
-  line += cnt;
-  length -= cnt;
-
-  return cnt;
+      lexer_string = *++lexer_strings;
+      lexer_string_length = lexer_string ? strlen(lexer_string) : 0;
+    }
 }
 
+void save_reader_state(struct reader_state *state)
+{
+  *state = (struct reader_state){
+    .filename = lexer_filename,
+    .nicename = lexer_nicename,
+  };
+  lexer_filename = lexer_nicename = NULL;
+}
+
+void restore_reader_state(const struct reader_state *state)
+{
+  lexer_filename = state->filename;
+  lexer_nicename = state->nicename;
+  yylineno = 0xdeadbeef;
+  line_read = false;
+  lexer_strings = NULL;
+  lexer_string = NULL;
+  lexer_string_length = 0;
+}
 
 void read_from_file(FILE *f, const char *afilename, const char *anicename)
 {
+  assert(lexer_filename == NULL);
+  assert(lexer_nicename == NULL);
+
   if (!mbuf)
     {
       mbuf = yy_create_buffer(f, YY_BUF_SIZE);
@@ -337,21 +373,25 @@ void read_from_file(FILE *f, const char *afilename, const char *anicename)
   lexer_nicename = anicename;
 }
 
-void read_from_string(const char *str, const char *afilename,
-                      const char *anicename)
+void read_from_strings(const char *const *strs, const char *afilename,
+                       const char *anicename)
 {
+  assert(lexer_filename == NULL);
+  assert(lexer_nicename == NULL);
+
   if (!mbuf)
     {
-      mbuf = yy_create_buffer(stdin, YY_BUF_SIZE);
+      mbuf = yy_create_buffer(NULL, YY_BUF_SIZE);
       yy_switch_to_buffer(mbuf);
     }
   else
-    yyrestart(stdin);
+    yyrestart(NULL);
 
   yy_switch_to_buffer(mbuf);
   line_read = true;
-  line = str;
-  length = strlen(line);
+  lexer_strings = strs;
+  lexer_string = *strs;
+  lexer_string_length = strlen(lexer_string);
   yylineno = 0;
   lexer_filename = afilename ? afilename : "<string>";
   lexer_nicename = anicename ? anicename : "<string>";

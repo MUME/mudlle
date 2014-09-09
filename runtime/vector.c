@@ -28,8 +28,8 @@ TYPEDOP(vectorp, "vector?", "`x -> `b. TRUE if `x is a vector", 1, (value v),
   return makebool(TYPE(v, type_vector));
 }
 
-TYPEDOP(make_vector, 0, "`n -> `v. Create an empty vector of length `n, where"
-        " 0 <= `n <= `MAX_VECTOR_SIZE.", 1, (value msize),
+TYPEDOP(make_vector, 0, "`n -> `v. Create an all-null vector of length `n,"
+        " where 0 <= `n <= `MAX_VECTOR_SIZE.", 1, (value msize),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
   long size = GETINT(msize);

@@ -68,8 +68,14 @@ int module_require(const char *name);
      Other effects as in module_load
 */
 
-enum { var_normal, var_module, var_write, var_system_write };
-int module_vstatus(long n, struct string **name);
+enum vstatus {
+  var_normal,                   /* default */
+  var_module,                   /* defined by a module */
+  var_write,                    /* written by mudlle */
+  var_system_write,             /* C may write, mudlle read */
+  var_system_mutable            /* anyone may read/write */
+ };
+enum vstatus module_vstatus(long n, struct string **name);
 /* Returns: status of global variable n:
      var_normal: normal global variable, no writes
      var_write: global variable which is written
@@ -80,7 +86,7 @@ int module_vstatus(long n, struct string **name);
    Requires: n be a valid global variable offset
 */
 
-int module_vset(long n, int status, struct string *name);
+bool module_vset(long n, enum vstatus status, struct string *name);
 /* Effects: Sets status of global variable n to status.
      name is the module name for status var_module
    Returns: true if successful, false if the change is impossible

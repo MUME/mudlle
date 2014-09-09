@@ -87,14 +87,12 @@ ulong stack_depth(void)
 
 void print_stack(struct oport *f)
 {
-  ulong used = intval(stack->used), i;
-
-  pprintf(f, "Stack is:\n");
-  for (i = 0; i < used; i++)
+  pputs("Stack is:\n", f);
+  for (long i = 0, used = intval(stack->used); i < used; ++i)
     {
-      pprintf(f, "%lu: ", used - i - 1);
-      output_value(f, prt_print, false, stack->values->data[i]);
-      pprintf(f, "\n");
+      pprintf(f, "%ld: ", used - i - 1);
+      output_value(f, prt_write, false, stack->values->data[i]);
+      pputc('\n', f);
     }
-  pprintf(f, "\n");
+  pputc('\n', f);
 }

@@ -25,7 +25,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
   dihash_foreach, dihash_filter!, dihash_remove!, dihash_map!,
   dihash_entries, dihash_resize, dihash_list, dihash_size,
   dihash_map, ihash_to_dihash, dihash_vector, dihash?, dihash_empty!,
-  dihash_reduce, dihash_exists?, make_dihash_ref
+  dihash_reduce, dihash_exists?, make_dihash_ref, dihash_keys
 [
   | div_used, div_data, vslot_next, vslot_key, vslot_data, next_size,
     good_size, get_entry |
@@ -336,7 +336,10 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
   dihash_size = fn "`d -> `n. Returns the current size of the dihash `d" (vector hash)
     vlength(hash[div_data]);
 
-  dihash_list = fn "`d -> `l. Returns a list of (`key . `value) of the entries in dihash `d" (vector hash)
+  dihash_keys = fn "`d -> `l. Returns a unsorted copy of all the keys of `d as a list" (vector hash)
+    dihash_reduce(fn (k, e, keys) k . keys, null, hash);
+
+  dihash_list = list fn "`d -> `l. Returns a list of (`key . `value) of the entries in dihash `d" (vector hash)
     [
       | res |
       dihash_foreach(fn (key, value) res = (key . value) . res,

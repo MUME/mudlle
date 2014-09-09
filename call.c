@@ -26,11 +26,12 @@
 
 #include "alloc.h"
 #include "builtins.h"
-#include "interpret.h"
-#include "error.h"
-#include "stack.h"
 #include "call.h"
 #include "context.h"
+#include "error.h"
+#include "interpret.h"
+#include "stack.h"
+#include "strbuf.h"
 
 /* Interface to machine code. */
 
@@ -345,7 +346,7 @@ bool callablep(value c, int nargs)
 
 void callable(value c, int nargs)
 /* Effects: Causes an error if c is not something that can be called with
-     nargs arguments (-1 only checks type of c).
+     nargs arguments.
 */
 {
   if (!pointerp(c))
@@ -355,9 +356,6 @@ void callable(value c, int nargs)
   switch (o->type)
     {
     case type_closure: {
-      if (nargs < 0)
-        return;
-
       struct closure *cl = c;
       struct vector *args = cl->code->arg_types;
       if (args == NULL)         /* varargs */
@@ -368,23 +366,40 @@ void callable(value c, int nargs)
 
       runtime_error(error_wrong_parameters);
     }
-    case type_secure:
-      if (DEFAULT_SECLEVEL < ((struct primitive *)o)->op->seclevel)
+    case type_secure: {
+      const uword op_seclevel = ((struct primitive *)o)->op->seclevel;
+
+      /* Security for Valar: disallow calling A+ secures without going through
+       * mudlle code (which has its own security checks). */
+      if (DEFAULT_SECLEVEL < op_seclevel)
 	runtime_error(error_security_violation);
+
+      /* Security for Maiar: enforce maxseclevel if it has a meaningful
+       * value. */
+      if (session_context != NULL && intval(maxseclevel) < op_seclevel)
+	runtime_error(error_security_violation);
+
       /* fall through */
+    }
     case type_primitive:
-      if (nargs < 0 || ((struct primitive *)o)->op->nargs == nargs)
+      if (((struct primitive *)o)->op->nargs == nargs)
 	return;
       runtime_error(error_wrong_parameters);
-    case type_varargs: return;
+    case type_varargs:
+      return;
     default:
       break;
     }
   runtime_error(error_bad_function);
 }
 
-/* counts how many times we've called mudlle from C */
-ulong mudlle_call_count;
+/* if not NULL, is name of primitive forbidding calls */
+const char *forbid_mudlle_calls;
+
+void fail_allow_mudlle_call(void)
+{
+  abort();
+}
 
 value call0(value c)
 /* Effects: Calls c with no arguments
@@ -392,7 +407,7 @@ value call0(value c)
    Requires: callable(c, 0) does not fail.
 */
 {
-  ++mudlle_call_count;
+  check_allow_mudlle_call();
 
   switch (((struct obj *)c)->type)
     {
@@ -438,7 +453,7 @@ value call ## N(value c, PRIMARGS ## N)                                 \
    Requires: callable(c, N) does not fail.                              \
 */                                                                      \
 {                                                                       \
-  ++mudlle_call_count;                                                  \
+  check_allow_mudlle_call();                                            \
                                                                         \
   switch (((struct obj *)c)->type)                                      \
     {                                                                   \
@@ -494,7 +509,7 @@ value call1plus(value c, value arg, struct vector *args)
      become painful).
 */
 {
-  ++mudlle_call_count;
+  check_allow_mudlle_call();
 
   int nargs = 1 + vector_len(args);
   switch (((struct obj *)c)->type)
@@ -562,7 +577,7 @@ value call(value c, struct vector *args)
   if (nargs == 0)
     return call0(c);
 
-  ++mudlle_call_count;
+  check_allow_mudlle_call();
 
   switch (((struct obj *)c)->type)
     {
@@ -669,7 +684,7 @@ static value callv(value c, int nargs, va_list va, const char *name)
   if (nargs > MAX_PRIMITIVE_ARGS)
     goto call_vector;
 
-  ++mudlle_call_count;
+  check_allow_mudlle_call();
 
   switch (((struct obj *)c)->type)
     {
@@ -705,11 +720,13 @@ static value callv(value c, int nargs, va_list va, const char *name)
     }
 
  call_vector: ;
+  /* initiate data in case there is a GC */
+  me.u.c.nargs = 1;
+  me.u.c.args[0] = NULL;
   GCPRO1(c);
   struct vector *argv = make_vargs(nargs, va);
-  me.u.c.nargs = 1;
-  me.u.c.args[0] = argv;
   UNGCPRO();
+  me.u.c.args[0] = argv;
   result = call(c, argv);
 
  done:

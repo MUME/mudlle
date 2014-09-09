@@ -22,6 +22,12 @@
 #ifndef RUNTIME_SUPPORT_H
 #define RUNTIME_SUPPORT_H
 
+#include "../error.h"
+#include "../types.h"
+
 void support_init(void);
+
+void global_runtime_error(runtime_errors error, bool is_write, ulong goffset)
+  NORETURN;
 
 #endif /* RUNTIME_SUPPORT_H */

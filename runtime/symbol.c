@@ -22,8 +22,9 @@
 #include <string.h>
 
 #include "runtime.h"
-#include "../table.h"
+#include "symbol.h"
 #include "../call.h"
+#include "../table.h"
 
 
 TYPEDOP(symbolp, "symbol?", "`x -> `b. TRUE if `x is a symbol", 1, (value v),
@@ -32,8 +33,11 @@ TYPEDOP(symbolp, "symbol?", "`x -> `b. TRUE if `x is a symbol", 1, (value v),
   return makebool(TYPE(v, type_symbol));
 }
 
-TYPEDOP(make_symbol, 0, "`s `x -> `sym. Creates a symbol with name `s and value `x. If `s is not read-only, a read-only copy will be used",
-        2, (struct string *s, value v), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sx.y")
+/* not OP_STR_READONLY as it would only apply to the name */
+TYPEDOP(make_symbol, 0, "`s `x -> `sym. Creates a symbol with name `s and"
+        " value `x.\nIf `s is not read-only, a read-only copy will be used.",
+        2, (struct string *s, value v),
+        OP_LEAF | OP_NOESCAPE, "sx.y")
 {
   TYPEIS(s, type_string);
   if (~s->o.flags & OBJ_READONLY)
@@ -47,6 +51,16 @@ TYPEDOP(make_symbol, 0, "`s `x -> `sym. Creates a symbol with name `s and value 
       UNGCPRO();
     }
   return alloc_symbol(s, v);
+}
+
+/* not OP_STR_READONLY as it would only apply to the name */
+TYPEDOP(make_psymbol, 0, "`s `x -> `sym. Creates a read-only symbol with"
+        " name `s and value `x.\n"
+        "If `s is not read-only, a read-only copy will be used.",
+        2, (struct string *s, value v),
+        OP_LEAF | OP_NOESCAPE | OP_CONST, "sx.y")
+{
+  return make_readonly(code_make_symbol(s, v));
 }
 
 TYPEDOP(symbol_name, 0, "`sym -> `s. Returns the name of a symbol",
@@ -88,6 +102,52 @@ TYPEDOP(make_table, 0, "-> `table. Create a new (empty) symbol table",
         0, (void), OP_LEAF | OP_NOESCAPE, ".t")
 {
   return alloc_table(DEF_TABLE_SIZE);
+}
+
+static struct table *vector_to_table(struct vector *v, bool readonly)
+{
+  TYPEIS(v, type_vector);
+  long vlen = vector_len(v);
+  int immutable = OBJ_IMMUTABLE;
+  for (long i = 0; i < vlen; ++i)
+    {
+      struct symbol *sym = v->data[i];
+      TYPEIS(sym, type_symbol);
+      immutable &= sym->o.flags;
+    }
+
+  GCPRO1(v);
+  struct table *table = alloc_table(table_good_size(vlen));
+  for (long i = 0; i < vlen; ++i)
+    {
+      struct symbol *sym = v->data[i], *sym2;
+      if (table_lookup_len(table, sym->name->str, string_len(sym->name),
+                           &sym2))
+        runtime_error(error_bad_value);
+      table_add_sym_fast(table, sym);
+    }
+  UNGCPRO();
+
+  if (readonly)
+    (immutable ? immutable_table : protect_table)(table);
+
+  return table;
+}
+
+TYPEDOP(vector_to_table, 0, "`v -> `table. Create a new table from the symbols"
+        " in `v. There will be a runtime error if any symbols collide.",
+        1, (struct vector *v), OP_LEAF | OP_NOESCAPE, "v.t")
+{
+  return vector_to_table(v, false);
+}
+
+TYPEDOP(vector_to_ptable, 0, "`v -> `table. Create a new read-only table from"
+        " the symbols in `v.\n"
+        "If all symbols are immutable, the table will also be immutable.\n"
+        "There will be a runtime error if any symbols collide.",
+        1, (struct vector *v), OP_LEAF | OP_NOESCAPE | OP_CONST, "v.t")
+{
+  return vector_to_table(v, true);
 }
 
 TYPEDOP(table_list, 0,
@@ -186,7 +246,7 @@ TYPEDOP(table_existsp, "table_exists?",
         "`c `table -> `x. Returns the first symbol `s in `table"
 	" for which `c(`s) is true, or false",
 	2, (value f, struct table *table),
-	0, "ft.[yn]")
+	0, "ft.[yz]")
 {
   struct vector *buckets = NULL;
   value res = makebool(0);
@@ -265,7 +325,7 @@ EXT_TYPEDOP(table_ref, 0,
 TYPEDOP(table_lookup, 0, "`table `s -> `x. Returns the symbol for `s in"
         " `table, or false if none",
         2, (struct table *table, struct string *s),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "ts.[yn]")
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "ts.[yz]")
 {
   struct symbol *sym;
 
@@ -366,9 +426,14 @@ void symbol_init(void)
   DEFINE(table_reduce);
   DEFINE(table_existsp);
 
+  DEFINE(vector_to_table);
+  DEFINE(vector_to_ptable);
+
   DEFINE(make_symbol);
+  DEFINE(make_psymbol);
   DEFINE(symbolp);
   DEFINE(symbol_name);
   DEFINE(symbol_get);
   DEFINE(symbol_set);
+
 }

@@ -22,13 +22,13 @@
 #ifndef RUNTIME_RUNTIME_H
 #define RUNTIME_RUNTIME_H
 
-#include "../mudlle.h"
 #include "../alloc.h"
 #include "../call.h"
 #include "../charset.h"
 #include "../context.h"
 #include "../error.h"
 #include "../global.h"
+#include "../mudlle.h"
 #include "../stack.h"
 #include "../types.h"
 
@@ -42,12 +42,12 @@ void flag_check_failed(const struct primitive_ext *op, const char *flag);
 #  define CASSERT_SECLEVEL(seclevel)            \
   CASSERT_EXPR(seclevel == 0 || seclevel == 1)
 
-#define FULLOP(x, name, helpmsg, nargs, args,                           \
+#define FULLOP(x, pname, helpmsg, nargs, args,                          \
                seclevel, flags, type, storage_class)                    \
 static value flag_check_ ## x(PRIMARGS ## nargs);                       \
 storage_class value code_ ## x args;                                    \
 storage_class const struct primitive_ext op_ ## x = {                   \
-  (name) ? (name) : #x, helpmsg,                                        \
+  (pname) ? (pname) : #x, helpmsg,                                      \
   (CHECK_PRIM_FLAGS                                                     \
    ? (value (*)())flag_check_ ## x                                      \
    : (value (*)())code_ ## x),                                          \
@@ -57,18 +57,33 @@ storage_class const struct primitive_ext op_ ## x = {                   \
 static value flag_check_ ## x(PRIMARGS ## nargs)                        \
 {                                                                       \
   CASSERT_EXPR(!((flags) & ~ALL_OP_FLAGS));                             \
+  CASSERT_EXPR((nargs) < 0 ? (seclevel) == 0 : true);                   \
   CASSERT_SECLEVEL(seclevel);                                           \
+  /* optimization: allow faster (type_primitive vs. type_secure) OPs */ \
+  /* for M-secure OPs that don't need a valid seclevel (ie. don't    */ \
+  /* need to check against >= LEGACY_SECLEVEL). */                      \
+  CASSERT_EXPR(!((flags) & OP_FASTSEC)                                  \
+               || ((seclevel) > 0 && (seclevel) < LEGACY_SECLEVEL));    \
+  if ((seclevel) > 0 && (flags) & OP_FASTSEC                            \
+      && intval(maxseclevel) < (seclevel))                              \
+    runtime_error(error_security_violation);                            \
+  /* the call site (do_interpret/bcall/bcall_secure) should have */     \
+  /* thrown error_security_violation already. */                        \
+  if ((seclevel) > 0)                                                   \
+    assert((seclevel) <= intval(maxseclevel));                          \
   ubyte *oldposgen0 = posgen0;                                          \
-  ulong old_mudlle_call_count = mudlle_call_count;                      \
+  const char *old_forbid_mudlle_calls = forbid_mudlle_calls;            \
+  if ((flags) & (OP_LEAF | OP_NOESCAPE))                                \
+    forbid_mudlle_calls = op_ ## x.name;                                \
   bool old_seclevel_valid = seclevel_valid;                             \
-  seclevel_valid = seclevel > 0 || nargs == NVARARGS;                   \
+  seclevel_valid = ((seclevel) > 0 && !((flags) & OP_FASTSEC))          \
+                   || nargs == NVARARGS;                                \
   value r = code_ ## x(PRIMARGNAMES ## nargs);                          \
   seclevel_valid = old_seclevel_valid;                                  \
   if (((flags) & OP_NOALLOC) && oldposgen0 != posgen0)                  \
     flag_check_failed(&op_ ## x, "noalloc");                            \
-  if (((flags) & (OP_LEAF | OP_NOESCAPE))                               \
-      && old_mudlle_call_count != mudlle_call_count)                    \
-    flag_check_failed(&op_ ## x, "leaf/noescape");                      \
+  if ((flags) & (OP_LEAF | OP_NOESCAPE))                                \
+    forbid_mudlle_calls = old_forbid_mudlle_calls;                      \
   return r;                                                             \
 }                                                                       \
 storage_class value code_ ## x args
@@ -175,6 +190,8 @@ void check_interrupt(void);
 
    f: function (closure, primitive, vararg, secure)
    n: integer
+   z: zero
+   Z: non-zero
    s: string
    v: vector
    l: list (pair or null)
@@ -210,22 +227,19 @@ const struct primitive_ext *lookup_primitive(ulong adr);
 
 #define STATIC_STRING(name, value)                      \
 static ulong static_data_ ## name;                      \
-static const struct static_string name = {              \
+static const STATIC_STRING_T(sizeof value) name = {     \
   .static_data = &static_data_ ## name,                 \
-  .s = {                                                \
-    .o = {                                              \
-      .size = sizeof (struct string) + sizeof value,    \
-      .garbage_type = garbage_static_string,            \
-      .type = type_string,                              \
-      .flags = OBJ_IMMUTABLE | OBJ_READONLY             \
-    },                                                  \
-    .str = value                                        \
-  }                                                     \
+  .mobj = {                                             \
+    .size = sizeof (struct string) + sizeof value,      \
+    .garbage_type = garbage_static_string,              \
+    .type = type_string,                                \
+    .flags = OBJ_IMMUTABLE | OBJ_READONLY               \
+  },                                                    \
+  .str = value                                          \
 }
 
-#define GET_STATIC_STRING(name) ((struct string *)&(name).s)
+#define GET_STATIC_STRING(name) ((struct string *)&(name).mobj)
 
 extern struct string *const static_empty_string;
-
 
 #endif /* RUNTIME_RUNTIME_H */

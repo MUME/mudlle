@@ -54,7 +54,7 @@ static glist new_glist(block_t heap, ulong n, int lineno, glist next)
   return newp;
 }
 
-static int in_glist(ulong n, glist l, int do_mark)
+static bool in_glist(ulong n, glist l, bool do_mark)
 {
   for (; l; l = l->next)
     if (n == l->n)
@@ -68,9 +68,9 @@ static int in_glist(ulong n, glist l, int do_mark)
 }
 
 static glist readable;
-static int all_readable;
+static bool all_readable;
 static glist writable;
-static int all_writable;
+static bool all_writable;
 static glist definable;
 static struct string *this_module;
 
@@ -183,6 +183,9 @@ int mstart(block_t heap, mfile f, int seclev)
       if (ostatus == var_system_write)
         log_error("cannot define %s: cannot be written from mudlle",
                   defines->var);
+      else if ((ostatus == var_write && seclev < SECLEVEL_GLOBALS)
+               || ostatus == var_system_write)
+	log_error("cannot define %s: exists and is writable", defines->var);
       else if (!module_vset(n, var_module, this_module))
         log_error("cannot define %s: belongs to module %s", defines->var,
                   omod->str);
@@ -194,27 +197,67 @@ int mstart(block_t heap, mfile f, int seclev)
 
   for (vlist writes = f->writes; writes; writes = writes->next)
     {
-      yylineno = f->lineno;
+      yylineno = writes->lineno;
 
       ulong n = global_lookup(writes->var);
+
+      if (in_glist(n, definable, false))
+        log_error("cannot write and define %s", writes->var);
 
       if (!module_vset(n, var_write, NULL))
 	{
 	  struct string *belongs;
-
-	  if (module_vstatus(n, &belongs) == var_system_write)
-            log_error("cannot write %s from mudlle", writes->var);
-          else
-            log_error("cannot write %s: belongs to module %s", writes->var,
-                      belongs->str);
+	  enum vstatus vs = module_vstatus(n, &belongs);
+	  switch (vs)
+	    {
+	    case var_system_write:
+	      log_error("cannot write %s from mudlle", writes->var);
+	      break;
+	    case var_system_mutable:
+              compile_warning("%s is always writable", writes->var);
+              break;
+	    case var_module:
+	      assert(TYPE(belongs, type_string));
+	      log_error("cannot write %s: belongs to module %s", writes->var,
+			belongs->str);
+	      break;
+            case var_normal:
+	    case var_write:
+              abort();
+	    }
+          continue;
 	}
 
       writable = new_glist(heap, n, f->lineno, writable);
     }
 
   for (vlist reads = f->reads; reads; reads = reads->next)
-    readable = new_glist(heap, global_lookup(reads->var), reads->lineno,
-                         readable);
+    {
+      yylineno = reads->lineno;
+
+      ulong n = global_lookup(reads->var);
+
+      if (in_glist(n, definable, false))
+        log_error("cannot read and define %s", reads->var);
+
+      readable = new_glist(heap, n, reads->lineno, readable);
+    }
+
+  for (vlist statics = f->statics; statics; statics = statics->next)
+    {
+      yylineno = statics->lineno;
+
+      ulong n;
+      if (!global_exists(statics->var, &n))
+        continue;
+
+      if (in_glist(n, definable, false))
+        log_error("cannot define static %s", statics->var);
+      if (in_glist(n, writable, false))
+        log_error("cannot write static %s", statics->var);
+      if (in_glist(n, readable, false))
+        log_error("cannot read static %s", statics->var);
+    }
 
   yylineno = 0;
 
@@ -243,30 +286,33 @@ void mrecall(ulong n, const char *name, fncode fn)
   assert(current_mfile != NULL);
 
   struct string *mod;
-  int status = module_vstatus(n, &mod);
+  enum vstatus status = module_vstatus(n, &mod);
 
-  if (!in_glist(n, definable, 0) &&
-      !in_glist(n, readable, 1) && !in_glist(n, writable, 0)) {
-    if (status == var_module)
-      {
-	/* Implicitly import protected modules */
-	if (module_status(mod->str) == module_protected)
-	  {
-	    imported(mod->str, 1);
-	    if (immutablep(GVAR(n))) /* Use value */
-	      {
-		ins_constant(GVAR(n), fn);
-		return;
-	      }
-	  }
-	else if (!all_readable && imported(mod->str, 1) == module_unloaded)
-	  log_error("read of global %s (module %s)", name, mod->str);
-      }
-    else if (!all_readable)
-      log_error("read of global %s", name);
-  }
+  if (in_glist(n, definable, false)
+      || in_glist(n, readable, true)
+      || in_glist(n, writable, false)
+      || status == var_system_write
+      || status == var_system_mutable)
+    ;
+  else if (status == var_module)
+    {
+      /* Implicitly import protected modules */
+      if (module_status(mod->str) == module_protected)
+        {
+          imported(mod->str, 1);
+          if (immutablep(GVAR(n))) /* Use value */
+            {
+              ins_constant(GVAR(n), fn);
+              return;
+            }
+        }
+      else if (!all_readable && imported(mod->str, 1) == module_unloaded)
+        log_error("read of global %s (module %s)", name, mod->str);
+    }
+  else if (!all_readable)
+    log_error("read of global %s", name);
 
-  ins2(op_recall + global_var, n, fn);
+   ins2(op_recall + global_var, n, fn);
 }
 
 void mexecute(ulong n, const char *name, int count, fncode fn)
@@ -276,60 +322,67 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
 {
   assert(current_mfile != NULL);
 
+  if (name == NULL)
+    goto skip_checks;
+
+  if (in_glist(n, definable, false) || in_glist(n, readable, true)
+      || in_glist(n, writable, false))
+    goto skip_checks;
+
   struct string *mod;
-  int status = module_vstatus(n, &mod);
+  enum vstatus status = module_vstatus(n, &mod);
 
-  if (!in_glist(n, definable, 0) &&
-      !in_glist(n, readable, 1) && !in_glist(n, writable, 0)) {
-    if (status == var_module)
-      {
-	/* Implicitly import protected modules */
-	if (module_status(mod->str) == module_protected)
-	  {
-	    value gvar = GVAR(n);
+  if (status == var_system_write || status == var_system_mutable)
+    ;
+  else if (status == var_module)
+    {
+      /* Implicitly import protected modules */
+      if (module_status(mod->str) == module_protected)
+        {
+          value gvar = GVAR(n);
 
-	    imported(mod->str, 1);
+          imported(mod->str, 1);
 
-	    if (TYPE(gvar, type_primitive))
-	      {
-		if (count >= 1 && count <= 2 &&
-		    ((struct primitive *)gvar)->op->nargs == count)
-		  {
-		    if (count == 1) ins2(op_execute_primitive1, n, fn);
-		    else ins2(op_execute_primitive2, n, fn);
-		  }
-		else
-		  {
-		    /* Could merge, but can't be bothered... */
-		    ins2(op_recall + global_var, n, fn);
-		    ins1(op_execute_primitive, count, fn);
-		  }
-		return;
-	      }
+          if (TYPE(gvar, type_primitive))
+            {
+              if (count >= 1 && count <= 2 &&
+                  ((struct primitive *)gvar)->op->nargs == count)
+                {
+                  if (count == 1) ins2(op_execute_primitive1, n, fn);
+                  else ins2(op_execute_primitive2, n, fn);
+                }
+              else
+                {
+                  /* Could merge, but can't be bothered... */
+                  ins2(op_recall + global_var, n, fn);
+                  ins1(op_execute_primitive, count, fn);
+                }
+              return;
+            }
 
-	    if (TYPE(gvar, type_secure))
-	      {
-		/* Could merge, but can't be bothered... */
-		ins2(op_recall + global_var, n, fn);
-		ins1(op_execute_secure, count, fn);
-		return;
-	      }
+          if (TYPE(gvar, type_secure))
+            {
+              /* Could merge, but can't be bothered... */
+              ins2(op_recall + global_var, n, fn);
+              ins1(op_execute_secure, count, fn);
+              return;
+            }
 
-	    if (TYPE(gvar, type_varargs))
-	      {
-		/* Could merge, but can't be bothered... */
-		ins2(op_recall + global_var, n, fn);
-		ins1(op_execute_varargs, count, fn);
-		return;
-	      }
-	  }
-	else if (!all_readable && imported(mod->str, 1) == module_unloaded)
-	  log_error("read of global %s (module %s)", name, mod->str);
-      }
-    else if (!all_readable)
-      log_error("read of global %s", name);
-  }
+          if (TYPE(gvar, type_varargs))
+            {
+              /* Could merge, but can't be bothered... */
+              ins2(op_recall + global_var, n, fn);
+              ins1(op_execute_varargs, count, fn);
+              return;
+            }
+        }
+      else if (!all_readable && imported(mod->str, 1) == module_unloaded)
+        log_error("read of global %s (module %s)", name, mod->str);
+    }
+  else if (!all_readable)
+    log_error("read of global %s", name);
 
+ skip_checks:
   if (count == 1)
     ins2(op_execute_global1, n, fn);
   else if (count == 2)
@@ -344,13 +397,15 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
 
 bool mwritable(ulong n, const char *name)
 {
-  if (all_writable || in_glist(n, writable, 1))
+  if (all_writable || in_glist(n, writable, true))
     {
       struct string *mod;
       if (module_vstatus(n, &mod) != var_write)
         module_vset(n, var_write, NULL);
       return true;
     }
+  if (GMUTABLE(n))
+    return true;
   log_error("write of global %s", name);
   return false;
 }
@@ -367,8 +422,8 @@ void massign(ulong n, const char *name, fncode fn)
   if (status == var_module)
     if (mod == this_module && fntoplevel(fn))
       {
-	if (!in_glist(n, definable, 1))
-	  assert(0);
+	if (!in_glist(n, definable, true))
+          abort();
 
 	/* defined here */
 	ins2(op_define, n, fn);

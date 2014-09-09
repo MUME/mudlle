@@ -162,7 +162,7 @@ int module_require(const char *name)
   return status;
 }
 
-int module_vstatus(long n, struct string **name)
+enum vstatus module_vstatus(long n, struct string **name)
 /* Returns: status of global variable n:
      var_normal: normal global variable, no writes
      var_write: global variable which is written
@@ -181,17 +181,17 @@ int module_vstatus(long n, struct string **name)
   return var_module;
 }
 
-int module_vset(long n, int status, struct string *name)
+bool module_vset(long n, enum vstatus status, struct string *name)
 /* Effects: Sets status of global variable n to status.
      name is the module name for status var_module
    Returns: true if successful, false if the change is impossible
-     (i.e., status was already var_module or var_system_write)
+     (i.e., status was already var_module or var_system_{mutable,write})
 */
 {
-  assert(status >= 0 && status <= var_system_write);
+  assert(status >= 0 && status <= var_system_mutable);
   assert((name != NULL) == (status == var_module));
 
-  if (GCONSTANT(n))
+  if (GCONSTANT(n) || mvars->data[n] == makeint(var_system_mutable))
     return false;
 
   if (status == var_module)

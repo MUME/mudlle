@@ -46,11 +46,12 @@ static void vlog_message(const char *fname, const char *nname, int line,
       if (line > 0)
         sb_printf(&sb, "%d:", line);
       sb_addc(&sb, ' ');
-      if (use_fname && nname != NULL && strcmp(nname, fname) != 0)
-        sb_printf(&sb, "[%s] ", nname);
     }
   if (is_warning)
     sb_addstr(&sb, "warning: ");
+  if (!use_nicename && fname != NULL && nname != NULL
+      && strcmp(nname, fname) != 0)
+    sb_printf(&sb, "[%s] ", nname);
   sb_vprintf(&sb, msg, va);
   if (mudout) pflush(mudout);
   pprintf(muderr, "%s\n", sb_str(&sb));
@@ -179,12 +180,13 @@ char *xstrdup(const char *s)
 }
 #endif
 
-void *reverse_list_internal(void *l)
+/* ofs is the offset to the 'next' field */
+void *reverse_list_internal(void *l, size_t ofs)
 {
   void *prev = NULL;
   while (l != NULL)
     {
-      void **p = l;
+      void **p = (void *)((char *)l + ofs);
       void *next = *p;
       *p = prev;
       prev = l;

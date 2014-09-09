@@ -43,7 +43,7 @@ dcons! = fn "`x `d1 -> `d2. Inserts `x in front of `d1 and returns new cell `d2"
       ]
   ];
 
-dremove! = fn "`d1 `d2 -> `d3. Removes `d1 from list with head `d2. Returns new head `d3" (vector del, vector head)
+dremove! = {vector,null} fn "`d1 `d2 -> `d3. Removes `d1 from list with head `d2. Returns new head `d3" (vector del, vector head)
   if (del == head)
     if (del[1] == head) // last element!
       null
@@ -79,13 +79,13 @@ dmerge! = fn "`d1 `d2 -> `d3. List `d1 is inserted in front of list `d2. Returns
       d1
     ];
 
-dnext = fn "`d1 -> `d2. Returns element after `d1" (vector d) d[1];
-dsnext = fn "`d1 `d2 -> `d3. Returns element after `d1 or null if at end of list. `d2 is list head" (vector d1, vector d2) if (d1[1] == d2) null else d1[1];
-dprev = fn "`d1 -> `d2. Returns element before `d1" (vector d) d[2];
-dsprev = fn "`d1 `d2 -> `d3. Returns element before `d1 or null if at beginning of list. `d2 is list head" (vector d1, vector d2)
+dnext = vector fn "`d1 -> `d2. Returns element after `d1" (vector d) d[1];
+dsnext = {null,vector} fn "`d1 `d2 -> `d3. Returns element after `d1 or null if at end of list. `d2 is list head" (vector d1, vector d2) if (d1[1] == d2) null else d1[1];
+dprev = vector fn "`d1 -> `d2. Returns element before `d1" (vector d) d[2];
+dsprev = {null,vector} fn "`d1 `d2 -> `d3. Returns element before `d1 or null if at beginning of list. `d2 is list head" (vector d1, vector d2)
   if (d1[2] == d2) null else d1[2];
 dget = fn "`d -> `x. Returns contents of `d" (vector d) d[0];
-dset! = fn "`d `x -> . Sets contents of `d to `x" (vector d, x) d[0] = x;
+dset! = fn "`d `x -> `x. Sets contents of `d to `x" (vector d, x) d[0] = x;
 
 dlength = fn "`d -> `n. Returns number of elements in list `d" ({vector,null} d)
   if (d == null) 0

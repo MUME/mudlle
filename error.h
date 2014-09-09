@@ -58,7 +58,7 @@ extern int suppress_extra_calltrace;
 
 void error_init(void);
 
-void early_runtime_error(runtime_errors error) NORETURN;
+void interpreted_early_runtime_error(runtime_errors error) NORETURN;
 /* Effects: Runtime error 'error' has occured. Dump the call_stack to
      mudout & throw back to the exception handler with SIGNAL_ERROR
      and the error code in exception_value.
@@ -66,13 +66,14 @@ void early_runtime_error(runtime_errors error) NORETURN;
      function at the top of call_stack are still on the stack.
    Note: Never returns
 */
+void compiled_early_runtime_error(runtime_errors error, int nargs) NORETURN;
+/* As above, but there are nargs arguments on the native stack. */
 
 void runtime_error(runtime_errors error) NORETURN;
 /* Effects: Runtime error 'error' has occured in a primitive operation.
      Dump the call_stack (plus the primitive operation call) to
      mudout & throw back to the exception handler with SIGNAL_ERROR
      and the error code in exception_value.
-   Note: Never returns
 */
 
 struct primitive_ext;
@@ -82,6 +83,6 @@ void primitive_runtime_error(runtime_errors error,
 
 void runtime_warning(const char *msg);
 
-struct vector *get_mudlle_call_trace(void);
+struct vector *get_mudlle_call_trace(bool lines);
 
 #endif /* ERROR_H */

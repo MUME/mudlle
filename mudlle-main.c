@@ -21,6 +21,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #ifdef USE_READLINE
 #  include <readline/history.h>
@@ -49,25 +50,33 @@ int load_file(const char *fullname, const char *filename,
   if (f == NULL)
     runtime_error(error_bad_value);
 
+  struct reader_state rstate;
+  save_reader_state(&rstate);
   read_from_file(f, filename, nicename);
   value result;
   int ok = interpret(&result, seclev, reload);
   fclose(f);
+  restore_reader_state(&rstate);
 
   return ok;
 }
 
-static void execute(char *line)
+static void execute(const char *line, bool show_result)
 {
-  value result;
+  const char *const lines[] = { line, NULL };
+  struct reader_state rstate;
+  save_reader_state(&rstate);
+  read_from_strings(lines, NULL, NULL);
 
-  read_from_string(line, NULL, NULL);
-  if (interpret(&result, 1, true))
+  value result;
+  if (interpret(&result, 1, true) && show_result)
     {
       printf("Result: ");
-      output_value(mudout, prt_print, false, result);
+      output_value(mudout, prt_write, false, result);
       printf("\n");
     }
+
+  restore_reader_state(&rstate);
 }
 
 #ifdef USE_READLINE
@@ -75,45 +84,68 @@ static void history_exit(void)
 {
   write_history(HISTORY_FILE);
 }
-#endif
+
+static bool ends_in_newline(const char *s)
+{
+  size_t l = strlen(s);
+  return l > 0 && s[l - 1] == '\n';
+}
+#endif  /* USE_READLINE */
 
 
 int main(int argc, char **argv)
 {
-  struct session_context context;
-  struct oport *out;
-
-#ifdef USE_READLINE
-  using_history();
-  read_history(HISTORY_FILE);
-  rl_bind_key('\t', rl_insert);
-#endif
-
   mudlle_init();
 
   define_string_vector("argv", (const char *const *)argv, argc);
 
 #ifdef USE_READLINE
-  if (atexit(history_exit))
-    perror("atexit(history_exit)");
+  bool is_tty = isatty(0);
+  if (is_tty)
+    {
+      using_history();
+      read_history(HISTORY_FILE);
+      rl_bind_key('\t', rl_insert);
+
+      if (atexit(history_exit))
+        perror("atexit(history_exit)");
+    }
 #endif
 
-  out = make_file_oport(stdout);
+  struct oport *out = make_file_oport(stdout);
+  struct session_context context;
   session_start(&context,
-                &(const struct session_info){ .mout = out, .merr = out });
+                &(const struct session_info){
+                  .mout        = out,
+                  .merr        = out,
+                  .maxseclevel = MAX_SECLEVEL });
   for (;;)
     {
 #ifdef USE_READLINE
-      char *line = readline((char *)"mudlle> ");
+      char *alloc = NULL;
+      const char *line;
+      if (is_tty)
+	line = alloc = readline("mudlle> ");
+      else
+	{
+	  static char buf[1024];
+	  line = fgets(buf, sizeof buf, stdin);
+          if (line && !ends_in_newline(line))
+            {
+              fputs("Input line too long.\n", stderr);
+              exit(EXIT_FAILURE);
+            }
+	}
 
       if (!line)
 	break;
       if (*line)
         {
-	  add_history(line);
-	  execute(line);
+	  if (is_tty)
+	    add_history(line);
+	  execute(line, is_tty);
         }
-      free(line);
+      free(alloc);
 #else
       char line[512];
 
@@ -122,7 +154,7 @@ int main(int argc, char **argv)
       if (!fgets(line, sizeof line, stdin))
 	break;
       if (*line)
-        execute(line);
+        execute(line, true);
 #endif
     }
   session_end();

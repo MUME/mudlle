@@ -352,9 +352,10 @@
 
 library inference // type inference
 requires graph, dlist, compiler, vars, flow, optimise, ins3, sequences, misc
-defines mc:infer_types, mc:show_type_info, mc:constant?, mc:global_call_count
+defines mc:infer_types, mc:show_type_info, mc:constant?, mc:global_call_count,
+  mc:itypeset_string
 reads mc:verbose, mc:this_module
-writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
+writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function, mc:lineno
 [
   | op_types, branch_types, typesets, make_condition0, make_condition1,
     make_condition2, instantiate_constraint, build_iconstraint, new_typesets,
@@ -362,11 +363,11 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
     typeset_union!, extract_types, show_typesets, showset, show_constraints,
     show_constraint, show_c, show_condition, generate_branch_constraints,
     simple_itypes, infer_typeof, infer_branch, infer_type_trap,
-    describe_itype, describe_tsig, describe_typeset, concat_comma,
-    tsig_has_args?, tsig_minargs, tsig_argc, verify_call_types,
+    describe_tsig, describe_typeset, concat_comma,
+    tsig_has_args?, tsig_argc, verify_call_types,
     typesets_from_strings,
-    verify_compute_types, type_typesets, known_typesets,
-    handle_apply, itypeset_from_typeset, make_ftypes_from_cargs |
+    verify_compute_types, type_typesets,
+    return_itype, handle_apply, make_ftypes_from_cargs |
 
   op_types =          // indexed by mc:b_xxx
     '[()
@@ -384,12 +385,12 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       ("nn.n")        // >>
       ("nn.n" "ss.s") // +
       ("nn.n")        // -
-      ("nn.n")        // *
-      ("nn.n")        // /
-      ("nn.n")        // %
-      ("n.n")         // -
+      ("zn.z" "nz.z" "ZZ.n")               // *
+      ("zn.z" "nz." "ZZ.n")                // /
+      ("zn.z" "nz." "nZ.n")                // %
+      ("Z.Z" "z.z")   // -
       ("x.n")         // not
-      ("n.n")         // ~
+      ("z.Z" "Z.n")   // ~
       ()              // if-else
       ()              // if
       ()              // while
@@ -408,6 +409,9 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       (".n")          // max_loop_count
       ("y.s")         // symbol_name
       ("y.x")         // symbol_get
+      ("x*.v")        // vector
+      ("x*.v")        // sequence
+      ("xx.k")        // pcons
     ];
   assert(vlength(op_types) == mc:builtins);
 
@@ -426,70 +430,74 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       ("nn") // >=
       ("nn") // <=
       ("nn") // >
+      ("sn") // slength ==
+      ("sn") // slength !=
+      ("sn") // slength <
+      ("sn") // slength >=
+      ("sn") // slength <=
+      ("sn") // slength >
+      ("vn") // vlength ==
+      ("vn") // vlength !=
+      ("vn") // vlength <
+      ("vn") // vlength >=
+      ("vn") // vlength <=
+      ("vn") // vlength >
      ];
-  assert(vlength(branch_types) == mc:branch_gt + 1);
+  assert(vlength(branch_types) == mc:branch_equal);
+
+  | itype_set_signatures, itype_type_signatures |
+  itype_set_signatures = '[
+    (?n . ,itype_integer)
+    (?l . ,itype_list)
+    (?D . ,(itype_integer | itype_bigint | itype_float))
+    (?B . ,(itype_integer | itype_bigint))
+    (?S . ,(itype_integer | itype_string))
+    (?x . ,itype_any)
+  ];
+
+  itype_type_signatures = "fZsvuytkbdroz";
+  assert(slength(itype_type_signatures) == vlength(itype_names));
 
   typesets = make_vector(128); // index from character to typeset
-  vector_fill!(typesets, itype_any); // play safe...
-  typesets[?f] = itype_function;
-  typesets[?n] = itype_integer;
-  typesets[?s] = itype_string;
-  typesets[?v] = itype_vector;
-  typesets[?l] = itype_pair | itype_null;
-  typesets[?u] = itype_null;
-  typesets[?k] = itype_pair;
-  typesets[?t] = itype_table;
-  typesets[?y] = itype_symbol;
-  typesets[?x] = itype_any;
-  typesets[?d] = itype_float;
-  typesets[?D] = itype_integer | itype_bigint | itype_float;
-  typesets[?b] = itype_bigint;
-  typesets[?B] = itype_integer | itype_bigint;
-  typesets[?r] = itype_reference;
-  typesets[?o] = itype_other;
-  typesets[?S] = itype_string | itype_integer;
+  vforeach(fn (s) typesets[car(s)] = cdr(s), itype_set_signatures);
+  sfori(fn (i) typesets[itype_type_signatures[i]] = (1 << i),
+        itype_type_signatures);
   protect(typesets);
 
-  simple_itypes = sequence
-    (itype_integer             . type_integer,
-     itype_string              . type_string,
-     itype_vector              . type_vector,
-     itype_pair                . type_pair,
-     itype_symbol              . type_symbol,
-     itype_table               . type_table,
-     itype_null                . type_null,
-     itype_float               . type_float,
-     itype_bigint              . type_bigint,
-     itype_none                . stype_none,
-     itype_function            . stype_function,
-     (itype_pair | itype_null) . stype_list);
+  simple_itypes =
+    '[ (,itype_integer  . ,type_integer)
+       (,itype_zero     . ,type_integer)
+       (,itype_non_zero . ,type_integer)
+       (,itype_string   . ,type_string)
+       (,itype_vector   . ,type_vector)
+       (,itype_pair     . ,type_pair)
+       (,itype_symbol   . ,type_symbol)
+       (,itype_table    . ,type_table)
+       (,itype_null     . ,type_null)
+       (,itype_float    . ,type_float)
+       (,itype_bigint   . ,type_bigint) ];
 
-  type_typesets = make_string(last_synthetic_type);
-  sfill!(type_typesets, ?x);
+  type_typesets = make_vector(last_synthetic_type);
+  vfill!(type_typesets, "x");
   vforeach(fn (t) type_typesets[car(t)] = cdr(t),
-           sequence(type_integer   . ?n,
-                    type_string    . ?s,
-                    type_vector    . ?v,
-                    type_pair      . ?k,
-                    type_null      . ?u,
-                    type_symbol    . ?y,
-                    type_table     . ?t,
-                    type_float     . ?d,
-                    type_bigint    . ?b,
-                    stype_function . ?f,
-                    stype_list     . ?l));
+           '[(,type_integer   . "n")
+             (,type_string    . "s")
+             (,type_vector    . "v")
+             (,type_pair      . "k")
+             (,type_null      . "u")
+             (,type_symbol    . "y")
+             (,type_table     . "t")
+             (,type_float     . "d")
+             (,type_bigint    . "b")
+             (,stype_function . "f")
+             (,stype_list     . "l") ]);
   for (|t| t = 0; t < last_type; ++t)
     match (mc:itypemap[t])
       [
-        ,itype_other => type_typesets[t] = ?o;
-        ,itype_function => type_typesets[t] = ?f;
+        ,itype_other => type_typesets[t] = "o";
+        ,itype_function => type_typesets[t] = "f";
       ];
   rprotect(type_typesets);
-
-  known_typesets = sequence(
-    ?B . ((1 << type_integer) | (1 << type_bigint)),
-    ?D . ((1 << type_integer) | (1 << type_bigint) | (1 << type_float)),
-    ?S . ((1 << type_integer) | (1 << type_string)));
 
   | readonly_itypes, immutable_itypes |
   readonly_itypes = (itype_integer | itype_null | itype_float
@@ -497,19 +505,6 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
   immutable_itypes = readonly_itypes | itype_string;
 
   mc:global_call_count = make_table();
-
-  itypeset_from_typeset = fn (ts)
-    [
-      | is, types |
-      types = mc:types_from_typeset(ts);
-      is = 0;
-      loop
-        [
-          if (types == null) exit is;
-          is |= mc:itypemap[car(types)];
-          types = cdr(types)
-        ]
-    ];
 
   concat_comma = fn (l, last)
     if (l == null)
@@ -534,7 +529,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
   | itype_star |
   itype_star = itype_any + 1; // signals Kleene closure for this argument
 
-  describe_itype = fn (itype, simple?)
+  mc:itypeset_string = fn "`n `b -> `s. Returns a description of itypeset `n. If `b is false, separate options with \"|\"; otherwise comma-separate them." (itype, simple?)
     [
       itype &= ~itype_star;
       assert(itype >= 0 && itype <= itype_any);
@@ -542,11 +537,23 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
         "any type"
       else if (itype == 0)
         "no type"
-      else if (itype == itype_pair | itype_null)
-        "list"
+      else if (itype == itype_any & ~itype_zero)
+        "not false"
       else
         [
           | l, i |
+
+          if (itype & itype_integer == itype_integer)
+            [
+              l = "integer" . l;
+              itype &= ~itype_integer;
+            ];
+          if (itype & itype_list == itype_list)
+            [
+              l = "list" . l;
+              itype &= ~itype_list;
+            ];
+
           i = 0;
           while (itype)
             [
@@ -572,7 +579,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
           | star? |
           star? = sig[i] & itype_star;
           | d |
-          d = describe_itype(sig[i], false);
+          d = mc:itypeset_string(sig[i], false);
           if (star?)
             d += "...";
           result = d . result;
@@ -595,21 +602,29 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
     // Returns: false if v is not a constant
     //   an appropriate itype_xxx otherwise
     [
-      | vclass |
+      | vclass, val |
 
       vclass = v[mc:v_class];
-      if (vclass == mc:v_constant)
-	mc:itypemap[typeof(v[mc:v_kvalue])]
+      val = if (vclass == mc:v_constant)
+	v[mc:v_kvalue]
       else if (vclass == mc:v_global_constant)
-	mc:itypemap[typeof(global_value(v[mc:v_goffset]))]
+	global_value(v[mc:v_goffset])
+      else if (vclass == mc:v_function)
+        exit<function> itype_function
       else
-	false
+	exit<function> false;
+      if (!val)
+        itype_zero
+      else if (integer?(val))
+        itype_non_zero
+      else
+        mc:itypemap[typeof(val)]
     ];
 
   make_condition0 = fn (constant) // makes "constant" condition
     constant . null;
 
-  make_condition1 = fn (constant, v) // makes condition v /\ constant
+  make_condition1 = fn (int constant, v) // makes condition v /\ constant
     [
       | type |
 
@@ -711,13 +726,16 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       sequence(conditions, dvar, consequence)
     ];
 
+  | icvars |
   build_iconstraint = fn (il, cl)
     // Returns: A constraints list for instruction il, given its
     //   constraint list (extracts all vars referred to)
     [
-      | vars, addvar, scl |
+      | addvar, scl |
 
-      addvar = fn (v) if (!memq(v, vars)) vars = v . vars;
+      addvar = fn (v) set_bit!(icvars, v);
+
+      bclear(icvars);
 
       scl = cl;
       while (scl != null)
@@ -761,56 +779,80 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 	  scl = cdr(scl);
 	];
 
-      sequence(il, vars, cl)
+      sequence(il, breduce(cons, null, icvars), cl)
     ];
 
-  handle_apply = fn (args, types, dest)
+  return_itype = fn (fvar)
     [
-      | f |
-      assert(equal?(types, '("fv.x")));
-      f = car(args);
-      if (f[mc:v_class] == mc:v_global_constant)
-	[
-	  | gval |
-	  gval = global_value(f[mc:v_goffset]);
-	  if (primitive?(gval)
-	      || secure?(gval)
-	      || varargs?(gval))
-	    [
-	      | ftypes |
-	      ftypes = primitive_type(gval);
-	      if (ftypes != null)
-		exit<function>
-		  lmap(fn (sig) [
-		    if (cdigit?(sig[-1]))
-		      sig = "fv.x"
-		    else if (sig[-1] == ?.)
-		      sig = "fv."
-		    else
-		      sig = "fv." + string_tail(sig, -1);
-		    instantiate_constraint(sig, args, dest)
-		  ], ftypes);
-	    ];
-	];
-
-      lmap(fn (sig) instantiate_constraint(sig, args, dest),
-	   types)
+      | fclass, prim |
+      fclass = if (mc:my_protected_global?(fvar))
+        mc:v_global_constant
+      else
+        fvar[mc:v_class];
+      if (fclass == mc:v_global_constant
+          && any_primitive?(prim = global_value(fvar[mc:v_goffset])))
+        lreduce(fn (sig, itype) [
+          | c |
+          c = sig[-1];
+          if (c == ?.)
+            exit<function> itype;
+          if (cdigit?(c))
+            exit<function> itype_any;
+          itype | typesets[c]
+        ], itype_none, primitive_type(prim))
+      else
+        itype_any
     ];
 
-  | make_closure_condition |
+  handle_apply = fn (prim, args, types, dest, cfunc)
+    [
+      | fidx, rtypes |
+      @[_ fidx _] = vexists?(fn (x) x[0] == prim, mc:apply_functions);
+
+      rtypes = match (cfunc)
+        [
+          (_ . v) && vector?(v) => v[mc:c_freturn_itype];
+          _ => return_itype(nth(fidx + 1, args))
+        ];
+
+      | l |
+      l = lmap(fn (sig) instantiate_constraint(sig, args, dest), types);
+      if (rtypes != itype_any)
+        // rewrite consequences to only include rtypes
+        lmap!(fn (c) [
+          | condition, dvar, consequence |
+          @[condition dvar consequence] = c;
+          sequence(condition, dvar,
+                   lmap(fn (is) is & rtypes, consequence))
+        ], l)
+      else
+        l
+    ];
+
+  | make_closure_condition, get_closure_return_itype |
+
+  get_closure_return_itype = fn (closure c)
+    [
+      | n |
+      n = closure_return_itype(c);
+      if (n < 0)
+        mc:itypeset_from_typeset(closure_return_typeset(c))
+      else
+        n
+    ];
+
   make_closure_condition = fn (list args, int ndest, {vector,null} targs, int tret)
     [
-      | t, conditions |
+      | conditions |
       if (vector?(targs)
           && vlength(targs) == llength(args))
         for (|i, a| [ i = 0; a = args ];
              a != null;
              [ ++i; a = cdr(a) ])
-          conditions = make_condition1(itypeset_from_typeset(targs[i]),
+          conditions = make_condition1(mc:itypeset_from_typeset(targs[i]),
                                        car(a))
             . conditions;
-      t = itypeset_from_typeset(tret);
-      sequence(conditions, ndest, make_condition0(t)) . null
+      sequence(conditions, ndest, make_condition0(tret)) . null
     ];
 
   generate_constraints = fn (il, ambiguous, constraints)
@@ -890,28 +932,34 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
           else
             f[mc:v_class];
 
+          tfn = ins[mc:i_cfunction];
+
 	  // Call to known function ?
-          if (vector?(tfn = ins[mc:i_cfunction]))
+          if (vector?(tfn))
             [
+              | atypes |
+              atypes = if (tfn[mc:c_fvarargs])
+                null
+              else
+                list_to_vector(tfn[mc:c_fargtypesets]);
+
               // A locally defined function
               new = make_closure_condition(
-                args, ndest,
-                if (tfn[mc:c_fvarargs]) null
-                else list_to_vector(tfn[mc:c_fargtypesets]),
-                tfn[mc:c_freturn_typeset]);
+                args, ndest, atypes,
+                tfn[mc:c_freturn_itype]);
               if (tfn[mc:c_fnoescape])
                 escapes = false;
             ]
           else if (fclass == mc:v_global_constant &&
-	      (primitive?(prim = global_value(f[mc:v_goffset]))
-               || secure?(prim)) &&
-              primitive_nargs(prim) == llength(args))
+                   (primitive?(prim = global_value(f[mc:v_goffset]))
+                    || secure?(prim)) &&
+                   primitive_nargs(prim) == llength(args))
             [
               | types |
               if ((types = primitive_type(prim)) != null)
 		[
-		  if (prim == apply)
-		    new = handle_apply(args, types, dest)
+		  if (primitive_flags(prim) & OP_APPLY)
+                    new = handle_apply(prim, args, types, dest, tfn)
 		  else
 		    new = lmap(fn (sig) instantiate_constraint(sig, args, dest),
 			       types)
@@ -953,7 +1001,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
               new = make_closure_condition(
                 args, ndest,
                 closure_arguments(clos),
-                closure_return_typeset(clos));
+                get_closure_return_itype(clos));
 
               if (closure_flags(clos) & clf_noescape)
                 escapes = false;
@@ -979,7 +1027,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 	      args = ins[mc:i_targs];
 	      dvar = car(args);
               dest = dvar[mc:v_number];
-              itype = mc:itypemap[mc:var_value(cadr(args))];
+              itype = mc:itypemap[mc:var_const_value(cadr(args))];
 	      new = sequence (make_condition1(itype, dvar) . null,
                               dest, make_condition0(itype))
 	        . null;
@@ -1038,6 +1086,20 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
           type = mc:itypemap[btype];
           itype = mc:itypemap_inverse[btype];
 	]
+      else if (op == mc:branch_any_prim || op == mc:branch_not_prim)
+        [
+	  var = car(lastins[mc:i_bargs]);
+          reversed = (op == mc:branch_not_prim);
+          type = itype_function;
+          itype = itype_any;
+        ]
+      else if (op == mc:branch_true || op == mc:branch_false)
+        [
+	  var = car(lastins[mc:i_bargs]);
+          reversed = (op == mc:branch_true);
+          type = itype_zero;
+          itype = ~itype_zero;
+        ]
       else if ((op == mc:branch_eq || op == mc:branch_ne
                 || op == mc:branch_equal || op == mc:branch_nequal))
 	[
@@ -1217,22 +1279,23 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
         [
           if (!(type1 & type2))
             mc:fold_branch(il, bop == mc:branch_ne || bop == mc:branch_nequal)
-          else if (type1 == itype_null && type2 == itype_null)
+          else if ((type1 == itype_null || type1 == itype_zero)
+                   && type1 == type2)
             mc:fold_branch(il, bop == mc:branch_eq || bop == mc:branch_equal)
         ]
       else if (bop == mc:branch_true || bop == mc:branch_false)
         [
-          if (~type1 & itype_integer)
+          if (~type1 & itype_zero)
             mc:fold_branch(il, bop == mc:branch_true)
         ]
       else if (bop == mc:branch_or || bop == mc:branch_nor)
         [
-          if (~type1 & itype_integer || ~type2 & itype_integer)
+          if (~type1 & itype_zero || ~type2 & itype_zero)
             mc:fold_branch(il, bop == mc:branch_or)
         ]
       else if (bop == mc:branch_and || bop == mc:branch_nand)
         [
-          if (~type1 & itype_integer && ~type2 & itype_integer)
+          if (~type1 & itype_zero && ~type2 & itype_zero)
             mc:fold_branch(il, bop == mc:branch_and)
         ]
       else if (bop == mc:branch_immutable || bop == mc:branch_mutable)
@@ -1252,7 +1315,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       | simple, atype |
       atype = car(ins[mc:i_atypes]);
       simple = vexists?(fn (s) car(s) == atype, simple_itypes);
-      if (simple && cdr(simple) < last_type)
+      if (simple)
         [
           ins[mc:i_aop] = mc:b_assign;
           ins[mc:i_aargs] = mc:var_make_constant(cdr(simple)) . null;
@@ -1272,17 +1335,6 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
         -l
       else
         l
-    ];
-
-  // calculate the minimum number of arguments `sig requires
-  tsig_minargs = fn (vector sig)
-    [
-      | n |
-      n = tsig_argc(sig);
-      if (n < 0)
-        -(n + 1)
-      else
-        n
     ];
 
   // true if `sig allows for `argc arguments
@@ -1357,7 +1409,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 
   verify_call_types = fn (ins, typeset)
     [
-      | f, args, nargs, fclass, fval, var_type, name |
+      | f, ftype, args, atypes, nargs, fclass, fval, var_type, name |
 
       var_type = fn (v)
         [
@@ -1367,9 +1419,17 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
         ];
 
       @(f . args) = ins[mc:i_cargs];
+      ins[mc:i_ctypes] = atypes = lmap(var_type, ins[mc:i_cargs]);
+      @(ftype . atypes) = atypes;
       nargs = llength(args);
 
       fclass = f[mc:v_class];
+
+      if (~ftype & itype_function)
+        [
+          mc:warning("call of non-function (%s)", mc:itypeset_string(ftype, true));
+          exit<function> null;
+        ];
 
       if (vector?(fval = ins[mc:i_cfunction]))
         name = fn() mc:fname(fval)
@@ -1436,7 +1496,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
             ];
         ];
 
-      | atypes, ftypes, badarg, desc, bad_nargs |
+      | ftypes, badarg, desc, bad_nargs |
       bad_nargs = fn (expect)
         mc:warning("bad number of arguments (%s) in call to %s %s, expected %s",
                    nargs,
@@ -1538,8 +1598,6 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
             ]
         ];
 
-      atypes = lmap(var_type, args);
-
       if (pair?(ftypes) && !lexists?(fn (type) [
         | ai, ti, a, targc |
 
@@ -1571,15 +1629,15 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       ], ftypes))
         if (cdr(ftypes) == null && pair?(badarg))
           mc:warning("bad type (%s) in argument %s of call to %s %s, expected %s",
-                     describe_itype(nth(car(badarg) + 1, atypes), true),
+                     mc:itypeset_string(nth(car(badarg) + 1, atypes), true),
                      car(badarg) + 1,
                      desc,
                      name(),
-                     describe_itype(car(ftypes)[cdr(badarg)], true))
+                     mc:itypeset_string(car(ftypes)[cdr(badarg)], true))
         else
           mc:warning("bad type%s (%s) in call to %s %s, expected %s",
                      if (nargs == 1) "" else "s",
-                     concat_comma(lmap(fn (t) describe_itype(t, false), atypes), ", "),
+                     concat_comma(lmap(fn (t) mc:itypeset_string(t, false), atypes), ", "),
                      desc,
                      name(),
                      concat_comma(lmap(describe_tsig, ftypes), " or "));
@@ -1599,24 +1657,28 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
         loop
           [
             if (a == null) exit true;
-            if (car(a) & typesets[otype[i]] == 0)
+            | ot |
+            ot = otype[i];
+            if (ot == ?*)
+              ot = otype[--i];
+            if (car(a) & typesets[ot] == 0)
               [
                 badarg = i;
                 exit false;
               ];
-            a = cdr(a); ++i;
+            a = cdr(a); ++i
           ];
       ], otypes))
         [
           if (cdr(otypes) == null)
             mc:warning("bad type (%s) in argument %s to operator %s, expected %s",
-                       describe_itype(nth(badarg + 1, atypes), true),
+                       mc:itypeset_string(nth(badarg + 1, atypes), true),
                        badarg + 1,
                        mc:builtin_names[ins[mc:i_aop]],
-                       describe_itype(typesets[car(otypes)[badarg]], true))
+                       mc:itypeset_string(typesets[car(otypes)[badarg]], true))
           else
             mc:warning("bad types (%s) in arguments to operator %s, expected %s",
-                       concat_comma(lmap(fn (t) describe_itype(t, false), atypes), ", "),
+                       concat_comma(lmap(fn (t) mc:itypeset_string(t, false), atypes), ", "),
                        mc:builtin_names[ins[mc:i_aop]],
                        concat_comma(lmap(describe_tsig,
                                          typesets_from_strings(otypes)),
@@ -1650,7 +1712,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       written_vars = entry[mc:f_dvars];
       if (escapes)
         written_vars = bunion(written_vars,
-                              entry[mc:f_ambiguous][mc:flow_gen]);
+                              entry[mc:f_ambiguous_w][mc:flow_gen]);
 
       for (|argn, atset, args| [ argn = 1;
                                  atset = ifn[mc:c_fargtypesets];
@@ -1778,8 +1840,8 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
                                  type_names[t]);
                   ];
 
-              if (ortypes != nrtypes)
-                ifn[mc:c_freturn_typeset] = nrtypes;
+              ifn[mc:c_freturn_typeset] = nrtypes;
+              ifn[mc:c_freturn_itype] = rtype;
             ]
           else if (class == mc:i_call)
             verify_call_types(ins, typeset)
@@ -1822,10 +1884,10 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 	  display("Type inference results:\n");
 	  dformat("%s args, of which %s constant, %s fully inferred, %s partially.\n", nargs, ncstargs, nfull, npartial);
 	];
-      tnargs = tnargs + nargs;
-      tncstargs = tncstargs + ncstargs;
-      tnfull = tnfull + nfull;
-      tnpartial = tnpartial + npartial;
+      mc:tnargs += nargs;
+      mc:tncstargs += ncstargs;
+      mc:tnfull += nfull;
+      mc:tnpartial += npartial;
     ];
 
   mc:infer_types = fn (ifn)
@@ -1833,7 +1895,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
     // Modifies: ifn
     // Effects: infers types for the variables of ifn
     [
-      | fg, entry, change, globals, icount, merge_block |
+      | fg, entry, change, globals, icount, merge_block, all_globals |
 
       mc:this_function = ifn;
 
@@ -1842,9 +1904,13 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 	  dformat("Inferring %s\n", mc:fname(ifn));
 	];
       mc:recompute_vars(ifn, true);
-      mc:flow_ambiguous(ifn, mc:closure_write);
+      mc:flow_ambiguous(ifn, mc:f_ambiguous_w);
+      mc:flow_live(ifn);
+
+      icvars = mc:new_varset(ifn);
 
       fg = ifn[mc:c_fvalue];
+      all_globals = mc:set_vars!(mc:new_varset(ifn), ifn[mc:c_fglobals]);
       // Defined globals do not change across function calls
       globals = mc:set_vars!(mc:new_varset(ifn), ifn[mc:c_fclosure]);
       mc:set_vars!(globals, lfilter(fn (v) v[mc:v_class] != mc:v_global_define,
@@ -1858,7 +1924,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 	   block = graph_node_get(n);
 	   block[mc:f_types] = vector
 	     (lreverse!(mc:scan_ambiguous(generate_constraints, null,
-					  block, globals, mc:closure_write)),
+					  block, globals, mc:f_ambiguous_w)),
 	      // use kill slot for per-edge constraint
 	      generate_branch_constraints(block),
 	      new_typesets(ifn),
@@ -1924,6 +1990,12 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 	  else new_out = lreduce(apply_iconstraint, new_in, types[mc:flow_gen]);
 	  //display("-> "); show_typesets(new_out); newline();
 	  assert(new_out != types[mc:flow_out]);
+          | live_out |
+          live_out = node[mc:f_live][mc:flow_out];
+          for (|i| i = vlength(new_out); --i >= 0; )
+            if (!bit_set?(all_globals, i) && !bit_set?(live_out, i))
+              // ignore output type of dead variables
+              new_out[i] = itype_any;
 	  if (!typeset_eq?(new_out, types[mc:flow_out]))
 	    [
 	      types[mc:flow_out] = new_out;
@@ -1949,6 +2021,7 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
 
       mc:clear_dataflow(ifn);
 
+      icvars = null;
       mc:this_function = null;
     ];
 
@@ -1962,28 +2035,34 @@ writes tnargs, tncstargs, tnfull, tnpartial, mc:this_function, mc:lineno
       ];
 
   show_typesets = fn (typeset)
-    for (|v| v = 1; v < vector_length(typeset); ++v) dformat(" %s(%s)", v, showset(typeset[v]));
+    for (|v| v = 1; v < vector_length(typeset); ++v)
+      dformat(" %s(%s)", v, showset(typeset[v]));
 
   showset = fn (tset)
     if (tset == itype_none) "none"
     else if (tset == itype_any) "any"
     else
       [
-	| s |
-	s = "";
-	if (tset & itype_function)  s += "f";
-	if (tset & itype_integer)   s += "n";
-	if (tset & itype_string)    s += "s";
-	if (tset & itype_vector)    s += "v";
-	if (tset & itype_null)      s += "u";
-	if (tset & itype_symbol)    s += "y";
-	if (tset & itype_table)     s += "t";
-	if (tset & itype_pair)      s += "k";
-	if (tset & itype_bigint)    s += "b";
-	if (tset & itype_float)     s += "f";
-	if (tset & itype_reference) s += "r";
-	if (tset & itype_other)     s += "o";
-	s
+        | op, i |
+        op = make_string_oport();
+        vforeach(fn (s) [
+          | is |
+          is = cdr(s);
+          if (tset & is == is)
+            [
+              pputc(op, car(s));
+              tset &= ~is;
+            ];
+        ], itype_set_signatures);
+        i = 0;
+        while (tset > 0)
+          [
+            if (tset & 1)
+              pputc(op, itype_type_signatures[i]);
+            ++i;
+            tset >>= 1;
+          ];
+        port_string(op);
       ];
 
   show_constraints = fn (constraints)

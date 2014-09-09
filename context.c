@@ -50,19 +50,35 @@ struct ccontext ccontext;
 
 uword internal_seclevel;
 bool seclevel_valid;
+value maxseclevel = makeint(MAX_SECLEVEL);
 
 long exception_signal;
 value exception_value;
 struct catch_context *exception_context;
 
 const struct session_info cold_session = {
-  .minlevel = 0
+  .minlevel    = 0,
+  .maxseclevel = MAX_SECLEVEL
 };
+
+value seclevel_to_maxseclevel(int seclev)
+{
+  if (seclev >= LEGACY_SECLEVEL)
+    return makeint(MAX_SECLEVEL);
+  return makeint(seclev);
+}
+
+uword get_effective_seclevel(void)
+{
+  uword seclev = get_seclevel();
+  long maxlev = intval(maxseclevel);
+  return seclev > maxlev ? maxlev : seclev;
+}
 
 int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
 {
   struct catch_context context;
-  int ok;
+  bool ok;
 
 #ifdef AMIGA
   context.old_activation_stack = activation_stack;
@@ -77,16 +93,17 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
   context.old_stack_depth = stack_depth();
   context.old_call_stack = call_stack;
   context.old_seclevel = internal_seclevel;
+  context.old_maxseclevel = maxseclevel;
 
   context._mjmpbuf = NULL;
 
   context.parent = catch_context;
   catch_context = &context;
 
+  check_allow_mudlle_call();
+
   if (nosigsetjmp(context.exception))
     {
-      int extra_depth;
-
 #ifdef AMIGA
       registers_valid = context.old_registers_valid;
       activation_stack = context.old_activation_stack;
@@ -102,9 +119,11 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
       call_stack = context.old_call_stack;
 
       /* Pop any extra stuff from stack */
-      extra_depth = stack_depth() - context.old_stack_depth;
+      int extra_depth = stack_depth() - context.old_stack_depth;
       assert(extra_depth >= 0);
       while (extra_depth--) stack_pop();
+
+      forbid_mudlle_calls = NULL;
 
       ok = false;
     }
@@ -116,7 +135,10 @@ int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
       assert(call_stack == context.old_call_stack);
     }
 
+  assert(forbid_mudlle_calls == NULL);
+
   set_seclevel(context.old_seclevel);
+  maxseclevel = context.old_maxseclevel;
 
   /* handle setjmp context */
   if (context._mjmpbuf)
@@ -194,7 +216,6 @@ void session_start(struct session_context *context,
 
   context->call_count = MAX_CALLS;
   context->recursion_count = MAX_RECURSION;
-  xcount = MAX_FAST_CALLS;
 
 #ifdef i386
   context->old_stack_limit = mudlle_stack_limit;
@@ -206,12 +227,33 @@ void session_start(struct session_context *context,
 
   context->old_minlevel = minlevel;
   minlevel = info->minlevel;
+
+  context->old_maxseclevel = intval(maxseclevel);
+  maxseclevel = makeint(info->maxseclevel);
+
   context->old_xcount = xcount;
+  xcount = MAX_FAST_CALLS;
+
+  assert(info->maxseclevel >= MIN_SECLEVEL
+         && info->maxseclevel <= MAX_SECLEVEL);
+
+  context->old_gcpro = gcpro;
+}
+
+void cold_session_start(struct session_context *context,
+                        uword maxseclev)
+{
+  struct session_info info = cold_session;
+  info.maxseclevel = maxseclev;
+  session_start(context, &info);
 }
 
 void session_end(void)
 {
+  assert(gcpro == session_context->old_gcpro);
+
   minlevel = session_context->old_minlevel;
+  maxseclevel = makeint(session_context->old_maxseclevel);
 #ifdef i386
   mudlle_stack_limit = session_context->old_stack_limit;
 #endif

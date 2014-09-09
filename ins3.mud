@@ -25,43 +25,51 @@ requires system, compiler, vars, misc, dlist, sequences
 defines
 
   mc:i_class, mc:i_compute, mc:i_aop, mc:i_adest, mc:i_aargs, mc:i_atypes,
+  mc:i_asizeinfo,
   mc:i_branch, mc:i_bop, mc:i_bdest, mc:i_bargs, mc:i_btypes, mc:i_trap,
   mc:i_top, mc:i_tdest, mc:i_targs, mc:i_ttypes, mc:i_memory, mc:i_mop,
   mc:i_marray, mc:i_mindex, mc:i_mscalar, mc:i_closure, mc:i_fdest,
-  mc:i_ffunction, mc:i_call, mc:i_cdest, mc:i_cargs, mc:i_cfunction,
+  mc:i_ffunction,
+  mc:i_call, mc:i_cdest, mc:i_cargs, mc:i_cfunction, mc:i_ctypes,
+  mc:i_csizeinfo,
   mc:i_return, mc:i_rvalue, mc:i_rtype, mc:i_vref, mc:i_vdest, mc:i_varg,
 
   mc:branch_never, mc:branch_always, mc:branch_true, mc:branch_false,
   mc:branch_or, mc:branch_nor, mc:branch_and, mc:branch_nand, mc:branch_eq,
   mc:branch_ne, mc:branch_lt, mc:branch_ge, mc:branch_le, mc:branch_gt,
-  mc:branch_equal, mc:branch_nequal,
+  mc:branch_slength, mc:branch_vlength, mc:branch_equal, mc:branch_nequal,
   mc:branch_immutable, mc:branch_mutable, mc:branch_readonly,
-  mc:branch_writable, mc:branch_type?, mc:branch_ntype?,
+  mc:branch_writable, mc:branch_any_prim, mc:branch_not_prim,
+  mc:branch_type?, mc:branch_ntype?,
 
   mc:trap_never, mc:trap_always, mc:trap_argcheck, mc:trap_loop, mc:trap_type,
-  mc:trap_global_write,
+  mc:trap_global_write, mc:trap_global_read,
 
   mc:memory_read, mc:memory_write, mc:memory_write_safe,
   mc:il_label, mc:il_ins, mc:il_node, mc:il_number, mc:il_lineno,
-  mc:il_defined_var, mc:il_arguments, mc:il_live_in, mc:il_live_out, mc:l_ins,
+  mc:il_defined_var, mc:il_arguments, mc:il_live_in, mc:il_live_out, mc:l_ilist,
   mc:l_alias, mc:l_number, mc:l_mclabel,
 
   mc:itype_typeset, mc:itypemap, mc:itypemap_inverse,
   itype_none, itype_function, itype_integer, itype_string, itype_vector,
   itype_null, itype_symbol, itype_table, itype_pair, itype_other, itype_any,
-  itype_float, itype_bigint, itype_reference, itype_names,
-  mc:typeset_any, mc:stype_typesets, mc:types_from_typeset,
+  itype_float, itype_bigint, itype_reference, itype_non_zero, itype_zero,
+  itype_list, itype_names,
+  mc:typeset_any, mc:stype_typesets,
+
+  mc:types_from_typeset, mc:itypeset_from_typeset,
 
   mc:new_fncode, mc:set_instruction, mc:get_instructions, mc:remove_branches,
   mc:remove_aliases, mc:remove_labels, mc:remove_var_aliases, mc:new_local,
-  mc:ins_return, mc:ins_trap, mc:ins_branch, mc:ins_compute, mc:ins_closure,
-  mc:ins_vref, mc:ins_call, mc:ins_memory, mc:ins_assign,
+  mc:ins_return, mc:ins_trap, mc:ins_branch, mc:make_compute_ins,
+  mc:ins_compute, mc:ins_closure, mc:ins_vref, mc:ins_call, mc:ins_memory,
+  mc:make_memory_ins, mc:ins_assign,
   mc:new_label, mc:ins_label, mc:set_label,
   mc:start_block, mc:end_block, mc:exit_block, mc:defined_var,
   mc:closure_vars, mc:arguments, mc:set_closure_vars!, mc:barguments,
   mc:replace_dest, mc:replace_args, mc:ins_list, mc:ins_list1, mc:print_ins,
   mc:slabel, mc:fncode_fn, mc:new_varset, mc:set_vars!, mc:call_escapes?,
-  mc:my_protected_global?
+  mc:my_protected_global?, mc:make_trap_ins
 
 reads mc:lineno, mc:this_module
 
@@ -86,7 +94,8 @@ mc:i_compute = 0; // no side effects in the actual op
  mc:i_aop = 1; // operator, determines # of args
  mc:i_adest = 2; // destination variable
  mc:i_aargs = 3; // arguments (list of var)
- mc:i_atypes = 4; // types of arguments (list of itype)
+ mc:i_atypes = 4; // types of arguments (list of itype) or false
+ mc:i_asizeinfo = 5; // known min. size of ref argument, or null
 
 mc:i_branch = 1;
  mc:i_bop = 1; // branch operator
@@ -114,6 +123,9 @@ mc:i_call = 4;
  mc:i_cdest = 1; // function result (var)
  mc:i_cargs = 2; // arguments, first is function (list of var)
  mc:i_cfunction = 3; // an mc:c_closure (for module locals), or null
+                     // x0 . x1 for apply-like function x0 calling x1
+ mc:i_ctypes = 4;    // itype_xxx bitfield list, or false
+ mc:i_csizeinfo = 5; // known min. size of set! argument, or null
 
 mc:i_return = 6;
  mc:i_rvalue = 1;
@@ -134,25 +146,33 @@ mc:branch_and        = 6;
 mc:branch_nand       = 7;
 mc:branch_eq         = 8;
 mc:branch_ne         = 9;
-mc:branch_lt         = 10;
-mc:branch_ge         = 11;
+mc:branch_lt         = 10;      // lt, ge, le, gt toggle meaning by
+mc:branch_ge         = 11;      // flipping the lowest bit
 mc:branch_le         = 12;
 mc:branch_gt         = 13;
-mc:branch_equal      = 14;
-mc:branch_nequal     = 15;
-mc:branch_immutable  = 16;
-mc:branch_mutable    = 17;
-mc:branch_readonly   = 18;
-mc:branch_writable   = 19;
-mc:branch_type?      = 20;
+mc:branch_slength    = 14;      // eq, ne, ...
+mc:branch_vlength    = 20;      // eq, ne, ...
+mc:branch_equal      = 26;
+mc:branch_nequal     = 27;
+mc:branch_immutable  = 28;
+mc:branch_mutable    = 29;
+mc:branch_readonly   = 30;
+mc:branch_writable   = 31;
+mc:branch_any_prim   = 32;
+mc:branch_not_prim   = 33;
+mc:branch_type?      = 34;
 mc:branch_ntype?     = mc:branch_type? + last_synthetic_type;
 
-| mc:branch_names |
-mc:branch_names = '[
+| branch_names |
+branch_names = '[
   "never" "always" "true" "false" "or" "nor" "and" "nand"
-  "==" "!=" "<" ">=" "<=" ">" "equal?" "!equal?" "immutable?"
-  "!immutable?" "readonly?" "!readonly?"];
-assert(vlength(mc:branch_names) == mc:branch_type?);
+  "==" "!=" "<" ">=" "<=" ">"
+  "slength ==" "slength !=" "slength <" "slength >=" "slength <=" "slength >"
+  "vlength ==" "vlength !=" "vlength <" "vlength >=" "vlength <=" "vlength >"
+  "equal?" "!equal?" "immutable?"
+  "!immutable?" "readonly?" "!readonly?" "any_primitive?"
+  "!any_primitive?"];
+assert(vlength(branch_names) == mc:branch_type?);
 
 // traps
 mc:trap_never         = 0; // simplifies constant folding
@@ -162,6 +182,11 @@ mc:trap_loop          = 3; // check for infinite loops (implicit at
                            // function entry)
 mc:trap_type          = 4; // arg1 is value, arg2 is type (constant)
 mc:trap_global_write  = 5; // check that arg1 is not readonly (arg1 is global)
+                           // and that the calling code is allowed to write it
+mc:trap_global_read   = 6; // check that reading global arg1 is allowed
+
+| trap_names |
+trap_names = '["never" 0 "argcheck" "loop" "!type" "!writable" "!readable"];
 
 // memory ops
 mc:memory_read = 1;
@@ -184,7 +209,7 @@ mc:il_live_out     = 6;
 
 // labels:
 
-mc:l_ins      = 0;      // instruction pointed to
+mc:l_ilist    = 0;      // instruction list pointed to
 mc:l_alias    = 1;      // we are an alias to this label
 mc:l_number   = 2;      // unique number (for display)
 mc:l_mclabel  = 3;      // corresponding machine code label
@@ -192,7 +217,7 @@ mc:l_mclabel  = 3;      // corresponding machine code label
 itype_none      = 0;	// no type
 
 itype_function  = 1;
-itype_integer   = 2;
+itype_non_zero  = 2;
 itype_string    = 4;
 itype_vector    = 8;
 itype_null      = 16;
@@ -203,32 +228,39 @@ itype_bigint    = 256;
 itype_float     = 512;
 itype_reference = 1024;
 itype_other     = 2048;
+itype_zero      = 4096;
+itype_integer   = itype_non_zero | itype_zero;
+itype_list      = itype_null | itype_pair;
 
-itype_any       = 4095;         // "any" type
+itype_any       = 8191;         // "any" type
 
-itype_names = '[ "function" "integer" "string" "vector" "null" "symbol" "table"
-                 "pair" "bigint" "float" "reference" "\"other\"" ];
+itype_names = '[
+  "function" "non-zero integer" "string" "vector" "null"
+  "symbol" "table" "pair" "bigint" "float" "reference" "\"other\"" "false"
+];
 assert((1 << vlength(itype_names)) - 1 == itype_any);
 
 // map from itype_xxx bit -> type_xxx bitset
-mc:itype_typeset = sequence(
-  // itype_function
-  (1 << type_closure) | (1 << type_primitive) | (1 << type_varargs)
-  | (1 << type_secure),
-  1 << type_integer,
-  1 << type_string,
-  1 << type_vector,
-  1 << type_null,
-  1 << type_symbol,
-  1 << type_table,
-  1 << type_pair,
-  1 << type_bigint,
-  1 << type_float,
-  1 << type_reference,
-  // itype_other
-  (1 << type_code) | (1 << type_variable) | (1 << type_internal)
-  | (1 << type_private) | (1 << type_object) | (1 << type_character)
-  | (1 << type_gone) | (1 << type_outputport) | (1 << type_mcode));
+mc:itype_typeset =
+  '[// itype_function
+    ,((1 << type_closure) | (1 << type_primitive) | (1 << type_varargs)
+      | (1 << type_secure))
+    ,(1 << type_integer)        // non-zero
+    ,(1 << type_string)
+    ,(1 << type_vector)
+    ,(1 << type_null)
+    ,(1 << type_symbol)
+    ,(1 << type_table)
+    ,(1 << type_pair)
+    ,(1 << type_bigint)
+    ,(1 << type_float)
+    ,(1 << type_reference)
+    // itype_other
+    ,((1 << type_code) | (1 << type_variable) | (1 << type_internal)
+      | (1 << type_private) | (1 << type_object) | (1 << type_character)
+      | (1 << type_gone) | (1 << type_outputport) | (1 << type_mcode))
+    ,(1 << type_integer)        // zero
+  ];
 assert(vlength(mc:itype_typeset) == vlength(itype_names));
 
 mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
@@ -258,7 +290,7 @@ mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
    itype_none,                  // stype_none
    itype_any,                   // stype_any
    itype_function,              // stype_function
-   itype_pair | itype_null);    // stype_list
+   itype_list);                 // stype_list
 assert(vlength(mc:itypemap) == last_synthetic_type);
 
 vfori(fn (i) [
@@ -266,7 +298,7 @@ vfori(fn (i) [
   it = 1 << i;
   for (| ts, t | [ t = 0; ts = mc:itype_typeset[i] ]; ts; [ ts >>= 1; ++t ])
     if (ts & 1)
-      assert(mc:itypemap[t] == it);
+      assert(mc:itypemap[t] & it);
 ], mc:itype_typeset);
 
 mc:itypemap_inverse = sequence // map from type_xxx/stype_xxx -> itype typesets
@@ -296,23 +328,23 @@ mc:itypemap_inverse = sequence // map from type_xxx/stype_xxx -> itype typesets
    itype_any,	                // stype_none
    itype_none,                  // stype_any
    itype_any & ~itype_function, // stype_function
-   itype_any & ~(itype_pair | itype_null)); // stype_list
+   itype_any & ~itype_list);    // stype_list
 assert(vlength(mc:itypemap) == last_synthetic_type);
 
 mc:typeset_any = (1 << last_type) - 1;
-mc:stype_typesets = sequence(
-  0,                                                  // stype_none
-  mc:typeset_any,                                     // stype_any
-  ((1 << type_closure) | (1 << type_primitive)        // stype_function
-   | (1 << type_varargs) | (1 << type_secure)),
-  (1 << type_pair) | (1 << type_null));               // stype_list
+mc:stype_typesets =
+  '[ 0                                             // stype_none
+     ,mc:typeset_any                               // stype_any
+     ,((1 << type_closure) | (1 << type_primitive) // stype_function
+       | (1 << type_varargs) | (1 << type_secure))
+     ,((1 << type_pair) | (1 << type_null)) ];     // stype_list
 assert(vlength(mc:stype_typesets) == last_synthetic_type - last_type);
 
 // save on frequent allocations
 | static_type_pairs |
 static_type_pairs = make_vector(last_synthetic_type);
 for (|t| t = 0; t < last_synthetic_type; ++t)
-  static_type_pairs[t] = protect(t . null);
+  static_type_pairs[t] = '(,t);
 protect(static_type_pairs);
 
 mc:types_from_typeset = list fn (int typeset)
@@ -343,6 +375,19 @@ mc:types_from_typeset = list fn (int typeset)
             if (typeset == 0)
               exit r;
           ]
+      ]
+  ];
+
+mc:itypeset_from_typeset = fn (ts)
+  [
+    | is, types |
+    types = mc:types_from_typeset(ts);
+    is = 0;
+    loop
+      [
+        if (types == null) exit is;
+        is |= mc:itypemap[car(types)];
+        types = cdr(types)
       ]
   ];
 
@@ -396,7 +441,7 @@ generating instructions for function component" (top)
 
 	      nextins = dget(next);
 
-	      if (label[mc:l_ins] == nextins)
+	      if (label[mc:l_ilist] == nextins)
 		[
 		  // did removed instruction have a label ?
 		  if (label = iold[mc:il_label])
@@ -550,7 +595,7 @@ generating instructions for function component" (top)
       else dcons!(newins, fcode[0]); // insert before fcode[0]
 
       // Set label if any
-      if (fcode[1]) fcode[1][mc:l_ins] = newins;
+      if (fcode[1]) fcode[1][mc:l_ilist] = newins;
       fcode[1] = false;
     ];
 
@@ -559,17 +604,23 @@ generating instructions for function component" (top)
       add_ins(fcode, vector(mc:i_return, v, null));
     ];
 
+  mc:make_trap_ins = fn (op, trap, args)
+    vector(mc:i_trap, op, trap, args, false);
+
   mc:ins_trap = fn "fncode op n l -> . Adds 'if op(l) trap n' to fncode"
     (fcode, op, trap, args)
-      add_ins(fcode, vector(mc:i_trap, op, trap, args, false));
+      add_ins(fcode, mc:make_trap_ins(op, trap, args));
 
   mc:ins_branch = fn "fncode op label l -> . Adds 'if op(l) goto label' to fncode"
     (fcode, op, label, args)
       add_ins(fcode, vector(mc:i_branch, op, label, args, false));
 
+  mc:make_compute_ins = fn (op, dest, args)
+    vector(mc:i_compute, op, dest, args, false, null);
+
   mc:ins_compute = fn "fncode op var l -> . Adds 'var := op(l)' to fncode"
     (fcode, op, dest, args)
-      add_ins(fcode, vector(mc:i_compute, op, dest, args, false));
+      add_ins(fcode, mc:make_compute_ins(op, dest, args));
 
   mc:ins_closure = fn "fncode var component -> . Adds 'var := closure(component)' to fncode"
     (fcode, dest, f)
@@ -581,11 +632,14 @@ generating instructions for function component" (top)
 
   mc:ins_call = fn "fncode var l -> . Adds 'var := call l' to fncode"
     (fcode, dest, args)
-      add_ins(fcode, vector(mc:i_call, dest, args, null));
+      add_ins(fcode, vector(mc:i_call, dest, args, null, false, null));
+
+  mc:make_memory_ins = fn (op, array, index, scalar)
+    vector(mc:i_memory, op, array, index, scalar);
 
   mc:ins_memory = fn "fncode op var1 n var2-> Adds 'var2 := var1[n] / var1[n] := var2' to fncode"
     (fcode, op, array, index, scalar)
-      add_ins(fcode, vector(mc:i_memory, op, array, index, scalar));
+      add_ins(fcode, mc:make_memory_ins(op, array, index, scalar));
 
   mc:ins_assign = fn "fncode var1 var2 -> . 'var1 := var2', using aliases if possible" (fcode, v1, v2)
     [
@@ -617,11 +671,11 @@ be generated in fncode" (fcode, label)
       if (lab = il[mc:il_label]) // make it an alias
 	[
 	  l[mc:l_alias] = lab;
-	  l[mc:l_ins] = false;
+	  l[mc:l_ilist] = false;
 	]
       else
 	[
-	  l[mc:l_ins] = il;
+	  l[mc:l_ilist] = il;
 	  il[mc:il_label] = l;
 	]
     ];
@@ -746,36 +800,61 @@ be generated in fncode" (fcode, label)
   mc:call_escapes? = fn (ins)
     // Returns: True if call may escape
     [
-      | f, fun, fclass |
+      | fun |
+      fun = ins[mc:i_cfunction];
+      if (pair?(fun))           // apply-like?
+        fun = cdr(fun);
 
-      f = car(ins[mc:i_cargs]);
-      fclass = if (mc:my_protected_global?(f))
-        mc:v_global_constant
-      else
-        f[mc:v_class];
+      if (vector?(fun))
+        exit<function> !fun[mc:c_fnoescape];
 
-      if (fclass == mc:v_global_define)
+      | escapes? |
+      escapes? = fn (f, args)
         [
-          | mod |
-          mod = module_vstatus(f[mc:v_goffset]);
-          if (string?(mod)
-              && equal?(mod, mc:this_module[mc:m_name])
-              && module_status(mod) == module_protected)
-            // pretend this is a global constant
-            fclass = mc:v_global_constant;
+          | fclass |
+          fclass = if (mc:my_protected_global?(f))
+            mc:v_global_constant
+          else
+            f[mc:v_class];
+
+          if (fclass == mc:v_global_define)
+            [
+              | mod |
+              mod = module_vstatus(f[mc:v_goffset]);
+              if (string?(mod)
+                  && equal?(mod, mc:this_module[mc:m_name])
+                  && module_status(mod) == module_protected)
+                // pretend this is a global constant
+                fclass = mc:v_global_constant;
+            ];
+
+          if (fclass == mc:v_global_constant)
+            if (closure?(fun = global_value(f[mc:v_goffset])))
+              ~closure_flags(fun) & clf_noescape
+            else if (function?(fun))
+              [
+                | flags |
+                flags = primitive_flags(fun);
+                if (flags & OP_APPLY)
+                  [
+                    | fidx |
+                    @[ _ fidx _] = vexists?(fn (x) x[0] == fun,
+                                            mc:apply_functions);
+                    if (llength(args) > fidx)
+                      escapes?(nth(fidx + 1, args), null)
+                    else
+                      true
+                  ]
+                else
+                  ~flags & OP_NOESCAPE
+              ]
+            else
+              true
+          else
+            true
         ];
 
-      if (vector?(fun = ins[mc:i_cfunction]))
-        !fun[mc:c_fnoescape]
-      else if (fclass == mc:v_global_constant)
-        if (closure?(fun = global_value(f[mc:v_goffset])))
-          ~closure_flags(fun) & clf_noescape
-        else if (function?(fun))
-          ~primitive_flags(fun) & OP_NOESCAPE
-        else
-          true
-      else
-        true
+      escapes?(car(ins[mc:i_cargs]), cdr(ins[mc:i_cargs]))
     ];
 
   mc:barguments = fn (il, ambiguous)
@@ -893,13 +972,23 @@ be generated in fncode" (fcode, label)
 
   mc:print_ins = fn (ins, closures)
     [
+      | print_sz |
+      print_sz = fn (sz)
+        if (integer?(sz) && sz > 0)
+          dformat(" (size >= %d)", sz);
+
       | class |
       class = ins[mc:i_class];
       if (class == mc:i_compute)
 	[
 	  dformat("%s := ", mc:svar(ins[mc:i_adest]));
-	  print_op(mc:builtin_names[ins[mc:i_aop]],
-		   ins[mc:i_aargs]);
+          | op |
+          op = ins[mc:i_aop];
+	  print_op(mc:builtin_names[op],
+		   ins[mc:i_aargs],
+                   (op == mc:b_vector || op == mc:b_sequence
+                    || op == mc:b_pcons));
+          print_sz(ins[mc:i_asizeinfo]);
 	]
       else if (class == mc:i_branch)
 	[
@@ -908,7 +997,7 @@ be generated in fncode" (fcode, label)
 	  op = ins[mc:i_bop];
 	  opname =
 	    if (op < mc:branch_type?)
-	      mc:branch_names[ins[mc:i_bop]]
+	      branch_names[ins[mc:i_bop]]
 	    else if (op < mc:branch_ntype?)
 	      format("type[%s]", type_names[op - mc:branch_type?])
 	    else
@@ -936,12 +1025,15 @@ be generated in fncode" (fcode, label)
                   concat_words(lmap(mc:svar, ifn[mc:c_fclosure]), ", "))
 	]
       else if (class == mc:i_call)
-	dformat("%s := call %s", mc:svar(ins[mc:i_cdest]),
-                concat_words(lmap(mc:svar, ins[mc:i_cargs]), ", "))
+        [
+          dformat("%s := call %s%s", mc:svar(ins[mc:i_cdest]),
+                  concat_words(lmap(mc:svar, ins[mc:i_cargs]), ", "),
+                  if (mc:call_escapes?(ins)) " [escape]" else "");
+          print_sz(ins[mc:i_csizeinfo]);
+        ]
       else if (class == mc:i_trap)
 	[
-	  print_if('["never" 0 "argcheck" "loop" "!type" "ro"][ins[mc:i_top]],
-		   ins[mc:i_targs]);
+	  print_if(trap_names[ins[mc:i_top]], ins[mc:i_targs]);
 	  dformat("trap %s", ins[mc:i_tdest]);
 	]
       else if (class == mc:i_return)
@@ -958,24 +1050,31 @@ be generated in fncode" (fcode, label)
     if (op)
       [
 	display("if ");
-	print_op(op, args);
+	print_op(op, args, false);
 	display(" ");
       ];
 
-  print_op = fn (op, args)
+  print_op = fn (op, args, call?)
     [
       | nargs |
       nargs = llength(args);
-      if (nargs == 0)
-	display(op)
-      else if (nargs == 1)
-        if (op)
-          dformat("%s %s", op, mc:svar(car(args)))
-        else
-          display(mc:svar(car(args)))
-      else if (nargs == 2)
+      if (call? || nargs != 2)
+        [
+          | prefix |
+          if (slength(op))
+            [
+              display(op);
+              prefix = " ";
+            ]
+          else
+            prefix = "";
+          lforeach(fn (arg) [
+            dformat("%s%s", prefix, mc:svar(arg));
+            prefix = " ";
+          ], args);
+        ]
+      else
 	dformat("%s %s %s", mc:svar(car(args)), op, mc:svar(cadr(args)))
-      else fail();
     ];
 
   mc:slabel = fn (label)

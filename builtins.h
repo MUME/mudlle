@@ -36,7 +36,7 @@ void bsubtract(void), bor(void), band(void), bleq(void),
   bbitxor(void), bbitand(void), bshift_left(void), bshift_right(void),
   badd(void), bmultiply(void), bdivide(void), bremainder(void), bnegate(void),
   bnot(void), bbitnot(void), bref(void),
-  bcar(void), bcdr(void), bwglobal(void);
+  bcar(void), bcdr(void), bwglobal(void), brglobal(void);
 
 /* Compiler support builtins (machine specific) */
 #ifdef AMIGA
@@ -75,13 +75,13 @@ void bshift_left(), bshift_right(), badd(), bmultiply(), bdivide(), btypeof(),
   bremainder(), bref(), bset(), bwglobal(), bcleargc(), bvarargs(), bcall(),
   balloc_variable(), balloc_cons(), balloc_closure(), bcall_primitive(),
   bcall_primitive_leaf(), bcall_primitive_leaf_noalloc(), bcall_secure(),
-  bcall_varargs(),  bapply_varargs(),
+  bcall_varargs(), balloc_vector(), bapply_varargs(),
   berror_bad_function(), berror_stack_underflow(),
   berror_bad_type(), berror_divide_by_zero(), berror_bad_index(),
   berror_bad_value(), berror_variable_read_only(), berror_loop(),
   berror_recurse(), berror_wrong_parameters(), berror_security_violation(),
   berror_value_read_only(), berror_user_interrupt(), berror_no_match(),
-  berror_compile(), berror_abort(),
+  berror_compile(), berror_abort(), bearly_error_wrong_parameters(),
   bcleargc0(void), bcleargc1(void), bcleargc2(void);
 
 #endif

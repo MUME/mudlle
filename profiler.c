@@ -148,7 +148,8 @@ void profile_primitives(int show_unused)
 
   for (i = 0; i < nb_primitives; i++)
     if (info_primitives[i].count > 0 || show_unused)
-      printf("%-32s %9ld\n", info_primitives[i].name, info_primitives[i].count);
+      printf("%-32s %9ld\n", info_primitives[i].name,
+             info_primitives[i].count);
 }
 
 struct pm
@@ -169,7 +170,8 @@ void extend_info_mudlle(void)
   if (info_mudlle_used < info_mudlle_size) return;
   info_mudlle_size += 200;
   if (info_mudlle)
-    info_mudlle = (void *)realloc(info_mudlle, info_mudlle_size * sizeof(struct pm));
+    info_mudlle = (void *)realloc(info_mudlle,
+                                  info_mudlle_size * sizeof(struct pm));
   else
     info_mudlle = (void *)malloc(info_mudlle_size * sizeof(struct pm));
 }
@@ -181,7 +183,8 @@ int order_mudlle_call(const void *_p1, const void *_p2)
 
 int order_mudlle_ins(const void *_p1, const void *_p2)
 {
-  return (int)(((struct pm *)_p2)->instructions - ((struct pm *)_p1)->instructions);
+  return (int)(((struct pm *)_p2)->instructions
+               - ((struct pm *)_p1)->instructions);
 }
 
 int order_mudlle_ratio(const void *_p1, const void *_p2)
@@ -233,8 +236,10 @@ void profile_mudlle(int show_unused, int sort_method)
   int i;
 
   info_mudlle = NULL;
-  for (scan = datagen0; scan < end0; ) scan = mudlle_scan(scan, end0, show_unused);
-  for (scan = datagen1; scan < end1; ) scan = mudlle_scan(scan, end1, show_unused);
+  for (scan = datagen0; scan < end0; )
+    scan = mudlle_scan(scan, end0, show_unused);
+  for (scan = datagen1; scan < end1; )
+    scan = mudlle_scan(scan, end1, show_unused);
 
   if (info_mudlle_used >= 0)
     {
@@ -245,7 +250,8 @@ void profile_mudlle(int show_unused, int sort_method)
 
       printf("%-41s %13s %9s %13s\n",
 	     "name", "insns", "calls", "insn/call");
-      printf("-------------------------------------------------------------------------------\n");
+      printf("----------------------------------------"
+             "---------------------------------------\n");
       for (i = 0; i <= info_mudlle_used; i++)
 	{
 	  char tmp[512];

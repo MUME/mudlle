@@ -20,68 +20,76 @@
  */
 
 library compile // call actual compiler
-requires system, compiler, phase1, phase2, phase3, phase4, link, ins3, flow
+requires system, compiler, phase1, phase2, phase3, phase4, link, ins3, flow,
+  sequences
 defines mc:compile
-writes mc:verbose, mc:erred, mc:this_module
+writes mc:verbose, mc:erred, mc:this_module, mc:disassemble
 [
   mc:verbose = 2; // default verbosity level
+  mc:disassemble = false;
 
   mc:compile = fn (mod, protect, int seclev)
-    if (mod)
-      [
-        | result |
+    [
+      if (!mod) exit<function> false;
 
-	mc:erred = false;
-	mc:this_module = mod;
+      | result |
 
-        mc:sort_messages(true);
+      if (mc:disassemble && mc:verbose < 1)
+        mc:reset_closure_count();
 
-	if (mc:verbose >= 1)
-	  [
-	    display("PHASE1\n");
-	  ];
-	mc:phase1(mod, seclev);
+      mc:erred = false;
+      mc:this_module = mod;
 
-	if (mc:verbose >= 1)
-	  [
-	    display("PHASE2\n");
-	  ];
-	mc:phase2(mod);
+      mc:sort_messages(true);
 
-        result = if (!mc:erred)
-	  [
-	    | fns |
+      if (mc:verbose >= 1)
+        [
+          display("PHASE1\n");
+        ];
+      mc:phase1(mod, seclev);
 
-	    if (mc:verbose >= 4)
-	      [
-		mc:ins_list(mod[mc:m_body]);
-		newline();
-	      ];
+      if (mc:verbose >= 1)
+        [
+          display("PHASE2\n");
+        ];
+      mc:phase2(mod);
 
-	    fns = mc:all_functions(mod[mc:m_body]);
+      result = if (!mc:erred)
+        [
+          | fns |
 
-	    if (mc:verbose >= 1)
-	      [
-		display("PHASE3\n");
-	      ];
-	    mc:phase3(fns);
+          if (mc:verbose >= 4)
+            [
+              mc:ins_list(mod[mc:m_body]);
+              newline();
+            ];
 
-	    if (mc:verbose >= 1)
-	      [
-		display("PHASE4\n");
-	      ];
-	    mc:phase4(fns);
+          fns = mc:all_functions(mod[mc:m_body]);
 
-	    mc:prelink(mod, protect)
-	  ]
-	else
-	  false;
+          if (mc:verbose >= 1)
+            [
+              display("PHASE3\n");
+            ];
+          mc:phase3(fns);
 
-        mc:sort_messages(false);
+          | remaining_fns |
+          remaining_fns = mc:all_functions(mod[mc:m_body]);
+          fns = lfilter!(fn (f) lfind?(f, remaining_fns), fns);
 
-        result
-      ]
-    else
-      false;
+          if (mc:verbose >= 1)
+            [
+              display("PHASE4\n");
+            ];
+          mc:phase4(fns);
+
+          mc:prelink(mod, protect)
+        ]
+      else
+        false;
+
+      mc:sort_messages(false);
+
+      result
+    ];
 
 ];

@@ -28,10 +28,17 @@ extern int yylineno;
 extern const char *lexer_filename;
 extern const char *lexer_nicename;
 
+struct reader_state {
+  const char *filename;
+  const char *nicename;
+};
+
 int yylex(void);
 
-void read_from_string(const char *str, const char *afilename,
-                      const char *anicename);
+void read_from_strings(const char *const *strs, const char *afilename,
+                       const char *anicename);
 void read_from_file(FILE *f, const char *afilename, const char *anicename);
+void save_reader_state(struct reader_state *state);
+void restore_reader_state(const struct reader_state *state);
 
 #endif

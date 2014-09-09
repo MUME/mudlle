@@ -169,7 +169,7 @@ static void string_flush(struct oport *_p)
 {
 }
 
-static void string_putch(struct oport *_p, int c, size_t n)
+static void string_putnc(struct oport *_p, int c, size_t n)
 {
   struct string_oport *p = (struct string_oport *)_p;
   struct string_oport_block *current = p->current;
@@ -256,7 +256,7 @@ string_stat(struct oport *oport, struct oport_stat *buf)
 
 static const struct oport_methods string_port_methods = {
   .close  = output_string_close,
-  .putch  = string_putch,
+  .putnc  = string_putnc,
   .write  = string_write,
   .swrite = string_swrite,
   .flush  = string_flush,
@@ -319,7 +319,7 @@ static void line_port_send(struct line_oport *p)
   p->prev_char = makeint(EOF);
 }
 
-static void line_port_putch(struct oport *_p, int c, size_t n)
+static void line_port_putnc(struct oport *_p, int c, size_t n)
 {
   struct line_oport *p = (struct line_oport *)_p;
 
@@ -333,7 +333,7 @@ static void line_port_putch(struct oport *_p, int c, size_t n)
       bool flush_after = ((p->prev_char == makeint('\r') && c == '\n')
                           || (p->prev_char == makeint('\n') && c == '\r'));
       size_t cnt = flush_after ? 1 : n;
-      string_putch(_p, c, cnt);
+      string_putnc(_p, c, cnt);
       n -= cnt;
       if (flush_after)
         line_port_send(p);
@@ -357,7 +357,7 @@ static void line_port_write(struct oport *_p, const char *data, size_t nchars)
       if ((p->prev_char == makeint('\r') && data[0] == '\n')
           || (p->prev_char == makeint('\n') && data[0] == '\r'))
         {
-          line_port_putch(_p, data[0], 1);
+          line_port_putnc(_p, data[0], 1);
           ++data;
           if (!--nchars)
             break;
@@ -418,7 +418,7 @@ static void line_port_stat(struct oport *_p, struct oport_stat *buf)
 
 static const struct oport_methods line_port_methods = {
   .close  = free_string_oport,
-  .putch  = line_port_putch,
+  .putnc  = line_port_putnc,
   .write  = line_port_write,
   .swrite = line_port_swrite,
   .flush  = line_port_flush,
@@ -460,7 +460,7 @@ static void file_flush(struct oport *_p)
   fflush(f);
 }
 
-static void file_putch(struct oport *_p, int c, size_t n)
+static void file_putnc(struct oport *_p, int c, size_t n)
 {
   struct file_oport *p = (struct file_oport *)_p;
   FILE *f = p->file->external;
@@ -507,7 +507,7 @@ static void file_stat(struct oport *_p, struct oport_stat *buf)
 
 static const struct oport_methods file_port_methods = {
   .close  = output_file_close,
-  .putch  = file_putch,
+  .putnc  = file_putnc,
   .write  = file_write,
   .swrite = file_swrite,
   .flush  = file_flush,
@@ -626,10 +626,10 @@ void port_append(struct oport *p1, struct oport *_p2)
   GCPRO2(p1, current);
   while (current->next)
     {
-      pswrite(p1, current->data, 0, STRING_BLOCK_SIZE);
+      pswrite_substring(p1, current->data, 0, STRING_BLOCK_SIZE);
       current = current->next;
     }
-  pswrite(p1, current->data, 0, pos);
+  pswrite_substring(p1, current->data, 0, pos);
   UNGCPRO();
 }
 
@@ -656,7 +656,7 @@ void port_append_substring(struct oport *p1, struct oport *_p2,
         {
           size_t remains = bytes - start;
           size_t cnt = length > remains ? remains : length;
-          pswrite(p1, current->data, start, cnt);
+          pswrite_substring(p1, current->data, start, cnt);
           length -= cnt;
           start = 0;
           if (length == 0)
@@ -685,7 +685,7 @@ void port_append_escape(struct oport *p1, struct oport *_p2, int esc)
           const char *pesc = memchr(current->data->str + start, esc,
                                     size - start);
           size_t l = pesc ? pesc - (current->data->str + start) + 1 : size - start;
-          pswrite(p1, current->data, start, l);
+          pswrite_substring(p1, current->data, start, l);
           if (pesc == NULL)
             break;
           pputc(esc, p1);
@@ -721,7 +721,7 @@ ssize_t string_port_search(struct oport *p, int c)
 static const char basechars[] = "0123456789abcdef";
 
 char *int2str(char *str, int base, ulong n, bool is_signed)
-/* Requires: base be 2, 8, 10 or 16. str be at least INTSTRLEN characters long.
+/* Requires: base be 2, 8, 10 or 16. str be at least INTSTRSIZE characters long.
    Effects: Prints the ASCII representation of n in base base to the
      string str.
      If is_signed is true, n is actually a long
@@ -730,7 +730,7 @@ char *int2str(char *str, int base, ulong n, bool is_signed)
 {
   /* ints are 32 bits, the longest number will thus be
      32 digits (in binary) + 1(sign) characters long */
-  char *pos = str + INTSTRLEN - 1;
+  char *pos = str + INTSTRSIZE - 1;
   *--pos = '\0';
 
   bool minus;
@@ -757,14 +757,14 @@ char *int2str(char *str, int base, ulong n, bool is_signed)
 }
 
 char *int2str_wide(char *str, ulong n, bool is_signed)
-/* Requires: str be at least INTSTRLEN characters long.
+/* Requires: str be at least INTSTRSIZE characters long.
    Effects: Prints the ASCII representation of n in base 10 with
      1000-separation by commas
      If is_signed is true, n is actually a long
    Returns: A pointer to the start of the result.
 */
 {
-  char *pos = str + INTSTRLEN - 1;
+  char *pos = str + INTSTRSIZE - 1;
   *--pos = '\0';
 
   int i = 3;
@@ -775,7 +775,7 @@ char *int2str_wide(char *str, ulong n, bool is_signed)
       if (n <= -16)
 	{
 	  /* this is to take care of LONG_MIN */
-	  *--pos = basechars[abs(n % 10)];
+	  *--pos = basechars[n % 10];
 	  n /= 10;
 	  --i;
 	}
@@ -803,7 +803,7 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
   if (oport_methods(p) == NULL) return;
 
   const char *percent, *add = NULL;
-  char buf[INTSTRLEN], padchar;
+  char buf[INTSTRSIZE], padchar;
 
   GCPRO1(p);
 

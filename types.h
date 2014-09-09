@@ -55,7 +55,7 @@ enum garbage_type {
   garbage_record,		/* container for other GCed data  */
   garbage_code,			/* special for code 		  */
   garbage_forwarded,		/* temporarily used during GCs 	  */
-  garbage_permanent,		/* primitives 			  */
+  garbage_primitive,		/* primitives 			  */
   garbage_temp,			/* container for C pointer 	  */
   garbage_mcode,		/* special for mcode 		  */
   garbage_static_string,        /* statically allocated string    */
@@ -189,7 +189,6 @@ struct symbol			/* Is a record */
 struct primitive		/* Is a permanent external */
 {
   struct obj o;
-  ulong nb;
   const struct primitive_ext *op;
   ulong call_count;
 };
@@ -216,8 +215,7 @@ struct primitive_ext		/* The external structure */
 #define OP_LEAF        (1 << 0) /* Operation is leaf (calls no other mudlle
 				   code) */
 #define OP_NOALLOC     (1 << 1) /* Operation does not allocate anything */
-#define OP_CLEAN       (1 << 2) /* Operation can be called directly (guarantees
-				   GC integrity w/ respect to registers) */
+                    /* (1 << 2) unused */
 #define OP_NOESCAPE    (1 << 3) /* Operation does not lead to any global or
                                    closure variables being changed (~= calls no
                                    other mudlle functions) */
@@ -232,13 +230,23 @@ struct primitive_ext		/* The external structure */
                                    and the result must be readonly. */
 #define OP_OPERATOR    (1 << 6) /* Print as an operator (unary prefix, binary
                                    infix, or ref/set!) in stack traces. */
+#define OP_APPLY       (1 << 7) /* apply-like function, evaluating one
+                                   argument, returning its return
+                                   value; must correspond to an entry
+                                   in mc:apply_functions */
+#define OP_FASTSEC     (1 << 8) /* Forces a SECT?OP to be type_primitive.
+                                   Only useful for M-secure primitives, because
+                                   the only valid seclevel info will be
+                                   maxseclevel. */
 
-#define ALL_OP_FLAGS (OP_LEAF | OP_NOALLOC | OP_CLEAN | OP_NOESCAPE     \
-                      | OP_STR_READONLY | OP_CONST | OP_OPERATOR)
+#define ALL_OP_FLAGS (OP_LEAF | OP_NOALLOC | OP_NOESCAPE                \
+                      | OP_STR_READONLY | OP_CONST | OP_OPERATOR        \
+                      | OP_APPLY | OP_FASTSEC)
 
 #define CLF_COMPILED 1          /* This is a compiled closure */
 #define CLF_NOESCAPE 2          /* Does not write global or closure
                                    variables */
+#define CLF_NOCLOSURE 4         /* Does not have any closure variables */
 
 struct vector			/* Is a record */
 {
@@ -275,10 +283,12 @@ struct static_obj {
   struct obj o;
 };
 
-struct static_string {
-  ulong *static_data;
-  struct string s;
-};
+#define STATIC_STRING_T(size)                   \
+struct {                                        \
+  ulong *static_data;                           \
+  struct obj mobj;                              \
+  char str[size];                               \
+}
 
 static inline ulong *static_data(struct obj *obj)
 {
@@ -303,8 +313,6 @@ struct vector *alloc_vector(ulong size);
 struct list *alloc_list(value car, value cdr);
 struct character *alloc_character(struct char_data *ch);
 struct object *alloc_object(struct obj_data *obj);
-struct primitive *alloc_primitive(ulong nb, const struct primitive_ext *op);
-struct primitive *alloc_secure(ulong nb, const struct primitive_ext *op);
 void check_bigint(struct bigint *bi);
 
 struct grecord *alloc_private(int id, ulong size);

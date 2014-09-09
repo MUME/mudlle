@@ -61,9 +61,11 @@ struct symbol *table_add(struct table *table, struct string *name, value data);
    Modifies: table
 */
 
-struct symbol *table_add_fast(struct table *table, struct string *name, value data);
-/* Requires: table_lookup(table, name->str, ...) to have just failed.
-   Effects: Adds <name,data> to the symbol table.
+struct symbol *table_add_sym_fast(struct table *table, struct symbol *sym);
+struct symbol *table_add_fast(struct table *table, struct string *name,
+                              value data);
+/* Requires: table_lookup(table, (sym->)name->str, ...) to have just failed.
+   Effects: Adds sym/<name,data> to the symbol table.
    Modifies: table
    Returns: The new symbol
 */
@@ -90,5 +92,17 @@ void table_foreach(struct table *table, void *data,
 int table_entries(struct table *table);
 
 #define DEF_TABLE_SIZE 8	/* Convenient initial size */
+
+static inline int table_good_size(int entries)
+{
+  entries = (entries * 4 + 2) / 3;
+  /* find next higher power of two */
+  entries |= entries >> 1;
+  entries |= entries >> 2;
+  entries |= entries >> 4;
+  entries |= entries >> 8;
+  entries |= entries >> 16;
+  return ++entries;
+}
 
 #endif /* TABLE_H */

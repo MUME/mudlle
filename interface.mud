@@ -37,7 +37,7 @@ lcompile = fn (s, protect)
     if (dot < 0) objname = s + ".obj"
     else objname = substring(s, 0, dot) + ".obj";
 
-    dformat("compiling %s\n", s);
+    silent == true || dformat("compiling %s\n", s);
     | cs |
     cs = "compiler/" + s;
     if (prelinked = mc:compile(mudlle_parse_file(s, cs, cs),
@@ -50,7 +50,7 @@ fcompile = fn (s) lcompile(s, false);
 pcompile = fn (s) lcompile(s, true);
 fload = fn (s) mc:linkrun(load_data(s), 1, true);
 test = fn (s) mc:compile(mudlle_parse(s), false, 1);
-ftest = fn (s) mc:compile(mudlle_parse_file(s, s), false, 1);
+ftest = fn (s) mc:compile(mudlle_parse_file(s, s, s), false, 1);
 
 protect_compiler_libs = fn()
   [

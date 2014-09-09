@@ -740,7 +740,7 @@ writes ninferred
 		m68k:move(code, m68k:slongword, m68k:lvar, arg1, m68k:lregister, rd);
 		if (arg2[mc:v_class] == mc:v_constant)
 		  m68k:add(code, m68k:slongword, rd,
-			   m68k:limmediate, mc:var_value(arg2) << 1)
+			   m68k:limmediate, mc:var_const_value(arg2) << 1)
 		else
 		  [
 		    m68k:add(code, m68k:slongword, rd, m68k:lvar, arg2);
@@ -762,7 +762,7 @@ writes ninferred
 		m68k:move(code, m68k:slongword, m68k:lvar, arg1, m68k:lregister, rd);
 		if (arg2[mc:v_class] == mc:v_constant)
 		  m68k:subtract(code, m68k:slongword, rd,
-				m68k:limmediate, mc:var_value(arg2) << 1)
+				m68k:limmediate, mc:var_const_value(arg2) << 1)
 		else
 		  [
 		    m68k:subtract(code, m68k:slongword, rd, m68k:lvar, arg2);

@@ -41,22 +41,22 @@
 #define N(x) x
 #endif
 
-/* Important constants ... */
-#define true 3
-#define false 1
-#define null 0
-#define undefined ((42 << 1) | 1)
+#define FALIGN 16
+#define GFUNC(n) .align FALIGN ; .globl N(n) ; N(n)
+#define LFUNC(n) .align FALIGN ; n
+
+#define ICST(n) $(2 * (n) | 1)
 
 /* Register assignments */
-#define arg0 %eax
-#define arg0b %al
-#define arg1 %ecx
-#define arg1b %cl
-#define globals %esi
-#define argcount %eax
-#define argcountw %ax
-#define closure %ebx
-#define closure_in %edx
+#define arg0        %eax
+#define arg0b       %al
+#define arg1        %ecx
+#define arg1b       %cl
+#define globals     %esi
+#define argcount    %eax
+#define argcountw   %ax
+#define closure     %ebx
+#define closure_in  %edx
 #define closure_inb %dl
 
 /* Stack frame information */
@@ -85,6 +85,11 @@
         mov     scratch,N(ccontext)+cc_frame_end_bp; \
         mov     %ebp,N(ccontext)+cc_frame_end_sp
 
+#define END_PARENT_FRAME(scratch) \
+        movl    $1,scratch; \
+        mov     scratch,N(ccontext)+cc_frame_end_bp; \
+        mov     %ebp,N(ccontext)+cc_frame_end_sp
+
 #define END_PREVIOUS_FRAME END_PREVIOUS_FRAME_REG(arg0)
 
 #define CCALL_LEAF(fn) \
@@ -92,12 +97,6 @@
 
 #define CCALL(fn) \
 	movw	$DEFAULT_SECLEVEL,N(internal_seclevel); \
-	call	fn
-
-#define CCALL_SECURE(fn) \
-	mov	object_offset(closure),%eax; \
-	mov	object_offset+mcode_seclevel(%eax),%ax; \
-	mov	%ax,N(internal_seclevel); \
 	call	fn
 
 /* Various ways of preserving the registers:
@@ -130,7 +129,6 @@
 	xor	%edx,%edx; \
 	xor	%edi,%edi
 
-
 /* Push the current function's input arguments on the stack.
      in: argcount
      clobbers: esi, edi, ecx
@@ -151,9 +149,6 @@
 #define SETINT(x) \
 	or	$1,x		/* set integer type bit */
 
-#define CLEARINT(x) \
-	and	$~1,x		/* clear integer type bit */
-
 #define INTVAL(x) \
 	sar	$1,x		/* Make into normal integer */
 
@@ -169,25 +164,22 @@
 #define ISNULL(x) \
 	test	x,x		/* Is x NULL (registers only) */
 
-#define ISUNALIGNED(x) \
-	test	$3,x
-
 #define IS_READ_WRITE(x) \
         testb   $OBJ_READONLY,object_flags(x)
 
-#define CHECK_LOOP				\
-	subl	$1,N(xcount);			\
-	je	E(error_loop);			\
-	cmpl    (N(mudlle_stack_limit)),%esp;	\
-	jb	E(error_recurse)
+#define CHECK_LOOP(type)                                \
+	subl	$1,N(xcount);                           \
+	je	E(type ## error_loop);                  \
+	cmpl    (N(mudlle_stack_limit)),%esp;           \
+	jb	E(type ## error_recurse);               \
+	cmpw	N(minlevel),%cx;                        \
+	jb	E(type ## error_security_violation)
 
 #define E(n) N(b ## n)
 
 /* Simple integer operations: +, /, % */
 
-	.globl	N(bmultiply)
-
-N(bmultiply):
+GFUNC(bmultiply):
 	btr	$0,arg0
 	jnc	1f
 	sar	$1,arg1
@@ -204,9 +196,7 @@ N(bmultiply):
 1:	mov     $N(code_multiply),closure
         jmp     call_binary_primitive
 
-	.globl	N(bdivide)
-
-N(bdivide):
+GFUNC(bdivide):
 	sar	$1,arg0
 	jnc	0f
 	sar	$1,arg1
@@ -229,9 +219,7 @@ N(bdivide):
 4:      mov     $N(code_divide),closure
         jmp     call_binary_primitive
 
-	.globl	N(bremainder)
-
-N(bremainder):
+GFUNC(bremainder):
 	sar	$1,arg0
 	jnc	0f
 	sar	$1,arg1
@@ -255,9 +243,7 @@ N(bremainder):
 4:      mov     $N(code_remainder),closure
         jmp     call_binary_primitive
 
-	.globl	N(bshift_left)
-
-N(bshift_left):
+GFUNC(bshift_left):
 	sar	$1,arg1
 	jnc	0f
 	btr	$0,arg0
@@ -272,9 +258,7 @@ N(bshift_left):
 2:      mov     $N(code_shift_left),closure
         jmp     call_binary_primitive
 
-	.globl	N(bshift_right)
-
-N(bshift_right):
+GFUNC(bshift_right):
 	sar	$1,arg1
 	jnc	0f
 	testl	$1,arg0
@@ -304,9 +288,7 @@ call_binary_primitive:
 
 /* Call C code: ref, + */
 
-	.globl	N(badd)
-
-N(badd):
+GFUNC(badd):
 	ISINT(arg0b)
 	je	cadd
 	ISINT(arg1b)
@@ -324,20 +306,18 @@ cadd:	/* Call plus primitive for string append */
 	push	arg0
 	END_PREVIOUS_FRAME
 	CCALL_LEAF(N(code_plus))
-	add	$8,%esp
+	/* add	$8,%esp */
 	RESTORE_CALLER
 	leave
 	ret
 
-	.globl	N(btypeof)
-
-N(btypeof):
+GFUNC(btypeof):
         ISNULL(arg0)
-        mov	$(2 * type_null) + 1,arg1
+        mov	ICST(type_null),arg1
         je	0f
 
         ISINT(arg0b)
-        mov	$(2 * type_integer) + 1,arg1
+        mov	ICST(type_integer),arg1
         jne	0f
 
         movzbl	object_type(arg0),arg1
@@ -346,9 +326,8 @@ N(btypeof):
 0:	mov	arg1,arg0
         ret
 
-	.globl	N(bref)
-
-N(bref):
+	/* arg0 = arg0[arg1] */
+GFUNC(bref):
 	ISINT(arg0b)
 	jne	cref
 
@@ -365,14 +344,14 @@ cref:	/* Call ref - only need to save %edx (ref doesn't alloc) */
 	push	arg0
 	END_PREVIOUS_FRAME
 	CCALL_LEAF(N(code_ref))
-	add	$8,%esp
+	/* add	$8,%esp */
 	mov	N(ccontext)+cc_caller,%edx
 	leave
 	ret
 
 vectorref:
 	ISINT(arg1b)
-	je	1f
+	je	cref
 	push    arg1
 	add	arg1,arg1
 	jo	0f
@@ -414,10 +393,8 @@ strnosign:
 0:      pop     arg1
         jmp     cref
 
-	.globl	N(bset)
-
-N(bset):
-	mov	4(%esp),%edx
+	/* arg0 = arg0[arg1] = %edx */
+GFUNC(bset):
 	ISINT(arg0b)
 	jne	cset
 
@@ -435,7 +412,7 @@ cset:	/* Call set! */
 	push	arg0
 	END_PREVIOUS_FRAME
 	CCALL_LEAF(N(code_set))
-	add	$12,%esp
+	/* add	$12,%esp */
 	RESTORE_CALLEE
         leave
 	ret
@@ -489,6 +466,7 @@ strsetnosign:
 	mov	%dl,-1(arg0,arg1)
 	movzbl	%dl,arg0
 	MAKEINT(arg0)
+	xor     %edx,%edx       /* make sure it's a valid mudlle value */
 	add     $4,%esp         /* pop arg1 */
 	ret
 
@@ -499,15 +477,33 @@ strsetnosign:
 1:      MAKEINT(%edx)
         jmp     cset
 
-/* Special ops: bcleargc, bwglobal */
+/* Special ops: bcleargc, bwglobal, brglobal */
 
-	.globl	N(bwglobal)
+GFUNC(bwglobal):
+	/* Make a proper stack trace for iterate_cc_frame() */
+	push    %ebp
+	mov     %esp,%ebp
+	END_PREVIOUS_FRAME_REG(arg1) /* XXX does this needs to be reversed? */
 
-N(bwglobal):
-	sub	globals,arg0
-	mov	N(mvars),arg1
-	ISINTB((arg1,arg0))
-	je	E(error_variable_read_only)
+	/* We don't need to protect %eax (arg0) or %ecx (arg1) */
+	push	%edx /* protect from cdecl call */
+	push	arg0 /* goffset arg */
+	call	N(check_global_write)
+	mov	-4(%ebp),%edx /* cdecl argument cleanup */
+
+	leave
+	ret
+
+/* Could be factorized if we had a free register */
+GFUNC(brglobal): /* see bwglobal comments */
+	push    %ebp
+	mov     %esp,%ebp
+	END_PREVIOUS_FRAME_REG(arg1)
+	push	%edx
+	push	arg0
+	call	N(check_global_read)
+	mov	-4(%ebp),%edx /* cdecl argument cleanup */
+	leave
 	ret
 
 /* Preambles:
@@ -522,17 +518,11 @@ N(bwglobal):
      scratch: eax, ecx, edi
 */
 
-	.globl	N(bcleargc)
-
 /* Clear the allocated stack frame (between caller's %esp and %ebp) */
 
-N(bcleargc):
-	jne	E(error_wrong_parameters)
-	CHECK_LOOP
-	mov	object_offset(closure_in),%eax
-	movw	object_offset+mcode_seclevel(%eax),%ax
-	cmpw	N(minlevel),%ax
-	jb	E(error_security_violation)
+GFUNC(bcleargc):
+	jne	E(early_error_wrong_parameters)
+	CHECK_LOOP()
 
 	/* Clear stack frame */
 	xor	%eax,%eax
@@ -545,51 +535,27 @@ N(bcleargc):
 	xor	%edi,%edi
 	ret
 
-	.globl	N(bcleargc0)
-
-N(bcleargc0):
-	jne	E(error_wrong_parameters)
-	CHECK_LOOP
-	mov	object_offset(closure_in),%eax
-	movw	object_offset+mcode_seclevel(%eax),%ax
-	cmpw	N(minlevel),%ax
-	jb	E(error_security_violation)
+GFUNC(bcleargc0):
+	jne	E(early_error_wrong_parameters)
+	CHECK_LOOP()
 	ret
 
-	.globl	N(bcleargc1)
-
-N(bcleargc1):
-	jne	E(error_wrong_parameters)
-	CHECK_LOOP
-	mov	object_offset(closure_in),%eax
-	movw	object_offset+mcode_seclevel(%eax),%ax
-	cmpw	N(minlevel),%ax
-	jb	E(error_security_violation)
+GFUNC(bcleargc1):
+	jne	E(early_error_wrong_parameters)
+	CHECK_LOOP()
 	mov	closure_in,4(%esp)
 	ret
 
-	.globl	N(bcleargc2)
-
-N(bcleargc2):
-	jne	E(error_wrong_parameters)
-	CHECK_LOOP
-	mov	object_offset(closure_in),%eax
-	movw	object_offset+mcode_seclevel(%eax),%ax
-	cmpw	N(minlevel),%ax
-	jb	E(error_security_violation)
+GFUNC(bcleargc2):
+	jne	E(early_error_wrong_parameters)
+	CHECK_LOOP()
 	mov	closure_in,4(%esp)
 	mov	closure_in,8(%esp)
 	ret
 
-	.globl	N(bvarargs)
-
 /* Build varargs vector & count */
-N(bvarargs):
-	CHECK_LOOP
-	mov	object_offset(closure_in),%ecx
-	movw	object_offset+mcode_seclevel(%ecx),%cx
-	cmpw	N(minlevel),%cx
-	jb	E(error_security_violation)
+GFUNC(bvarargs):
+	CHECK_LOOP(early_)
 
 	/* in: argcount: argument count, arguments on stack */
 	/* returns vector in %eax */
@@ -652,103 +618,64 @@ valloc_gc:
 
 /* Storage allocation operations */
 
-	/* Alloc variable cell, return in arg1 */
-	.globl	N(balloc_variable)
-
-N(balloc_variable):
-	mov	N(posgen0),arg1
-	sub	$object_offset + 4,arg1
+	/* allocate arg0 bytes and return in arg1 */
+LFUNC(alloc_bytes):
+       	mov	N(posgen0),arg1
+	sub	arg0,arg1
 	cmp	N(startgen0),arg1
-	jb	alloc_variable_gc
-	/* success */
-	mov	arg1,N(posgen0)
-	movl	$object_offset + 4,object_size(arg1)
-	GCSTAT_ADD(type_variable, $object_offset + 4)
+	jb      alloc_bytes_gc
+	mov     arg1,N(posgen0)
+	mov     arg0,object_size(arg1)
 #ifdef GCDEBUG
 	mov	N(minorgen),arg0
 	mov	arg0,object_gen(arg1)
 #endif
+        ret
+
+alloc_bytes_gc:
+        push    %ebp
+        mov     %esp,%ebp
+	SAVE_CALLER
+	push	arg0
+	push	arg0
+        END_PARENT_FRAME(arg0)
+	CCALL_LEAF(N(garbage_collect))
+	/* add	$4,%esp */
+	movl	-4(%ebp),arg0
+	RESTORE_CALLER
+	leave
+	jmp	alloc_bytes
+
+	/* Alloc variable cell, return in arg1 */
+GFUNC(balloc_variable):
+	GCSTAT_ADD(type_variable, $variable_size)
+	movl    $variable_size,arg0
+	call    alloc_bytes
 	movl	$garbage_record | type_variable << 8,object_info(arg1)
 	ret
 
-alloc_variable_gc:
-	push    %ebp
-        mov     %esp,%ebp
-	SAVE_CALLER
-	push	$object_offset + 4
-        END_PREVIOUS_FRAME
-	CCALL_LEAF(N(garbage_collect))
-	/* add	$4,%esp */
-	RESTORE_CALLER
-	leave
-	jmp	N(balloc_variable)
-
-
-	.globl	N(balloc_closure)
-
-	/* size of closure is in arg1. Return result in arg1 */
-N(balloc_closure):
-	mov	N(posgen0),arg0
-	sub	arg1,arg0
-	cmp	N(startgen0),arg0
-	jb	alloc_closure_gc
-	/* success */
-	mov	arg0,N(posgen0)
-	mov	arg1,object_size(arg0)
-	GCSTAT_ADD(type_closure, arg1)
-#ifdef GCDEBUG
-	mov	N(minorgen),arg1
-	mov	arg1,object_gen(arg0)
-#endif
+	/* Size of closure is in arg0, return result in arg1 */
+GFUNC(balloc_closure):
+	GCSTAT_ADD(type_closure, arg0)
+	call    alloc_bytes
 	movl	$garbage_record | type_closure << 8 | OBJ_READONLY << 16, \
-                  object_info(arg0)
-	mov	arg0,arg1
+                  object_info(arg1)
 	ret
 
-alloc_closure_gc:
-	push    %ebp
-        mov     %esp,%ebp
-	SAVE_CALLER
-	push	arg1
-	push	arg1
-        END_PREVIOUS_FRAME
-	CCALL_LEAF(N(garbage_collect))
-	/* add	$4,%esp */
-	movl	-4(%ebp),arg1
-	RESTORE_CALLER
-	leave
-	jmp	N(balloc_closure)
-
 	/* Allocate cons cell, return in arg1 */
-	.globl	N(balloc_cons)
-
-N(balloc_cons):
-	mov	N(posgen0),arg1
-	sub	$pair_size,arg1
-	cmp	N(startgen0),arg1
-	jb	alloc_cons_gc
-	/* success */
-	mov	arg1,N(posgen0)
-	movl	$pair_size,object_size(arg1)
+GFUNC(balloc_cons):
 	GCSTAT_ADD(type_pair, $pair_size)
-#ifdef GCDEBUG
-	mov	N(minorgen),arg0
-	mov	arg0,object_gen(arg1)
-#endif
+	movl    $pair_size,arg0
+	call    alloc_bytes
 	movl	$garbage_record | type_pair << 8,object_info(arg1)
 	ret
 
-alloc_cons_gc:
-	push    %ebp
-        mov     %esp,%ebp
-	SAVE_CALLER
-	pushl	$pair_size
-        END_PREVIOUS_FRAME
-	CCALL_LEAF(N(garbage_collect))
-	/* add	$4,%esp */
-	RESTORE_CALLER
-	leave
-	jmp	N(balloc_cons)
+	/* Allocate vector of arg0 bytes, return in arg1 */
+GFUNC(balloc_vector):
+	GCSTAT_ADD(type_vector, arg0)
+	call    alloc_bytes
+	movl	$garbage_record | type_vector << 8, object_info(arg1)
+	ret
 
 /* Interface operations:
     bcall: any call from machine language
@@ -756,13 +683,11 @@ alloc_cons_gc:
     mc_invoke: C code -> machine language
 */
 
-	.globl	N(bcall)
-
 /* Call using standard x86 conventions
    closure_in contains called fn
 */
-N(bcall):
-	ISUNALIGNED(closure_inb)
+GFUNC(bcall):
+	ISINT(closure_inb)
 	jne	E(error_bad_function)
 
 	movw	$DEFAULT_SECLEVEL,N(internal_seclevel)
@@ -803,6 +728,10 @@ call_secure:
 	mov	object_offset+primitive_op(closure_in),%ecx
 	movw	primop_seclevel(%ecx),%di
 	cmpw	%di,N(internal_seclevel)
+	jb	E(error_security_violation)
+	mov     N(maxseclevel),%ecx
+	INTVAL(%ecx)
+	cmpw    %di,%cx
 	jb	E(error_security_violation)
 	/* fallthrough */
 
@@ -858,8 +787,7 @@ vararg_alloc:
 	movl	$garbage_record | type_vector << 8,object_info(arg0)
 
 	/* Copy args from sp+20 (edx, pc, argcount, ebp, pc, args...) */
-	lea	-object_offset(%edx),%ecx
-	shr	$2,%ecx
+	mov     8(%esp),%ecx     /* argcount */
 	mov	%esi,%edx
 	lea	20(%esp),%esi
 	lea	object_offset(arg0),%edi
@@ -881,14 +809,17 @@ vararg_alloc_gc:
 	leave
 	jmp	vararg_alloc
 
-	.globl	N(bcall_secure)
-
-N(bcall_secure):
+	/* input: argcnt in %eax, seclev in %cx, secure in %edx */
+GFUNC(bcall_secure):
 	mov	object_offset+primitive_op(closure_in),closure_in
-	/* Check security level */
-	mov	object_offset(closure),%ecx
-	movw	primop_seclevel(closure_in),%di
-	cmpw	%di,object_offset+mcode_seclevel(%ecx)
+	/* Check the immediate caller's security level */
+	cmpw	primop_seclevel(closure_in),%cx
+	jb	E(error_security_violation)
+	movw	%cx,N(internal_seclevel)
+	/* Check the session's security level */
+	mov	N(maxseclevel),%ecx
+	INTVAL(%ecx)
+	cmpw	primop_seclevel(closure_in),%cx
 	jb	E(error_security_violation)
 	/* Check arg count */
 	cmpw	argcountw,primop_nargs(closure_in)
@@ -903,48 +834,46 @@ bcall_secure_tail:
 	SAVE_CALLEE
 	REPUSH_ARGS
         END_PREVIOUS_FRAME_REG(%ecx)
-        CCALL_SECURE(*closure_in)
+        CCALL_LEAF(*closure_in)
 	RESTORE_CALLEE
 
 	leave
 	ret
 
-	.globl	N(bcall_varargs)
-
-N(bcall_varargs):
+	/* call varargs primitive in %edx (closure) with %eax
+  	   (argcount) arguments from the stack, at seclevel in %cx */
+GFUNC(bcall_varargs):
 	push    %ebp
         mov     %esp,%ebp
+	movw    %cx,N(internal_seclevel)
 	SAVE_CALLEE
 	push    argcount        /* not used by makevarargs */
         END_PREVIOUS_FRAME_REG(%ecx)
 	call	makevarargs
 	push	%eax
-	CCALL_SECURE(*closure_in)
+	CCALL_LEAF(*closure_in)
 	RESTORE_CALLEE
 	leave
 	ret
 
-	.globl	N(bapply_varargs)
-
-N(bapply_varargs):
-        /* call varargs primitive in arg1 (%ecx) with arguments in
-	   vector arg0 (%eax) */
+GFUNC(bapply_varargs):
+        /* call varargs primitive in closure (%edx) with arguments in
+	   vector arg0 (%eax) at seclevel %cx */
 	push    %ebp
         mov     %esp,%ebp
 
+	movw    %cx,N(internal_seclevel)
         push    arg0
-        push	arg1
+        push	closure_in
 
         SAVE_CALLEE
         END_PREVIOUS_FRAME_REG(%ecx)
-        CCALL_SECURE(N(apply_vararg))
+        CCALL_LEAF(N(apply_vararg))
         RESTORE_CALLEE
         leave
         ret
 
-	.globl	N(interpreter_invoke)
-
-N(interpreter_invoke):
+GFUNC(interpreter_invoke):
 	push    %ebp
         mov     %esp,%ebp
 
@@ -1028,23 +957,20 @@ N(interpreter_invoke):
 	add	$object_offset+function_offset,%ecx; \
 	call	*%ecx
 
-	.globl	N(invoke0)
-N(invoke0):
+GFUNC(invoke0):
 	START_INVOKE
 	xor	%eax,%eax
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke1)
-N(invoke1):
+GFUNC(invoke1):
 	START_INVOKE
 	mov	$1,%eax
 	push	12(%ebp)
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke2)
-N(invoke2):
+GFUNC(invoke2):
 	START_INVOKE
 	mov	$2,%eax
 	push	16(%ebp)
@@ -1052,8 +978,7 @@ N(invoke2):
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke3)
-N(invoke3):
+GFUNC(invoke3):
 	START_INVOKE
 	mov	$3,%eax
 	push	20(%ebp)
@@ -1062,8 +987,7 @@ N(invoke3):
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke4)
-N(invoke4):
+GFUNC(invoke4):
 	START_INVOKE
 	mov	$4,%eax
 	push	24(%ebp)
@@ -1073,8 +997,7 @@ N(invoke4):
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke5)
-N(invoke5):
+GFUNC(invoke5):
 	START_INVOKE
 	mov	$5,%eax
 	push	28(%ebp)
@@ -1085,8 +1008,7 @@ N(invoke5):
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke1plus)
-N(invoke1plus):
+GFUNC(invoke1plus):
 	START_INVOKE
 	mov	16(%ebp),%esi
 	PUSH_VECTORARGS
@@ -1095,8 +1017,7 @@ N(invoke1plus):
 	CALL_CLOSURE
 	END_INVOKE
 
-	.globl	N(invoke)
-N(invoke):
+GFUNC(invoke):
 	START_INVOKE
 	mov	12(%ebp),%esi
 	PUSH_VECTORARGS
@@ -1109,11 +1030,12 @@ N(invoke):
 	 * taken)
 	 */
 
-#define ERRORSTUB(n) \
-	.globl	N(b ## n); \
-N(b ## n):; \
-	END_FRAME_PC(0); \
-	push	$n; \
+#define ERRORSTUB(n)                            \
+GFUNC(b ## n):;                                 \
+	push    %ebp;                           \
+	mov     %esp,%ebp;                      \
+	END_PREVIOUS_FRAME;                     \
+	push	$n;                             \
 	CCALL_LEAF(N(runtime_error))
 
 ERRORSTUB(error_bad_function)
@@ -1132,5 +1054,20 @@ ERRORSTUB(error_user_interrupt)
 ERRORSTUB(error_no_match)
 ERRORSTUB(error_compile)
 ERRORSTUB(error_abort)
+
+/* argcount must be set correctly here */
+#define EARLYERRORSTUB(n)                               \
+GFUNC(bearly_ ## n):;                                   \
+	push    %ebp;                                   \
+	mov     %esp,%ebp;                              \
+	END_PREVIOUS_FRAME_REG(%ecx);                   \
+	push    argcount;                               \
+	push	$n;                                     \
+	CCALL_LEAF(N(compiled_early_runtime_error))
+
+EARLYERRORSTUB(error_loop)
+EARLYERRORSTUB(error_recurse)
+EARLYERRORSTUB(error_security_violation)
+EARLYERRORSTUB(error_wrong_parameters)
 
 #endif

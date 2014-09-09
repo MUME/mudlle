@@ -70,8 +70,8 @@ TYPEDOP(stringp, "string?", "`x -> `b. TRUE if `x is a string", 1, (value v),
   return makebool(TYPE(v, type_string));
 }
 
-TYPEDOP(make_string, 0, "`n -> `s. Create a string of length `n, where 0 <= `n"
-        " <= `MAX_STRING_SIZE.",
+TYPEDOP(make_string, 0, "`n -> `s. Create an all-zero string of length `n,"
+        " where 0 <= `n <= `MAX_STRING_SIZE.",
         1, (value msize), OP_LEAF | OP_NOESCAPE, "n.s")
 {
   int size = GETINT(msize);
@@ -351,7 +351,7 @@ TYPEDOP(string_n ## type ## cmp, 0, "`s1 `s2 `n0 -> `n1. Compare at"    \
 }                                                                       \
                                                                         \
 TYPEDOP(string_ ## type ## cmp, 0, "`s1 `s2 -> `n. Compare two"         \
-        " strings " desc ". Returns 0 if `s1 = `s2, < 0 if `s1 < `s2"   \
+        " strings" desc ". Returns 0 if `s1 = `s2, < 0 if `s1 < `s2"    \
         " and > 0 if `s1 > `s2",                                        \
 	2, (struct string *s1, struct string *s2),                      \
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE                              \
@@ -362,6 +362,26 @@ TYPEDOP(string_ ## type ## cmp, 0, "`s1 `s2 -> `n. Compare two"         \
     primitive_runtime_error(error_bad_type, &op_string_ ## type ## cmp, \
                             2, s1, s2);                                 \
   return string_n ## type ## cmp(s1, s2, LONG_MAX);                     \
+}                                                                       \
+                                                                        \
+TYPEDOP(string_ ## type ## equalp, "string_" #type "equal?",            \
+        "`s1 `s2 -> `b. Return true if `s1 and `s2 are equal" desc ".", \
+        2, (struct string *s1, struct string *s2),                      \
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE                              \
+        | OP_STR_READONLY | OP_CONST,                                   \
+        "ss.n")                                                         \
+{                                                                       \
+  if (!TYPE(s1, type_string) || !TYPE(s2, type_string))                 \
+    primitive_runtime_error(error_bad_type,                             \
+                            &op_string_ ## type ## equalp,              \
+                            2, s1, s2);                                 \
+  long len = string_len(s1);                                            \
+  if (len != string_len(s2))                                            \
+    return makebool(false);                                             \
+  if ((#type)[0] == 0)                                                  \
+    return makebool(memcmp(s1->str, s2->str, len) == 0);                \
+  return makebool(string_n ## type ## cmp(s1, s2, LONG_MAX)             \
+                  == makeint(0));                                       \
 }
 
 STRING_CMP(, , (unsigned char))
@@ -702,10 +722,12 @@ const unsigned char *get_iso88591_pcre_table(void)
 
   been_here = true;
   char *olocale = strdup(setlocale(LC_ALL, NULL));
-  if (setlocale(LC_ALL, "en_US.iso88591") == NULL)
-    return NULL;
-  table = pcre_maketables();
-  setlocale(LC_ALL, olocale);
+  if (setlocale(LC_ALL, "en_US.iso88591") != NULL)
+    {
+      table = pcre_maketables();
+      setlocale(LC_ALL, olocale);
+    }
+  free(olocale);
   return table;
 #else  /* ! USE_PCRE */
   return NULL;
@@ -1001,6 +1023,9 @@ void string_init(void)
   DEFINE(string_ncmp);
   DEFINE(string_nicmp);
   DEFINE(string_n8icmp);
+  DEFINE(string_equalp);
+  DEFINE(string_iequalp);
+  DEFINE(string_8iequalp);
   DEFINE(string_search);
   DEFINE(string_isearch);
   DEFINE(substring);

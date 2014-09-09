@@ -52,14 +52,13 @@ void warning_line(const char *fname, const char *nname, int line,
 /* The only standard tag ... */
 #define TAG_END -1
 
-void *reverse_list_internal(void *l);
+void *reverse_list_internal(void *l, size_t ofs);
 
 /* Reverses list 'l' of type 'type *' and returns the new list.
-   The first field in *l must be a pointer called 'next' to the next item. */
-#define reverse_list(l, type)                             \
-  ((void)((l) - (type *)0),                               \
-   CASSERT_EXPR(offsetof(type, next) == 0),               \
-   (void)(&(l) - &(l)->next),                             \
-   (type *)reverse_list_internal(l))
+   *l must have a pointer field called 'next', pointing to the next item. */
+#define reverse_list(l, type)                                   \
+  ((void)((l) - (type *)0),                                     \
+   (void)(&(l) - &(l)->next),                                   \
+   (type *)reverse_list_internal(l, offsetof(type, next)))
 
 #endif

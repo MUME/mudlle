@@ -81,21 +81,6 @@
   regresseval("cons0", "gi . gj", gi . gj);
   // TBD: a cons causing GC
 
-  regress2args("or1", 7, "fun", "arg1 or arg2", 7 or "fun");
-  regress2args("or2", false, false, "arg1 or arg2", false);
-  regress2args("or3", false, null, "arg1 or arg2", true);
-  regress2args("or4", '(1 2), false, "arg1 or arg2", true);
-  regress1arg("or5", '(1 2), "arg1 or false", true);
-  regress1arg("or6", false, "arg1 or false", false);
-
-  regress2args("and1", 7, "fun", "arg1 and arg2", 7 and "fun");
-  regress2args("and2", false, false, "arg1 and arg2", false);
-  regress2args("and3", false, null, "arg1 and arg2", false);
-  regress2args("and4", '(1 2), false, "arg1 and arg2", false);
-  regress2args("and5", true, true, "arg1 and arg2", true);
-  regress1arg("and6", '(1 2), "arg1 and true", true);
-  regress1arg("and7", false, "arg1 and true", false);
-
   regress2args("==0", true, true, "arg1 == arg2", true);
   regress2args("==1", true, '(1 2), "arg1 == arg2", false);
   regress2args("!=0", "fun", '(1 2), "arg1 != arg2", true);

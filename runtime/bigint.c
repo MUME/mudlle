@@ -39,10 +39,16 @@ static struct alloc_list {
   void *data;
 } *alloc_root = 0;
 
+#define MAX_BIGINT_SIZE (MAX_MUDLLE_OBJECT_SIZE         \
+                         - sizeof (struct string)       \
+                         - sizeof (mpz_t))
+
 static void *mpz_alloc_fn(size_t size)
 {
-  struct alloc_list *m = (struct alloc_list *)malloc(sizeof *m);
+  if (size > MAX_BIGINT_SIZE)
+    runtime_error(error_bad_value);
 
+  struct alloc_list *m = malloc(sizeof *m);
   m->next = alloc_root;
   m->data = malloc(size);
   alloc_root = m;
@@ -52,14 +58,18 @@ static void *mpz_alloc_fn(size_t size)
 
 static void *mpz_realloc_fn(void *odata, size_t osize, size_t nsize)
 {
-  struct alloc_list *m = (struct alloc_list *)malloc(sizeof *m);
+  /* optimize common case */
+  if (alloc_root && alloc_root->data == odata)
+    {
+      if (nsize > MAX_BIGINT_SIZE)
+        runtime_error(error_bad_value);
+      alloc_root->data = realloc(alloc_root->data, nsize);
+      return alloc_root->data;
+    }
 
-  m->next = alloc_root;
-  m->data = malloc(nsize);
-  memcpy(m->data, odata, osize);
-  alloc_root = m;
-
-  return m->data;
+  void *ndata = mpz_alloc_fn(nsize);
+  memcpy(ndata, odata, osize);
+  return ndata;
 }
 
 static void mpz_free_fn(void *data, size_t size)
@@ -68,19 +78,14 @@ static void mpz_free_fn(void *data, size_t size)
 
 void free_mpz_temps(void)
 {
-  struct alloc_list *m = alloc_root;
-
-  while (m)
+  for (struct alloc_list *m = alloc_root; m; )
     {
       struct alloc_list *next = m->next;
-
       free(m->data);
       free(m);
-
       m = next;
     }
-
-  alloc_root = 0;
+  alloc_root = NULL;
 }
 
 static struct bigint *get_bigint(value v)
@@ -234,14 +239,12 @@ TYPEDOP(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
 }
 
 TYPEDOP(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
-        " negative `n. The latter rounds towards zero.",
+        " negative `n.",
         2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
         "Bn.b")
 {
-  ISINT(v);
-  bi = get_bigint(bi);
-
   long n = GETINT(v);
+  bi = get_bigint(bi);
 
   mpz_t m;
   mpz_init(m);
@@ -249,9 +252,9 @@ TYPEDOP(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
     mpz_div_2exp(m, bi->mpz, -n);
   else
     mpz_mul_2exp(m, bi->mpz, n);
+
   struct bigint *rm = alloc_bigint(m);
   free_mpz_temps();
-
   return rm;
 }
 
@@ -388,7 +391,7 @@ UNIMPLEMENTED(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
               OP_LEAF | OP_NOESCAPE, "BB.n")
 
 UNIMPLEMENTED(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
-              " negative `n. The latter rounds towards zero."
+              " negative `n. The latter rounds towards zero.",
               2, (struct bigint *bi, value v),
               OP_LEAF | OP_NOESCAPE | OP_CONST,
               "Bn.b")

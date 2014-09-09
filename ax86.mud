@@ -22,8 +22,8 @@
 library ax86 // The x86 assembler
 requires mx86, dlist, sequences, misc, compiler
 defines x86:assemble, x86:reset_counters
-reads mc:verbose, x86:reg_globals
-writes nins, nbytes, jccjmp_count, labeled_jmp
+reads mc:verbose, mc:disassemble, x86:reg_globals
+writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 [
   | remove_aliases, setword, resize_branches, set_offsets, increase_branches,
     assemble, ins_size, igen, generic2, generic2byte, generic2math,
@@ -33,13 +33,13 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
     gsizeshift, peephole, ubyte?, uimmval8, uimmediate8?, byte_reg?, eax?,
     imm_zero? |
 
-  jccjmp_count = labeled_jmp = 0;
+  mc:jccjmp_count = mc:labeled_jmp = 0;
 
   byte? = fn (int n) n >= -128 && n <= 127;
 
   x86:reset_counters = fn ()
     [
-      nins = nbytes = 0;
+      mc:nins = mc:nbytes = 0;
     ];
 
   x86:reset_counters();
@@ -56,12 +56,12 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	  newline();
 	];
       ilist = peephole(ilist);
-      if (mc:verbose >= 4)
+      if (mc:verbose >= 4 || mc:disassemble)
 	[
 	  x86:ins_list(fcode);
 	  newline();
 	];
-      nins = nins + dlength(ilist);
+      mc:nins += dlength(ilist);
       resize_branches(ilist);
 
       assemble(ilist)
@@ -114,7 +114,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	      x86:set_label(il[x86:il_label], label[x86:l_ins]);
 	      il[x86:il_label] = false;
 	      aliased_label = true; // will need to remove aliases
-	      labeled_jmp = labeled_jmp + 1;
+	      ++mc:labeled_jmp;
 	    ];
 
 	  if (jcc == null) // nojcc state
@@ -127,7 +127,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	    ]
 	  else if (jmp == null) // jcc state
 	    [
-	      // jmp must be unlabeled, but labeled_jmp optimisation
+	      // jmp must be unlabeled, but mc:labeled_jmp optimisation
 	      // deals with that.
 	      if (ins[x86:i_op] == x86:op_jmp)
 		jmp = iscan // to jcc/jmp state
@@ -138,7 +138,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	    [
 	      if (il[x86:il_label] == jcc[x86:i_arg1]) // peephole time!
 		[
-		  jccjmp_count = jccjmp_count + 1;
+		  ++mc:jccjmp_count;
 		  if (mc:verbose >= 3)
 		    [
 		      display("PEEPHOLE jcc over jmp: ");
@@ -245,13 +245,13 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
       last = dget(dprev(ilist));
       size = last[x86:il_offset] + ins_size(last[x86:il_ins]);
-      nbytes = nbytes + size;
+      mc:nbytes += size;
       code = make_string(size);
 
       linenos = make_string_oport();
       last_line = last_offset = 0;
 
-      info = vector(null, null, null, null, null, null, null, null);
+      info = make_vector(mc:a_info_fields);
       dforeach(fn (il) [
         ins_lineno(il[x86:il_lineno], il[x86:il_offset]);
         ins_gen(code, il[x86:il_ins], il[x86:il_offset], info);
@@ -261,7 +261,6 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
       code . info
     ];
 
-  byte? = fn (x) x >= - 128 && x <= 127;
   immval8 = fn (arg)
     [
       | i |
@@ -291,7 +290,8 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
       m = car(arg);
       m == x86:limm || m == x86:lglobal_constant || m == x86:lfunction ||
-      m == x86:lcst || m == x86:lclosure
+      m == x86:lcst || m == x86:lclosure ||
+      (m == x86:lglobal && pair?(cdr(arg)))
     ];
   immediate8? = fn (arg) car(arg) == x86:limm && byte?(immval8(arg));
 
@@ -344,7 +344,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
       else fail();
     ];
 
-  isize = make_vector(38);
+  isize = make_vector(x86:ops);
 
   isize[x86:op_push] = fn (a1, a2)
     if (immediate8?(a1)) 2
@@ -367,13 +367,18 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
     else
       1 + easize(a1);
 
-  isize[x86:op_mov] = fn (a1, a2)
+  isize[x86:op_movbyte] = isize[x86:op_mov] = fn (a1, a2)
     if (imm_zero?(a1) && register?(a2))
       isize[x86:op_xor](a2, a2)
     else if (immediate?(a1))
       if (register?(a2)) 5
       else 5 + easize(a2)
     else if (register?(a1)) 1 + easize(a2)
+    else if (car(a1) == x86:lseclev)
+      [
+        assert(register?(a2));
+        if (cdr(a1) == x86:sl_c) 3 else 5
+      ]
     else if (register?(a2)) 1 + easize(a1)
     else [ dformat("%s %s\n", a1, a2); fail(); ];
 
@@ -417,6 +422,13 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 
   isize[x86:op_test]    = gsize2u;
 
+  isize[x86:op_imul] = fn (a1, a2)
+    [
+      | imm2 |
+      @(,x86:lidx . (_ . imm2)) = a2;
+      (if (byte?(imm2)) 2 else 5) + easize(a1)
+    ];
+
   gsize1b = fn (a1, a2) 1 + easize(a1);
   gsize1 = fn (a1, a2)
       if (register?(a1)) 1
@@ -454,7 +466,7 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   ins_size = fn (ins)
     isize[ins[x86:i_op]](ins[x86:i_arg1], ins[x86:i_arg2]);
 
-  igen = make_vector(38);
+  igen = make_vector(x86:ops);
 
   igen[x86:op_push] = fn (code, a1, a2, o, info)
     if (immediate8?(a1))
@@ -572,11 +584,25 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
 	code[o] = 0x89;
 	setea1(code, o + 1, regval(a1), a2, info);
       ]
+    else if (car(a1) == x86:lseclev)
+      [
+        assert(register?(a2));
+        code[o] = 0xb8 | regval(a2);
+	info[mc:a_seclevs] = (cdr(a1) . (o + 1)) . info[mc:a_seclevs]
+      ]
     else if (register?(a2))
       [
 	// missing move from eax <- abs32 case
 	code[o] = 0x8b;
 	setea1(code, o + 1, regval(a2), a1, info);
+      ]
+    else fail();
+
+  igen[x86:op_movbyte] = fn (code, a1, a2, o, info)
+    if (register?(a1))
+      [
+	code[o] = 0x88;
+	setea1(code, o + 1, regval(a1), a2, info);
       ]
     else fail();
 
@@ -670,6 +696,18 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
   igen[x86:op_andbyte] = generic2mathbyte(4);
 
   igen[x86:op_test] = generic2(0xa8 . 0xf6, null, 0xf7, 0, 0xa9, 0x85, null);
+
+  igen[x86:op_imul] = fn (code, a1, a2, o, info)
+    [
+      | imm2, i8? |
+      @(,x86:lidx . (a2 . imm2)) = a2;
+      code[o] = if (i8? = byte?(imm2)) 0x6b else 0x69;
+      o = setea1(code, o + 1, a2, a1, info);
+      if (i8?)
+        code[o] = imm2
+      else
+        setword(code, o, imm2)
+    ];
 
   generic1 = fn (memop, memextraop, regop)
     fn (code, a1, a2, o, info)
@@ -914,7 +952,11 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
       else if (m == x86:lcst)
 	info[mc:a_constants] = (a . o) . info[mc:a_constants]
       else if (m == x86:lfunction)
-	info[mc:a_subfns] = (a . o) . info[mc:a_subfns]
+        if (string?(a))
+          // negative offset means code object inside closure
+          info[mc:a_kglobals] = (a . -o) . info[mc:a_kglobals]
+        else
+          info[mc:a_subfns] = (a . o) . info[mc:a_subfns]
       else if (m == x86:lclosure)
         // negative offset is parsed by link() and converted into a closure
 	info[mc:a_subfns] = (a . -o) . info[mc:a_subfns]
@@ -922,6 +964,8 @@ writes nins, nbytes, jccjmp_count, labeled_jmp
         info[mc:a_builtins] = (a . o) . info[mc:a_builtins]
       else if (m == x86:lprimitive)
         info[mc:a_primitives] = (a . o) . info[mc:a_primitives]
+      else if (m == x86:lglobal)
+        info[mc:a_globals] = (a . o) . info[mc:a_globals]
       else if (m == x86:limm)
 	[
 	  if (pair?(a)) // 2*n or 2*n+1

@@ -50,7 +50,7 @@ void env_push(vlist locals, fncode fn);
      variables 'locals' in function 'fn'.
 */
 
-void env_block_push(vlist locals);
+void env_block_push(vlist locals, bool statics);
 /* Effects: We have entered a local scope of the environment at the top
      of the stack. Add locals to the list of variables for this scope,
      and initialise them to null if necessary.
@@ -66,7 +66,8 @@ varlist env_pop(uword *nb_locals);
 */
 
 variable_class env_lookup(const char *name, ulong *offset,
-			  bool do_read, bool do_write);
+			  bool do_read, bool do_write,
+                          bool *is_static);
 /* Effects: Returns the class & offset of variable name for the current
      environment. Modifies the closures appropriately. Marks local variables
      as read/written according to do_read/do_write

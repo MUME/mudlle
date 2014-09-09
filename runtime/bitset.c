@@ -39,14 +39,6 @@ TYPEDOP(new_bitset, 0,
   return newp;
 }
 
-TYPEDOP(bcopy, 0, "`bitset1 -> `bitset2. Makes a copy of `bitset1",
-	1, (struct string *b),
-	OP_LEAF | OP_NOESCAPE, "s.s")
-{
-  TYPEIS(b, type_string);
-  return mudlle_string_copy(b);
-}
-
 TYPEDOP(bclear, 0,
         "`bitset -> `bitset. Clears all bits of `bitset and returns it",
 	1, (struct string *b),
@@ -286,7 +278,6 @@ TYPEDOP(bcount, 0, "`bitset -> `n. Returns the number of bits set in `bitset",
 void bitset_init(void)
 {
   DEFINE(new_bitset);
-  DEFINE(bcopy);
   DEFINE(bclear);
   DEFINE(set_bitb);
   DEFINE(clear_bitb);

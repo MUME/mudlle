@@ -223,7 +223,7 @@ and LIMIT for `font-lock-mode'."
   (let* ((kw (regexp-opt '("fn" "if" "else" "while" "for"
                            "exit" "loop" "match") 'words))
 	 (bol-kw (regexp-opt '("library" "module" "requires" "reads"
-			       "writes" "defines") 'words)))
+                               "writes" "static" "defines") 'words)))
     `(,kw
       (,(concat "^\\s-*" bol-kw) . 1)
       (mudlle-fontify-local-vars)
@@ -447,7 +447,7 @@ The relative indentation among the lines of the expression are preserved."
 	  (forward-line 1)
 	  (setq beg (point)))
 	(if (> end beg)
-	    (indent-code-rigidly beg end shift-amt "#")))
+	    (indent-code-rigidly beg end shift-amt)))
     (if (and (not mudlle-tab-always-indent)
 	     (save-excursion
 	       (skip-syntax-backward "-")
@@ -466,8 +466,6 @@ Return the amount the indentation changed by."
     (setq beg (point))
     (cond ((eq indent nil)
            (setq indent (current-indentation)))
-          ((looking-at "\\s-*#")
-           (setq indent 0))
           (t
            (skip-syntax-forward "-")
            (if (listp indent) (setq indent (car indent)))

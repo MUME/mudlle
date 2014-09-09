@@ -235,6 +235,7 @@ struct symbol *table_add(struct table *table, struct string *name, value data)
   return table_add_fast(table, name, data);
 }
 
+
 struct symbol *table_add_fast(struct table *table, struct string *name,
                               value data)
 /* Requires: table_lookup(table, name->str, ...) to have just failed.
@@ -243,41 +244,48 @@ struct symbol *table_add_fast(struct table *table, struct string *name,
    Returns: The new symbol
 */
 {
-  ulong size = intval(table->size), newsize, i, max;
-  struct vector *newp, *old;
-  struct symbol **oldbucket;
-  struct symbol *sym = NULL;
+  GCPRO1(table);
+  struct symbol *sym = alloc_symbol(name, data);
+  UNGCPRO();
+  return table_add_sym_fast(table, sym);
+}
+
+struct symbol *table_add_sym_fast(struct table *table, struct symbol *sym)
+/* Requires: table_lookup(table, name->str, ...) to have just failed.
+   Effects: Adds <name,data> to the symbol table.
+   Modifies: table
+   Returns: The symbol
+*/
+{
+  ulong size = intval(table->size);
 
   assert(~table->o.flags & OBJ_READONLY);
   assert(~table->buckets->o.flags & OBJ_READONLY);
 
-  GCCHECK(name); GCCHECK(data);
-  assert(add_position < intval(table->size)
+  assert(add_position < size
          && !table->buckets->data[add_position]);
-  GCPRO2(table, sym);
-  sym = alloc_symbol(name, data);
+
   table->buckets->data[add_position] = sym;
   table->used = (value)((long)table->used + 2);
 
   /* If table is 3/4 full, increase its size */
-  max = size / 2 + size / 4;
+  ulong max = size / 2 + size / 4;
   if (intval(table->used) < max)
-    {
-      UNGCPRO();
-      return sym;
-    }
+    return sym;
 
   /* Double table size */
-  newsize = 2 * size;
+  ulong newsize = 2 * size;
   table->size = makeint(newsize);
 
-  newp = alloc_vector(newsize);
-  old = table->buckets;
-  table->buckets = newp;
+  GCPRO2(table, sym);
+  struct vector *newp = alloc_vector(newsize);
   UNGCPRO();
+  struct vector *old = table->buckets;
+  table->buckets = newp;
 
+  ulong i = 0;
   /* Copy data from old buckets into new ones */
-  for (oldbucket = (struct symbol **)old->data, i = 0;
+  for (struct symbol **oldbucket = (struct symbol **)old->data;
        i < size;
        oldbucket++, i++)
     if (*oldbucket)

@@ -80,11 +80,12 @@ typedef struct {
   const char *filename;
   const char *nicename;
   int lineno;
+  bool statics;                 /* true if 'locals' are in fact statics */
 } *block;
 
 enum constant_class {
   cst_int, cst_string, cst_list, cst_array, cst_float, cst_bigint, cst_table,
-  cst_symbol
+  cst_symbol, cst_expression
 };
 
 struct _constant {
@@ -94,8 +95,10 @@ struct _constant {
     str_and_len_t string;
     double mudlle_float;
     const char *bigint_str;
-    cstlist constants;	/* Stored in reverse order ... */
+    cstlist constants;          /* stored in reverse order; tail element is
+                                   first for vclass cst_list */
     cstpair constpair;
+    component expression;       /* not an actual constant at all */
   } u;
 };
 
@@ -163,6 +166,17 @@ enum component_class {
   component_classes
 };
 
+#define FOR_PARSER_MODULE_FIELDS(op)                            \
+  op(class) op(name) op(imports) op(defines) op(reads)          \
+  op(writes) op(statics) op(body) op(filename) op(nicename)
+
+enum parser_module_field {
+#define __MDEF(name) m_ ## name,
+  FOR_PARSER_MODULE_FIELDS(__MDEF)
+#undef __MDEF
+  parser_module_fields
+};
+
 struct _component {
   enum component_class vclass;
   int lineno;
@@ -187,22 +201,20 @@ struct _component {
   } u;
 };
 
+/* these are manually exported to mudlle from support.c */
 enum file_class { f_plain, f_module, f_library };
 
 typedef struct {
   enum file_class vclass;
   const char *name;
-  vlist imports;
-  vlist defines;
-  vlist reads;
-  vlist writes;
+  vlist imports, defines, reads, writes, statics;
   block body;
   int lineno;
 } *mfile;
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
-	       block body, int lineno);
+               vlist statics, block body, int lineno);
 function new_function(block_t heap, unsigned typeset, str_and_len_t help,
                       vlist args, component val, int lineno,
                       const char *filename, const char *nicename);
@@ -212,6 +224,7 @@ function new_vfunction(block_t heap, unsigned typeset, str_and_len_t help,
                        const char *anicename);
 block new_codeblock(block_t heap, vlist locals, clist sequence,
 		    const char *filename, const char *nicename, int lineno);
+block new_toplevel_codeblock(block_t heap, vlist statics, block body);
 clist new_clist(block_t heap, component c, clist next);
 cstpair new_cstpair(block_t heap, constant cst1, constant cst2);
 cstlist new_cstlist(block_t heap, constant cst, cstlist next);
@@ -227,12 +240,12 @@ component new_binop_component(block_t heap, int lineno, enum builtin_op op,
 component new_int_component(block_t heap, long n);
 
 component new_pattern_component(block_t heap, pattern pat, component e);
-pattern new_pattern_constant(block_t heap, constant c);
+pattern new_pattern_constant(block_t heap, constant c, int lineno);
 pattern new_pattern_expression(block_t heap, component c);
 pattern new_pattern_symbol(block_t heap, const char *sym, mtype type,
                            int lineno);
 pattern new_pattern_compound(block_t heap, enum pattern_class class,
-			     patternlist list, bool ellipsis);
+			     patternlist list, bool ellipsis, int lineno);
 pattern new_pattern_sink(block_t heap);
 patternlist new_pattern_list(block_t heap, pattern pat, patternlist tail);
 
@@ -254,6 +267,9 @@ component new_reference(block_t heap, int lineno, component e);
 component new_dereference(block_t heap, int lineno, component e);
 component new_assign_expression(block_t heap, component e0, enum builtin_op op,
                                 component e1, bool postfix, int lineno);
+
+/* Creates a deep copy of src into dest. The str member is xmalloc()ed. */
+void str_and_len_dup(str_and_len_t *dest, const str_and_len_t *src);
 
 #ifdef PRINT_CODE
 void print_mudlle_file(FILE *out, mfile f);

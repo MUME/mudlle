@@ -19,9 +19,24 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-  // Compiler x86 compiler as protected modules
-
 trap_error(fn() [
+  | slice, slices |
+  slice = 0;
+  slices = 1;
+
+  // optional two arguments N and M lets the user pick the N'th out of
+  // M subsets of files to compile
+  match (argv)
+    [
+      [_ s ss] => [
+        slice = atoi(s);
+        slices = atoi(ss);
+        assert(slice >= 0 && slice < slices);
+      ];
+      [_] => null;
+      _ => fail();
+    ];
+
   mc:verbose = 0;
   x86:reset_counters();
   start = ctime();
@@ -33,32 +48,43 @@ trap_error(fn() [
         quit(1)
       ];
 
-  safecomp("dihash.mud");
-  safecomp("compiler.mud");
-  safecomp("link.mud");
-  safecomp("misc.mud");
-  safecomp("sequences.mud");
-  safecomp("dlist.mud");
-  safecomp("graph.mud");
-  safecomp("ax86.mud");
-  safecomp("vars.mud");
-  safecomp("flow.mud");
-  safecomp("optimise.mud");
-  safecomp("ins3.mud");
-  safecomp("mx86.mud");
-  safecomp("phase1.mud");
-  safecomp("phase2.mud");
-  safecomp("phase3.mud");
-  safecomp("phase4.mud");
-  safecomp("genx86.mud");
-  safecomp("x86.mud");
-  safecomp("compile.mud");
-  safecomp("noinf.mud");
-  safecomp("inference.mud");
+  | mfiles |
+  // sort by size
+  mfiles = vmap(fn (f) f . file_stat(f)[fs_size], '[
+    "ax86.mud"
+    "compile.mud"
+    "compiler.mud"
+    "dihash.mud"
+    "dlist.mud"
+    "flow.mud"
+    "genx86.mud"
+    "graph.mud"
+    "inference.mud"
+    "ins3.mud"
+    "link.mud"
+    "misc.mud"
+    "mx86.mud"
+    "noinf.mud"
+    "optimise.mud"
+    "phase1.mud"
+    "phase2.mud"
+    "phase3.mud"
+    "phase4.mud"
+    "sequences.mud"
+    "vars.mud"
+    "x86.mud"
+  ]);
+  vqsort!(fn (a, b) cdr(a) > cdr(b), mfiles);
 
-  dformat("cpu time: %s ms%n", ctime() - start);
-  dformat("nins:   %s%n", nins);
-  dformat("nbytes: %s%n", nbytes);
+  for (| n | n = slice; n < vlength(mfiles); n += slices)
+    safecomp(car(mfiles[n]));
+
+  if (silent != true)
+    [
+      dformat("cpu time: %s ms%n", ctime() - start);
+      dformat("nins:   %s%n", mc:nins);
+      dformat("nbytes: %s%n", mc:nbytes);
+    ]
 ], fn (n) [
   quit(1);
 ], call_trace_on, true);

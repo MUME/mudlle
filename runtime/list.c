@@ -22,11 +22,20 @@
 #include "runtime.h"
 #include "../interpret.h"
 
-TYPEDOP(cons, 0, "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2",
+TYPEDOP(cons, 0, "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2."
+        " See also `pcons().",
 	2, (value car, value cdr),
 	OP_LEAF | OP_NOESCAPE, "xx.k")
 {
-  return (alloc_list(car, cdr));
+  return alloc_list(car, cdr);
+}
+
+TYPEDOP(pcons, 0, "`x1 `x2 -> `l. Make a new, read-only pair from elements"
+        " `x1 and `x2.",
+	2, (value car, value cdr),
+	OP_LEAF | OP_NOESCAPE | OP_CONST, "xx.k")
+{
+  return make_readonly(alloc_list(car, cdr));
 }
 
 TYPEDOP(car, 0, "`l -> `x. Returns first element of pair `l",
@@ -100,16 +109,40 @@ FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
   return l;
 }
 
+FULLOP(plist, 0, "`x1 ... -> `l. Returns a read-only and (if all elements are immutable) immutable list of the arguments.",
+       NVARARGS, (struct vector *args, ulong nargs), 0,
+       OP_LEAF | OP_NOESCAPE | OP_CONST,
+       list_tset, static)
+{
+  struct list *l = NULL;
+  GCPRO2(l, args);
+
+  bool immutable = true;
+  while (nargs > 0)
+    {
+      value v = args->data[--nargs];
+      immutable = immutable && immutablep(v);
+      l = make_readonly(alloc_list(v, l));
+      if (immutable)
+        l->o.flags |= OBJ_IMMUTABLE;
+    }
+
+  UNGCPRO();
+  return l;
+}
+
 void list_init(void)
 {
   DEFINE(listp);
   DEFINE(pairp);
   DEFINE(nullp);
   DEFINE(cons);
+  DEFINE(pcons);
   DEFINE(car);
   DEFINE(cdr);
   DEFINE(setcar);
   DEFINE(setcdr);
   system_define("null", NULL);
   DEFINE(list);
+  DEFINE(plist);
 }

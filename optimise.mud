@@ -26,11 +26,12 @@ reads mc:verbose
 writes mc:lineno, mc:this_function
 [
   | fold, compute_ops, branch_ops, useless_instructions, remove_instruction,
-    fold_constants, propagate_copies, propagate_closure_constants,
-    propagate_closure_constant, eliminate_dead_code, change,
-    pfoldbranch, partialfold, replace_use, remaining_fns, optimise_function,
-    compute_trap_types, check_compute_trap, convert_to_type_trap,
-    consttype, simple_equal? |
+    fold_constants, fold_length_branch, propagate_copies,
+    propagate_closure_constants, propagate_closure_constant,
+    eliminate_dead_code, change, pfoldbranch, partialfold, replace_use,
+    replace_fn_use, remaining_fns, optimise_function, compute_trap_types,
+    check_compute_trap, convert_to_type_trap, consttype, simple_equal?,
+    really_useless |
 
   fold = fn (ops, op, args, dofold)
     // Types: ops: array of function
@@ -47,6 +48,8 @@ writes mc:lineno, mc:this_function
 	| val, doop |
 
 	doop = ops[op];
+        if (!doop)
+          exit<function> false;
 	if (args == null)
 	  val = doop()
 	else if (cdr(args) == null)
@@ -54,7 +57,8 @@ writes mc:lineno, mc:this_function
 	else if (cddr(args) == null)
 	  val = doop(car(args)[mc:v_kvalue], cadr(args)[mc:v_kvalue])
 	else
-	  fail();
+          val = apply(doop,
+                      list_to_vector(lmap(fn (arg) arg[mc:v_kvalue], args)));
 	if (val) [ dofold(cdr(val)); true ]
 	else false
       ]
@@ -110,7 +114,11 @@ writes mc:lineno, mc:this_function
      fn () false,               // loop_count
      fn () false,               // max_loop_count
      fn (x) if (symbol?(x)) true . symbol_name(x) else false,
-     fn (x) if (symbol?(x)) true . symbol_get(x) else false);
+     fn (x) if (symbol?(x)) true . symbol_get(x) else false,
+     false,                     // vectors are mutable
+     fn v true . check_immutable(protect(v)), // sequence
+     fn (x, y) true . check_immutable(pcons(x, y)) // pcons
+     );
   assert(vlength(compute_ops) == mc:builtins);
 
   branch_ops = sequence
@@ -128,12 +136,26 @@ writes mc:lineno, mc:this_function
      fn (x, y) if (integer?(x) && integer?(y)) true . x >= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x <= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x > y else false,
+     fn (x, y) if (string?(x) && integer?(y)) true . slength(x) == y else false,
+     fn (x, y) if (string?(x) && integer?(y)) true . slength(x) != y else false,
+     fn (x, y) if (string?(x) && integer?(y)) true . slength(x) < y else false,
+     fn (x, y) if (string?(x) && integer?(y)) true . slength(x) >= y else false,
+     fn (x, y) if (string?(x) && integer?(y)) true . slength(x) <= y else false,
+     fn (x, y) if (string?(x) && integer?(y)) true . slength(x) > y else false,
+     fn (x, y) if (vector?(x) && integer?(y)) true . vlength(x) == y else false,
+     fn (x, y) if (vector?(x) && integer?(y)) true . vlength(x) != y else false,
+     fn (x, y) if (vector?(x) && integer?(y)) true . vlength(x) < y else false,
+     fn (x, y) if (vector?(x) && integer?(y)) true . vlength(x) >= y else false,
+     fn (x, y) if (vector?(x) && integer?(y)) true . vlength(x) <= y else false,
+     fn (x, y) if (vector?(x) && integer?(y)) true . vlength(x) > y else false,
      fn (x, y) true . equal?(x, y),
      fn (x, y) true . !equal?(x, y),
      fn (x) true . immutable?(x),
      fn (x) true . !immutable?(x),
      fn (x) true . readonly?(x),
-     fn (x) true . !readonly?(x));
+     fn (x) true . !readonly?(x),
+     fn (x) true . any_primitive?(x),
+     fn (x) true . !any_primitive?(x));
   assert(vlength(branch_ops) == mc:branch_type?);
 
   // false means cannot trap
@@ -178,41 +200,60 @@ writes mc:lineno, mc:this_function
      false,        // loop_count
      false,        // max_loop_count
      type_symbol,  // symbol_name
-     type_symbol); // symbol_get
+     type_symbol,  // symbol_get
+     false,        // vector
+     false,        // sequence
+     false         // pcons
+     );
   assert(vlength(compute_trap_types) == mc:builtins);
 
   mc:fold_branch = fn (il, val) // folding function for branches
     [
-      | ins, prevline |
+      | ins, toins |
 
       ins = il[mc:il_ins];
-      prevline = mc:lineno;
-      mc:lineno = il[mc:il_lineno];
-      mc:warning("branch is %s taken", if (val) "always" else "never");
-      mc:lineno = prevline;
 
       // change branch & remove graph edge
       if (val)
 	[
 	  ins[mc:i_bop] = mc:branch_always;
 	  // remove fall through edge
-	  graph_edges_out_apply(fn (e)
-				  if (graph_edge_get(e)) graph_remove_edge(e),
-				il[mc:il_node]);
+	  graph_edges_out_apply(fn (e) [
+            if (graph_edge_get(e))
+              [
+                | toil |
+                toil = dget(graph_node_get(graph_edge_to(e))[mc:f_ilist]);
+                assert(toins == null);
+                toins = toil[mc:il_ins];
+                graph_remove_edge(e)
+              ]
+          ], il[mc:il_node]);
 	]
       else
 	[
-	  | to |
-
+          | toil, tonode |
 	  ins[mc:i_bop] = mc:branch_never;
-	  to = ins[mc:i_bdest][mc:l_ins][mc:il_node];
+          toil = ins[mc:i_bdest][mc:l_ilist];
+	  tonode = toil[mc:il_node];
+          toins = toil[mc:il_ins];
 	  // remove label's edge
-	  graph_edges_out_apply(fn (e)
-				  if (graph_edge_to(e) == to) graph_remove_edge(e),
-				il[mc:il_node]);
+	  graph_edges_out_apply(
+            fn (e) if (graph_edge_to(e) == tonode) graph_remove_edge(e),
+            il[mc:il_node]);
 	];
       ins[mc:i_bargs] = null;
       change = true;
+
+      if (!(toins[mc:i_class] == mc:i_trap
+            && toins[mc:i_top] == mc:trap_always))
+        [
+          | prevline |
+          prevline = mc:lineno;
+          mc:lineno = il[mc:il_lineno];
+          mc:warning("branch is %s taken", if (val) "always" else "never");
+          mc:lineno = prevline;
+        ];
+
       if (mc:verbose >= 3)
 	[
 	  dformat("FOLD %s\n", il[mc:il_number]);
@@ -256,7 +297,57 @@ writes mc:lineno, mc:this_function
                         | 1 << type_bigint)))
     ];
 
-  fold_constants = fn (il)
+  // 'ins' is a comparison branch; check if it is comparing a string/vector
+  // length to a constant integer
+  fold_length_branch = fn (il, previl, ins, bop)
+    [
+      if (previl == null) exit<function> null;
+
+      | bvar0, bvar1, val |
+      @(bvar0 bvar1) = ins[mc:i_bargs];
+      val = mc:var_value(bvar1);
+      if (!integer?(val))
+        [
+          val = mc:var_value(bvar0);
+          if (!integer?(val))
+            exit<function> null;
+          @(bvar1 bvar0) = ins[mc:i_bargs];
+          if (bop >= mc:branch_lt && bop <= mc:branch_gt)
+            // flip logic
+            bop = mc:branch_gt + mc:branch_lt - bop;
+        ];
+      // avoid problems with overflow
+      if (val < 0 || val > MAX_STRING_SIZE)
+        exit<function> null;
+
+      // check if the previous instruction was {vector,string}_length
+      | pins, lop |
+      pins = previl[mc:il_ins];
+
+      if (!(pins[mc:i_class] == mc:i_compute
+            && ((lop = pins[mc:i_aop]) == mc:b_vlength
+                || lop == mc:b_slength)
+            && pins[mc:i_adest] == bvar0))
+        exit<function> null;
+
+      ins[mc:i_bop] = (bop - mc:branch_eq
+                       + (if (lop == mc:b_vlength) mc:branch_vlength
+                          else mc:branch_slength));
+      ins[mc:i_bargs] = list(car(pins[mc:i_aargs]), bvar1);
+      assert(!ins[mc:i_btypes]);
+
+      | args |
+      args = previl[mc:il_arguments];
+      il[mc:il_arguments] = if (args) bcopy(args) else false;
+
+      // We have to leave the length instruction behind in case its result is
+      // needed, but allow for it to be completely optimized away.
+      really_useless = pins . really_useless;
+
+      change = true;
+    ];
+
+  fold_constants = fn (il, previl)
     // Types: il : instruction
     // Effects: Does constant folding on given instruction
     [
@@ -310,15 +401,16 @@ writes mc:lineno, mc:this_function
           else if ((op == mc:branch_equal || op == mc:branch_nequal) &&
                    (simple_equal?(car(args)) || simple_equal?(cadr(args))))
             // change into regular == or !=
-            ins[mc:i_bop] += mc:branch_eq - mc:branch_equal;
+            ins[mc:i_bop] += mc:branch_eq - mc:branch_equal
+          else if (op >= mc:branch_eq && op <= mc:branch_gt)
+            fold_length_branch(il, previl, ins, op);
 	]
       else if (class == mc:i_call)
         [
           | fun, args |
           @(fun . args) = ins[mc:i_cargs];
           if (fun[mc:v_class] == mc:v_global_constant
-              && function?(fun = global_value(fun[mc:v_kvalue]))
-              && !closure?(fun)
+              && any_primitive?(fun = global_value(fun[mc:v_kvalue]))
               && (primitive_flags(fun) & OP_CONST)
               && lforall?(fn (v) v[mc:v_class] == mc:v_constant, args))
             [
@@ -339,8 +431,7 @@ writes mc:lineno, mc:this_function
                 [
                   mc:warning("call to %s() causes %s error",
                              function_name(fun), error_messages[got_error]);
-                  ins = vector(mc:i_trap, mc:trap_always, got_error,
-                               null, false)
+                  ins = mc:make_trap_ins(mc:trap_always, got_error, null);
                 ]
               else
                 [
@@ -349,8 +440,9 @@ writes mc:lineno, mc:this_function
                     mc:warning("fold const call %s() -> %w",
                                function_name(fun), result);
                   assert(immutable?(result) && readonly?(result));
-                  ins = vector(mc:i_compute, mc:b_assign, ins[mc:i_cdest],
-                               list(mc:var_make_constant(result)), false);
+                  ins = mc:make_compute_ins(
+                    mc:b_assign, ins[mc:i_cdest],
+                    list(mc:var_make_constant(result)));
                 ];
               mc:lineno = prevline;
               il[mc:il_ins] = ins;
@@ -359,7 +451,8 @@ writes mc:lineno, mc:this_function
         ];
     ];
 
-  replace_use = fn (use, dvar, repvar, closure_ok?, is_fn?)
+  // return true if all uses were replaced
+  replace_use = fn (use, dvar, repvar, closure_ok?)
     [
       | ins, class, rep, replist |
 
@@ -375,27 +468,11 @@ writes mc:lineno, mc:this_function
       if (ins == null) exit<function> 0; // instruction is gone
 
       class = ins[mc:i_class];
-      if (is_fn?)
-        if (class == mc:i_closure)
-          // fall through to regular treatment below
-          null
-        else if (class == mc:i_call)
-          [
-            if (car(ins[mc:i_cargs]) == dvar)
-              ins[mc:i_cfunction] = repvar;
-            exit<function> null;
-          ]
-        else
-          exit<function> null
-      else
-        [
-          if (mc:verbose >= 3)
-            [
-              dformat("COPY %s to %s in %s\n",
-                      mc:svar(dvar), mc:svar(repvar), use[mc:il_number]);
-            ];
-          change = true;
-        ];
+
+      if (mc:verbose >= 3)
+        dformat("COPY %s to %s in %s\n",
+                mc:svar(dvar), mc:svar(repvar), use[mc:il_number]);
+      change = true;
 
       if (class == mc:i_compute)
         replist(ins[mc:i_aargs])
@@ -436,38 +513,109 @@ writes mc:lineno, mc:this_function
 
           if (!clvar) exit<function> null;
 
-          if (!is_fn?)
-            func[mc:c_fclosure] = ldelete!(clvar, func[mc:c_fclosure]);
-          propagate_closure_constant(func, clvar, repvar, is_fn?);
+          assert(propagate_closure_constant(func, clvar, repvar, replace_use));
+          func[mc:c_fclosure] = ldelete!(clvar, func[mc:c_fclosure]);
         ]
       else
         fail();
+
+      true
     ];
 
-  // is_fn? signals that the variable contains a local function
-  // (closure) and we're going to annotate any call instructions with
-  // the functions, so we can do type inference across the call
-  propagate_closure_constant = fn (ifn, dvar, repvar, is_fn?)
+  // return true if all uses were replaced
+  replace_fn_use = fn (use, dvar, repvar, closure_ok?)
     [
-      | ndvar |
+      assert(closure_ok?);
+
+      | ins, class |
+
+      ins = use[mc:il_ins];
+      if (ins == null) exit<function> false; // instruction is gone
+
+      class = ins[mc:i_class];
+
+      if (class == mc:i_closure)
+        [
+          | clvar, func |
+
+          func = ins[mc:i_ffunction];
+
+          clvar = lexists?(fn (var) [
+            if (var[mc:v_cparent] == dvar)
+              var
+            else
+              false;
+          ], func[mc:c_fclosure]);
+
+          if (!clvar) exit<function> true;
+
+          if (!propagate_closure_constant(func, clvar, repvar, replace_fn_use))
+            exit<function> false;
+
+          func[mc:c_fclosure] = ldelete!(clvar, func[mc:c_fclosure]);
+          exit<function> true;
+        ];
+
+      if (class == mc:i_call)
+        [
+          | fvar, fun |
+          fvar = car(ins[mc:i_cargs]);
+          if (fvar == dvar)
+            [
+              if (pair?(ins[mc:i_cfunction]))
+                set_car!(ins[mc:i_cfunction], repvar)
+              else
+                ins[mc:i_cfunction] = repvar;
+            ]
+          else if (fvar[mc:v_class] == mc:v_global_constant
+                   && (any_primitive?(fun = global_value(fvar[mc:v_goffset]))
+                       && (primitive_flags(fun) & OP_APPLY)))
+            [
+              | fidx |
+              @[_ fidx _] = vexists?(fn (v) v[0] == fun, mc:apply_functions);
+              if (dvar == nth(fidx + 2, ins[mc:i_cargs]))
+                [
+                  if (!pair?(ins[mc:i_cfunction]))
+                    ins[mc:i_cfunction] = ins[mc:i_cfunction] . null;
+                  set_cdr!(ins[mc:i_cfunction], repvar)
+                ];
+            ];
+        ];
+      false
+    ];
+
+  | for_ils |
+  for_ils = fn (ifn, f)
+    graph_nodes_apply(fn (n) dforeach(f, graph_node_get(n)[mc:f_ilist]),
+                      cdr(ifn[mc:c_fvalue]));
+
+  propagate_closure_constant = fn (ifn, dvar, repvar, replacer)
+    [
+      | ndvar, change_any, change_all |
       ndvar = dvar[mc:v_number];
 
-      graph_nodes_apply(fn (node) [
-        node = graph_node_get(node);
+      change_any = false;
+      change_all = true;
+      for_ils(ifn, fn (il) [
+        if (bit_set?(il[mc:il_arguments], ndvar))
+          [
+            if (replacer(il, dvar, repvar, true))
+              change_any = true
+            else
+              change_all = false
+          ]
+      ]);
 
-        dforeach(fn (il) [
-          if (bit_set?(il[mc:il_arguments], ndvar))
-            [
-              if (!is_fn? && !lfind?(ifn, remaining_fns))
-                remaining_fns
-                  = car(remaining_fns) . ifn . cdr(remaining_fns);
-              replace_use(il, dvar, repvar, true, is_fn?);
-            ]
-        ], node[mc:f_ilist]);
-      ], cdr(ifn[mc:c_fvalue]));
+      if (change_any)
+        if (ifn == car(remaining_fns))
+          change = true
+        else if (!lfind?(ifn, remaining_fns))
+          remaining_fns = car(remaining_fns) . ifn . cdr(remaining_fns);
+
+      change_all
     ];
 
-  | is_set_null? |
+  | is_set_null?, find_set_null_ins |
   is_set_null? = fn (ins)
     if (ins[mc:i_class] == mc:i_compute
         && ins[mc:i_aop] == mc:b_assign)
@@ -480,16 +628,50 @@ writes mc:lineno, mc:this_function
     else
       false;
 
+  find_set_null_ins = fn (ifn)
+    [
+      | insmap |
+      insmap = make_vector(ifn[mc:c_fnvars]);
+      lforeach(fn (var) [
+        | uses |
+        uses = var[mc:v_lclosure_uses];
+        if (uses & ~(mc:local_write_once | mc:local_write_many
+                     | mc:closure_read))
+          exit<function> null;
+        insmap[var[mc:v_number]] = false;
+      ], ifn[mc:c_flocals_write]);
+
+      | vmap |
+      vmap = ifn[mc:c_fallvars];
+      for_ils(ifn, fn (il) [
+        | vnum |
+        vnum = il[mc:il_defined_var];
+        if (insmap[vnum] == null)
+          exit<function> null;
+
+        // try to find a set-to-not-null instruction if
+        // local_write_many (implies !local_write_many_nonnull)
+        if (!insmap[vnum]
+            || (~vmap[vnum][mc:v_lclosure_uses] & mc:local_write_many)
+            || !is_set_null?(il[mc:il_ins]))
+          insmap[vnum] = il;
+      ]);
+
+      insmap
+    ];
+
   // Constant-propagates single-assignment locals and that are read from
   // closures
   propagate_closure_constants = fn (ifn)
     [
-      | vars |
-      lforeach (fn (var) [
-        | nodes, dilist, dins, vnum, value, uses, is_fn? |
+      | vars, vars_set_not_null |
+      vars_set_not_null = find_set_null_ins(ifn);
 
+      lforeach (fn (var) [
         if (var[mc:v_class] != mc:v_local)
           exit<function> null;
+
+        | dins, vnum, value, uses, replacer |
 
         // Only propagate if the variable is closure_read.
         uses = var[mc:v_lclosure_uses];
@@ -499,30 +681,13 @@ writes mc:lineno, mc:this_function
                      | mc:closure_read))
           exit<function> null;
 
-        nodes = graph_nodes(cdr(ifn[mc:c_fvalue]));
         vnum = var[mc:v_number];
-        lexists?(fn (node) [
-          node = graph_node_get(node);
-          dexists?(fn (il) [
-            if (il[mc:il_defined_var] == vnum)
-              [
-                dilist = il;
-                // try to find a set-to-not-null instruction if
-                // local_write_many (implies !local_write_many_nonnull)
-                ((~uses & mc:local_write_many)
-                 || !is_set_null?(il[mc:il_ins]))
-              ]
-            else
-              false
-          ], node[mc:f_ilist]);
-        ], nodes);
+        dins = vars_set_not_null[vnum][mc:il_ins];
 
-        dins = dilist[mc:il_ins];
-
-        is_fn? = false;
+        replacer = replace_use;
         if (dins[mc:i_class] == mc:i_closure)
           [
-            is_fn? = true;
+            replacer = replace_fn_use;
             value = dins[mc:i_ffunction];
           ]
         else if ((uses & mc:local_write_many)
@@ -538,19 +703,17 @@ writes mc:lineno, mc:this_function
               exit<function> null;
           ];
 
-        vars = vector(var, is_fn?, value) . vars;
+        vars = vector(var, replacer, value) . vars;
       ], ifn[mc:c_flocals_write]);
 
       if (vars == null) exit<function> false;
 
       lforeach (fn (pvar) [
-        | dvar, is_fn?, repvar |
+        | dvar, replacer, repvar |
 
-        @[dvar is_fn? repvar] = pvar;
+        @[dvar replacer repvar] = pvar;
 
-        propagate_closure_constant(ifn, dvar, repvar, is_fn?);
-
-        if (!is_fn?)
+        if (propagate_closure_constant(ifn, dvar, repvar, replacer))
           dvar[mc:v_lclosure_uses] &= ~(mc:closure_read | mc:closure_write);
       ], vars);
 
@@ -575,18 +738,21 @@ writes mc:lineno, mc:this_function
 	  | cblock, dvar, cins, repvar, cfirst, uses, local_uses, nrepvar,
 	    replaceable_use?, can_repall, scan, ndvar, umap, copy, repuse |
 
-          repuse = fn (use) replace_use(use, dvar, repvar, false, false);
+          repuse = fn (use) replace_use(use, dvar, repvar, false);
 
 	  replaceable_use? = fn (use)
 	    [
 	      | ublock, uins, first, uclass, ambvars |
 
 	      uins = use[mc:il_ins];
-	      if (uins == null) exit<function> true; // instruction was removed...
+	      if (uins == null)
+                // instruction was removed...
+                exit<function> true;
+
 	      uclass = uins[mc:i_class];
 	      ublock = graph_node_get(use[mc:il_node]);
 	      first = ublock[mc:f_ilist];
-	      ambvars = ublock[mc:f_ambiguous][mc:flow_out];
+	      ambvars = ublock[mc:f_ambiguous_w][mc:flow_out];
 
 	      // Note: can't replace use in closures
 	      if (uclass != mc:i_closure &&
@@ -607,9 +773,11 @@ writes mc:lineno, mc:this_function
 		    // (no need to check explicit def of dvar, as in that case
 		    // dvar would not be in 'uses').
 		    if (fil[mc:il_defined_var] == nrepvar ||
-			fclass == mc:i_call &&
-			(bit_set?(ambvars, nrepvar) || bit_set?(globals, nrepvar) ||
-			 bit_set?(ambvars, ndvar) || bit_set?(globals, ndvar)))
+			(fclass == mc:i_call && mc:call_escapes?(fins)
+                         && (bit_set?(ambvars, nrepvar)
+                             || bit_set?(globals, nrepvar)
+                             || bit_set?(ambvars, ndvar)
+                             || bit_set?(globals, ndvar))))
 		      exit false;
 
 		    first = dnext(first);
@@ -662,7 +830,8 @@ writes mc:lineno, mc:this_function
                 can_repall = false
 	      else if (((class == mc:i_return ||
 			 class == mc:i_call) && // escapes from function ?
-			(bit_set?(cblock[mc:f_ambiguous][mc:flow_out], ndvar) ||
+			(bit_set?(cblock[mc:f_ambiguous_w][mc:flow_out],
+                                  ndvar) ||
 			 bit_set?(globals, ndvar))))
 		[
 		  can_repall = false;
@@ -678,9 +847,9 @@ writes mc:lineno, mc:this_function
 	      lforeach(fn (use) if (replaceable_use?(use)) repuse(use), uses);
 	      lforeach(repuse, local_uses);
 	    ]
-	  else if (can_repall && lforall?(replaceable_use?, uses)) // we can replace !
+	  else if (can_repall && lforall?(replaceable_use?, uses))
 	    [
-	      // replace all uses of dvar in uses by repvar
+              // we can replace; replace all uses of dvar in uses by repvar
 	      lforeach(repuse, uses);
 	      lforeach(repuse, local_uses);
 	    ]
@@ -698,21 +867,24 @@ writes mc:lineno, mc:this_function
     else
       -1;
 
-  convert_to_type_trap = fn (ins, arg, type)
+  convert_to_type_trap = fn (il, arg, type)
     [
-      ins[mc:i_class] = mc:i_trap;
-      ins[mc:i_top] = mc:trap_type;
-      ins[mc:i_tdest] = error_bad_type;
-      ins[mc:i_targs] = list(arg, mc:var_make_constant(type));
+      il[mc:il_ins] = mc:make_trap_ins(mc:trap_type, error_bad_type,
+                                       list(arg, mc:var_make_constant(type)));
+      il[mc:il_defined_var] = false;
+      set_bit!(bclear(il[mc:il_arguments]), arg[mc:v_number]);
+      change = true
     ];
 
   // Checks if "ins" has to be replaced by a type trap if removed by
-  // the optimiser. If so, changes the instruction and returns true.
-  check_compute_trap = fn (ins)
+  // the optimiser. If so, (maybe) changes the instruction and returns true.
+  check_compute_trap = fn (il)
     [
-      | ttype, cargs, op |
+      | ttype, cargs, op, ins |
 
-      if (ins[mc:i_class] != mc:i_compute)
+      ins = il[mc:il_ins];
+
+      if (ins[mc:i_class] != mc:i_compute || lfind?(ins, really_useless))
         exit<function> false;
 
       op = ins[mc:i_aop];
@@ -735,27 +907,28 @@ writes mc:lineno, mc:this_function
           | ct |
           if ((ct = consttype(car(cargs))) >= 0)
             if (ct == type_integer || ct == type_string)
-              convert_to_type_trap(ins, cadr(cargs), ct)
+              convert_to_type_trap(il, cadr(cargs), ct)
             else
-              convert_to_type_trap(ins, car(cargs), type_integer)
+              convert_to_type_trap(il, car(cargs), type_integer)
           else if ((ct = consttype(cadr(cargs))) >= 0)
             if (ct == type_integer || ct == type_string)
-              convert_to_type_trap(ins, car(cargs), ct)
+              convert_to_type_trap(il, car(cargs), ct)
             else
-              convert_to_type_trap(ins, cadr(cargs), type_integer);
+              convert_to_type_trap(il, cadr(cargs), type_integer)
+          // else fallthrough
         ]
       else if (cdr(cargs) == null)              // unary op?
         if (consttype(car(cargs)) == ttype)
           exit<function> false
         else
-          convert_to_type_trap(ins, car(cargs), ttype)
+          convert_to_type_trap(il, car(cargs), ttype)
       else if (consttype(car(cargs)) == ttype)
         if (consttype(cadr(cargs)) == ttype)
           exit<function> false
         else
-          convert_to_type_trap(ins, cadr(cargs), ttype)
+          convert_to_type_trap(il, cadr(cargs), ttype)
       else if (consttype(cadr(cargs)) == ttype)
-        convert_to_type_trap(ins, car(cargs), ttype);
+        convert_to_type_trap(il, car(cargs), ttype);
       // otherwise, we have to test both arguments; can just as well
       // do the real operation...
 
@@ -769,40 +942,43 @@ writes mc:lineno, mc:this_function
 
   useless_instructions = fn (ifn, globals)
     [
-      | useless |
+      | useless, closure_uses |
+
+      closure_uses = mc:new_varset(ifn);
+      lforeach(fn (var) [
+        if (var[mc:v_class] == mc:v_local &&
+            (var[mc:v_lclosure_uses] & (mc:closure_read | mc:closure_write)))
+          set_bit!(closure_uses, var[mc:v_number]);
+      ], ifn[mc:c_flocals]);
 
       graph_nodes_apply
 	(fn (n)
 	 [
 	   | block, uses, ilist, scan, defined, amblist, local_uses, vmap,
-             closure_uses |
+             rw_amblist |
 
 	   block = graph_node_get(n);
 	   uses = bitset_to_list(block[mc:f_uses][mc:flow_out],
 				 block[mc:f_uses][mc:flow_map]);
 	   ilist = block[mc:f_ilist];
 
-	   // Precompute ambiguous information for each
-	   // instruction, in reverse order
-	   amblist = mc:scan_ambiguous(fn (il, ambiguous, amblist)
-				       ambiguous . amblist, null,
-				       block, globals, mc:closure_write);
+	   // Precompute ambiguous information for each instruction,
+	   // in reverse order
+	   amblist = mc:build_ambiguous_list(block, globals, mc:f_ambiguous_w);
+
+	   rw_amblist = mc:build_ambiguous_list(block, globals,
+                                                mc:f_ambiguous_rw);
 
 	   defined = mc:new_varset(ifn);
 	   vmap = ifn[mc:c_fallvars];
 	   scan = ilist;
 
-	   closure_uses = mc:new_varset(ifn);
-           lforeach(fn (var) [
-             if (var[mc:v_class] == mc:v_local &&
-                 (var[mc:v_lclosure_uses] & (mc:closure_read | mc:closure_write)))
-               set_bit!(closure_uses, var[mc:v_number]);
-           ], ifn[mc:c_flocals]);
            local_uses = bcopy(closure_uses);
+           bintersection!(local_uses, block[mc:f_ambiguous_rw][mc:flow_out]);
 
 	   loop
 	     [
-	       | il, ins, class, args, ndvar |
+	       | il, ins, class, ndvar |
 
 	       scan = dprev(scan);
 	       il = dget(scan);
@@ -812,8 +988,6 @@ writes mc:lineno, mc:this_function
                mc:lineno = il[mc:il_lineno];
 
 	       ndvar = il[mc:il_defined_var];
-	       args = mc:barguments(il, car(amblist));
-	       amblist = cdr(amblist);
 
 	       if (class == mc:i_branch &&
 		   ins[mc:i_bop] == mc:branch_never ||
@@ -826,10 +1000,11 @@ writes mc:lineno, mc:this_function
 		    ins[mc:i_adest] == car(ins[mc:i_aargs])) ||
 
 		   (class == mc:i_compute ||
+                    class == mc:i_closure ||
 		    class == mc:i_memory && ins[mc:i_mop] == mc:memory_read) &&
 		   bit_clear?(local_uses, ndvar) &&
 		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)))
-                 if (!check_compute_trap(ins))
+                 if (!check_compute_trap(il))
                    useless = scan . useless;
 
 	       if (ndvar)
@@ -839,13 +1014,25 @@ writes mc:lineno, mc:this_function
 		 ];
 
 	       if (class != mc:i_closure)
-                 bunion!(local_uses, args);
+                 bunion!(local_uses, mc:barguments(il, car(amblist)));
 
-	       if (class == mc:i_return ||
-                   (class == mc:i_call && mc:call_escapes?(ins)))
-                 bunion!(local_uses, closure_uses);
+               <skip> [
+                 | amb |
+                 if (class == mc:i_return)
+                   amb = car(rw_amblist)
+                 else if (class != mc:i_call)
+                   exit<skip> null
+                 else if (mc:call_escapes?(ins))
+                   amb = car(rw_amblist)
+                 else
+                   amb = globals;
+                 bunion!(local_uses, amb)
+               ];
 
 	       if (scan == ilist) exit 0;
+
+               rw_amblist = cdr(rw_amblist);
+	       amblist = cdr(amblist);
 	     ];
 	 ], cdr(ifn[mc:c_fvalue]));
       useless
@@ -868,8 +1055,10 @@ writes mc:lineno, mc:this_function
 
 	      second = dnext(first);
               il2 = dget(second);
-	      il[mc:il_ins] = il2[mc:il_ins];
-              il[mc:il_lineno] = il2[mc:il_lineno];
+              for (|i| i = vlength(il2); --i >= 0; )
+                if (i != mc:il_label)
+                  il[i] = il2[i];
+              il2[mc:il_ins] = null; // note removal
 	      dremove!(second, second)
 	    ]
 	  else
@@ -890,7 +1079,8 @@ writes mc:lineno, mc:this_function
 	  // edges into block becomes edges into nblock
 	  lforeach(fn (e)
 		   [
-		     graph_add_edge(graph_edge_from(e), nblock, graph_edge_get(e));
+		     graph_add_edge(graph_edge_from(e), nblock,
+                                    graph_edge_get(e));
 		     graph_remove_edge(e)
 		   ], graph_edges_in(block));
 
@@ -922,7 +1112,8 @@ writes mc:lineno, mc:this_function
       fg = cdr(fval);
 
       useless = useless_instructions
-	(f, mc:set_vars!(mc:set_vars!(mc:new_varset(f), f[mc:c_fglobals_write]),
+	(f, mc:set_vars!(mc:set_vars!(mc:new_varset(f),
+                                      f[mc:c_fglobals_write]),
 			 f[mc:c_fclosure_write]));
       if (useless != null)
 	[
@@ -952,8 +1143,10 @@ writes mc:lineno, mc:this_function
 	       ], graph_nodes(fg));
 
       // remove aliases and useless labels
-      graph_nodes_apply(fn (n) mc:remove_aliases(graph_node_get(n)[mc:f_ilist]), fg);
-      graph_nodes_apply(fn (n) mc:remove_labels(graph_node_get(n)[mc:f_ilist]), fg);
+      graph_nodes_apply(
+        fn (n) mc:remove_aliases(graph_node_get(n)[mc:f_ilist]), fg);
+      graph_nodes_apply(
+        fn (n) mc:remove_labels(graph_node_get(n)[mc:f_ilist]), fg);
     ];
 
   mc:recompute_vars = fn (ifn, dglobals?)
@@ -966,29 +1159,72 @@ writes mc:lineno, mc:this_function
       | locals, closures, globals, vars_read, vars_written, args_ins,
         ins_escapes?, allvars,
 	defined, wlocals, wnonnulllocals, wclosures, wglobals, vindex,
-        dglobals_read |
+        dglobals_read, add_var!, var_set? |
+
+      // set bit for var in varset, expanding varset as necessary;
+      // returns the possibly updated varset
+      add_var! = fn (varset, var)
+        [
+          allvars = var . allvars;
+          | sz, n |
+          // temporarily use negatives to indicate actually found this
+          // time around
+          var[mc:v_number] = -(n = ++vindex);
+          sz = slength(varset) * 8;
+          if (n >= sz)
+            loop
+              [
+                sz = if (sz) sz * 2 else 16;
+                if (n < sz)
+                  [
+                    | newset |
+                    newset = new_bitset(sz);
+                    for (|i| i = slength(varset); --i >= 0; )
+                      newset[i] = varset[i];
+                    exit varset = newset;
+                  ]
+              ];
+          set_bit!(varset, n);
+          varset
+        ];
+
+      var_set? = fn (varset, var)
+        [
+          | n |
+          n = var[mc:v_number];
+          if (n >= 0)
+            exit<function> false;
+          n = -n;
+          n < slength(varset) * 8 && bit_set?(varset, n)
+        ];
+
+      // n.b., these may be too small (empty) if we have never counted
+      // variables before
+      wglobals = mc:new_varset(ifn);
+      wlocals = mc:new_varset(ifn);
+      wclosures = mc:new_varset(ifn);
 
       vars_written = fn (il)
 	[
-	  | ins, dvar, class, new |
+	  | ins, dvar, class |
 
 	  ins = il[mc:il_ins];
 
 	  dvar = mc:defined_var(ins);
 	  if (dvar)
 	    [
-	      new = false;
 	      class = dvar[mc:v_class];
 	      if (class == mc:v_global)
 		[
-		  if (!memq(dvar, wglobals)) new = wglobals = dvar . wglobals
+		  if (!var_set?(wglobals, dvar))
+                    wglobals = add_var!(wglobals, dvar);
 		]
 	      else if (class == mc:v_local)
 		[
-		  if (!memq(dvar, wlocals))
+		  if (!var_set?(wlocals, dvar))
                     [
                       | ouse |
-                      new = wlocals = dvar . wlocals;
+                      wlocals = add_var!(wlocals, dvar);
                       ouse = dvar[mc:v_lclosure_uses];
                       ouse &= ~(mc:local_write_once | mc:local_write_many
                                 | mc:local_write_many_nonnull);
@@ -1012,15 +1248,11 @@ writes mc:lineno, mc:this_function
 		]
 	      else if (class == mc:v_closure)
 		[
-		  if (!memq(dvar, wclosures)) new = wclosures = dvar . wclosures
+		  if (!var_set?(wclosures, dvar))
+                    wclosures = add_var!(wclosures, dvar);
 		];
 
-	      if (new)
-		[
-		  dvar[mc:v_number] = vindex = vindex + 1;
-		  allvars = dvar . allvars
-		];
-	      il[mc:il_defined_var] = dvar[mc:v_number];
+	      il[mc:il_defined_var] = -dvar[mc:v_number];
 	    ]
 	  else
 	    il[mc:il_defined_var] = false;
@@ -1036,43 +1268,35 @@ writes mc:lineno, mc:this_function
 	  args = mc:arguments(ins, null);
 	  lforeach(fn (v)
 		   [
-		     | class, new |
+		     | class |
 
 		     class = v[mc:v_class];
-		     new = false;
 		     if (class == mc:v_global)
 		       [
-			 if (!memq(v, globals)) new = globals = v . globals
+			 if (!var_set?(globals, v))
+                           globals = add_var!(globals, v);
 		       ]
 		     else if (class == mc:v_local)
 		       [
-			 if (!memq(v, locals)) new = locals = v . locals
+			 if (!var_set?(locals, v))
+                           locals = add_var!(locals, v);
 		       ]
 		     else if (class == mc:v_closure)
 		       [
-			 if (!memq(v, closures)) new = closures = v . closures
+			 if (!var_set?(closures, v))
+                           closures = add_var!(closures, v);
 		       ]
-		     else
-		       v[mc:v_number] = 0;
-
-		     if (new)
-		       [
-			 v[mc:v_number] = vindex = vindex + 1;
-			 allvars = v . allvars
-		       ];
+                     else
+                       v[mc:v_number] = 0
 		   ], args);
 	  il[mc:il_arguments] = args;
 	];
 
       dglobals_read = fn (il)
 	lforeach(fn (v)
-		 if (v[mc:v_class] == mc:v_global_define &&
-		     !memq(v, globals))
-		 [
-		   globals = v . globals;
-		   v[mc:v_number] = vindex = vindex + 1;
-		   allvars = v . allvars;
-		 ],
+		 if (v[mc:v_class] == mc:v_global_define
+		     && !var_set?(globals, v))
+                 globals = add_var!(globals, v),
 		 il[mc:il_arguments]);
 
       args_ins = fn (il)
@@ -1102,23 +1326,28 @@ writes mc:lineno, mc:this_function
       // then prepend those that are read (but not written)
       // the whole list, and the sublist of written vars are saved
       vindex = 0;
-      graph_nodes_apply(fn (n) dforeach(vars_written, graph_node_get(n)[mc:f_ilist]),
-			cdr(ifn[mc:c_fvalue]));
-      locals = wlocals; closures = wclosures; globals = wglobals;
-      graph_nodes_apply(fn (n) dforeach(vars_read, graph_node_get(n)[mc:f_ilist]),
-			cdr(ifn[mc:c_fvalue]));
-      if (dglobals?)
-	graph_nodes_apply(fn (n) dforeach(dglobals_read, graph_node_get(n)[mc:f_ilist]),
-			  cdr(ifn[mc:c_fvalue]));
 
-      ifn[mc:c_flocals] = locals;
-      ifn[mc:c_fglobals] = globals;
-      ifn[mc:c_fclosure] = closures;
-      ifn[mc:c_flocals_write] = wlocals;
-      ifn[mc:c_fglobals_write] = wglobals;
-      ifn[mc:c_fclosure_write] = wclosures;
+      for_ils(ifn, vars_written);
+
+      locals = bcopy(wlocals);
+      closures = bcopy(wclosures);
+      globals = bcopy(wglobals);
+      for_ils(ifn, vars_read);
+
+      if (dglobals?)
+        for_ils(ifn, dglobals_read);
+
+      lforeach(fn (var) var[mc:v_number] = -var[mc:v_number], allvars);
+      ifn[mc:c_fallvars] = allvars = list_to_vector(null . lreverse!(allvars));
+
+      ifn[mc:c_flocals] = bitset_to_list(locals, allvars);
+      ifn[mc:c_fglobals] = bitset_to_list(globals, allvars);
+      ifn[mc:c_fclosure] = bitset_to_list(closures, allvars);
+      ifn[mc:c_flocals_write] = bitset_to_list(wlocals, allvars);
+      ifn[mc:c_fglobals_write] = wglobals = bitset_to_list(wglobals, allvars);
+      ifn[mc:c_fclosure_write] = wclosures
+        = bitset_to_list(wclosures, allvars);
       ifn[mc:c_fnvars] = vindex + 1;
-      ifn[mc:c_fallvars] = list_to_vector(null . lreverse!(allvars));
 
       | escapes |
       escapes = wclosures != null || wglobals != null;
@@ -1137,6 +1366,8 @@ writes mc:lineno, mc:this_function
 
   optimise_function = fn (f)
     [
+      really_useless = null;
+
       mc:this_function = f;
       if (mc:verbose >= 2)
 	[
@@ -1148,10 +1379,21 @@ writes mc:lineno, mc:this_function
 	  change = false;
 
 	  // fold constants in all basic blocks
-	  graph_nodes_apply
-	    (fn (n)
-	       dforeach(fold_constants, graph_node_get(n)[mc:f_ilist]),
-	     cdr(f[mc:c_fvalue]));
+	  graph_nodes_apply(fn (n) [
+            | this, prev, ilist |
+            ilist = graph_node_get(n)[mc:f_ilist];
+            if (ilist == null) exit<function> null;
+            this = ilist;
+            loop
+              [
+                | il |
+                il = dget(this);
+                fold_constants(il, prev);
+                prev = il;
+                this = dnext(this);
+                if (this == ilist) exit null;
+              ];
+          ], cdr(f[mc:c_fvalue]));
 
 	  // compute basic information
 	  mc:recompute_vars(f, false);
@@ -1160,12 +1402,17 @@ writes mc:lineno, mc:this_function
               change = true;
               exit<continue> null;
             ];
-	  mc:flow_ambiguous(f, mc:closure_write);
+
+	  mc:flow_ambiguous(f, mc:f_ambiguous_w);
+	  mc:flow_ambiguous(f, mc:f_ambiguous_rw);
 	  mc:flow_uses(f);
 
 	  eliminate_dead_code(f);
 	  propagate_copies(f);
 	];
+
+      mc:flow_sizes(f);
+
       // clear data-flow information
       mc:clear_dataflow(f);
       mc:this_function = null;

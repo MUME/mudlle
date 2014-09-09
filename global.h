@@ -38,6 +38,9 @@ ulong global_lookup(const char *name);
    Modifies: environment
 */
 
+/* true if 'name' is a known global */
+bool global_exists(const char *name, ulong *ofs);
+
 ulong mglobal_lookup(struct string *name);
 /* Returns: the index for global variable name in environment.
      If name doesn't exist yet, it is created with a variable
@@ -63,8 +66,16 @@ struct list *global_list(void);
      (i.e., is a 'define' of some module or system-write)
 */
 
+#define GMUTABLE(offset) (mvars->data[offset] == makeint(var_system_mutable))
+
 #define GNAME(offset) ((struct string *)global_names->data[offset])
 /* Returns: the name of the global at 'offset'
+*/
+
+void check_global_read(ulong goffset);
+void check_global_write(ulong goffset);
+/* Errors out if the calling code is not allowed to access that global.
+   NB: adjust x86builtins.S if you change this declaration.
 */
 
 #endif

@@ -67,7 +67,13 @@
 #define DEF_SAVE_SIZE (64*1024)
 
 #define GLOBAL_SIZE 512
-#define DEFAULT_SECLEVEL 0
+
+#define DEFAULT_SECLEVEL 0 /* Seclevel when not calling type_secure/.. fns */
+#define MIN_SECLEVEL 0     /* Minimum valid seclevel */
+#define SECLEVEL_GLOBALS 1 /* Maxseclevel required to mess with globals */
+#define LEGACY_SECLEVEL 1  /* Maxseclevel is used if seclevel < LEGACY */
+#define MAX_SECLEVEL 1     /* Maximum valid seclevel */
+
 #define MUDLLE_INTERRUPT
 #define PRINT_CODE
 

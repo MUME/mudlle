@@ -26,12 +26,12 @@
 
 struct strbuf;
 
-typedef enum { prt_display, prt_print, prt_examine } prt_level;
+enum prt_level { prt_display, prt_write, prt_examine };
 
-void output_value_cut(struct oport *f, prt_level level, bool no_quote,
-                      value v,
-                      size_t maxlen);
-void output_value(struct oport *f, prt_level level, bool no_quote, value v);
+void output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
+                      value v, size_t maxlen);
+void output_value(struct oport *f, enum prt_level level, bool no_quote,
+                  value v);
 void print_init(void);
 
 void describe_fn(struct strbuf *sb, value v);

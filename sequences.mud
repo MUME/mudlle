@@ -202,7 +202,7 @@ lreverse! = fn "`l1 -> `l2. Reverses list `l1, destructively" (list l1)
       prev
     ];
 
-dreverse! = fn "`d1 -> `d2. Reverses dlist `d1, destructively" ({null,vector} d1)
+dreverse! = {vector,null} fn "`d1 -> `d2. Reverses dlist `d1, destructively" ({null,vector} d1)
   if (d1 == null) null
   else
     [
@@ -669,7 +669,7 @@ lfilter = fn "`f `l1 -> `l2. Returns `l1 filtered by function `f" (function f, l
     first
   ];
 
-dfilter = fn "`f `d1 -> `d2. Returns `d1 filtered by function `f" (function f, {null,vector} d)
+dfilter = {null,vector} fn "`f `d1 -> `d2. Returns `d1 filtered by function `f" (function f, {null,vector} d)
   if (d == null) null
   else
     [

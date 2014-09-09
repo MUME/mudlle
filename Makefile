@@ -42,6 +42,7 @@ ifeq ($(shell uname -m),sun4u)
 BUILTINS=builtins.o
 else
 BUILTINS=x86builtins.o
+BUILTINDEPS=x86consts.h
 endif
 
 OBJS= $(BUILTINS) alloc.o call.o calloc.o charset.o compile.o	\
@@ -61,7 +62,7 @@ CPPFLAGS := -m32
 LDFLAGS := -m32 -fno-pie
 LIBS := -lm
 ifeq ($(shell uname -s),Darwin)
-CPPFLAGS += -I/opt/local/include
+CPPFLAGS += -isystem /opt/local/include
 LDFLAGS += -L/opt/local/lib
 LIBS += -liconv
 endif
@@ -122,7 +123,8 @@ depclean:
 
 clean:
 	$(MAKE) -C runtime -f Makefile $@
-	rm -f *.o lexer.c tokens.h parser.c .depend
+	rm -f *.o lexer.c tokens.h parser.c .depend genconst \
+		genconstdefs.h mudlle parser.output x86consts.h
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
@@ -144,7 +146,7 @@ parser.c: parser.y
 builtins.o: builtins.S
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-x86builtins.o: x86builtins.S x86consts.h
+x86builtins.o: x86builtins.S $(BUILTINDEPS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 x86consts.h: genconst
@@ -165,13 +167,36 @@ genconstdefs.h: $(CONSTH) runtime/consts.pl Makefile
 dep depend: .depend
 	$(MAKE) -C runtime -f Makefile depend
 
-.depend: $(SRC) genconst.c genconstdefs.h
-	$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS) $(SRC) genconst.c \
+.depend: $(SRC) genconst.c genconstdefs.h $(BUILTINS:%.o=%.S) $(BUILTINDEPS)
+	$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS) $(filter-out %.h,$^) \
 		| sed 's/\.o *:/.o:/g' > .depend
 
-compiler: build-compiler.sh mudlle
-	/bin/sh $<
+# Currently 22 files, split into at most 8 groups for parallel builds
+GROUPS=0 1 2 3 4 5 6 7
 
+define BUILDER
+.PHONY: comp_$(1)_$(3)
+comp_$(1)_$(3): build-slice.sh $(4)
+	@echo "Compiling $(2) compiler files $(3)/$(words $(GROUPS))"
+	@/bin/sh $$< $(2) $(3) $(words $(GROUPS))
+endef
+
+define PASS
+$$(foreach g,$$(GROUPS),$$(eval $$(call BUILDER,$(1),$(2),$$(g),$(3))))
+
+.PHONY: comp_$(1)
+comp_$(1): $$(foreach g,$$(GROUPS),comp_$(1)_$$(g))
+
+endef
+
+$(eval $(call PASS,xc,xc,mudlle))
+$(eval $(call PASS,icxc,icxc,comp_xc))
+$(eval $(call PASS,icxc2,icxc,comp_icxc))
+
+.PHONY: compiler
+compiler: comp_icxc2
+
+.PHONY: install
 install: install-compiler.sh compiler
 	/bin/sh $< $(IDIR)
 

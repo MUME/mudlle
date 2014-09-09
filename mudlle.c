@@ -42,7 +42,6 @@ void mudlle_init(void)
   stack_init();
   module_init();
   runtime_init();
-  parser_init();
   compile_init();
   mcompile_init();
   interpret_init();

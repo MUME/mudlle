@@ -6,6 +6,11 @@
 
 void sb_setsize(strbuf_t *sb, size_t size)
 {
+  if (size == 0)
+    {
+      sb_free(sb);
+      return;
+    }
   sb->buf = realloc(sb->size ? sb->buf : NULL, size);
   sb->size = size;
 }
@@ -75,7 +80,7 @@ static void strbuf_port_flush(struct oport *p)
 {
 }
 
-static void strbuf_port_putch(struct oport *p, int c, size_t n)
+static void strbuf_port_putnc(struct oport *p, int c, size_t n)
 {
   strbuf_t *sb = get_port_strbuf(p);
   sb_addnc(sb, c, n);
@@ -105,7 +110,7 @@ static void strbuf_port_stat(struct oport *p, struct oport_stat *buf)
 
 static const struct oport_methods strbuf_port_methods = {
   .close  = strbuf_port_close,
-  .putch  = strbuf_port_putch,
+  .putnc  = strbuf_port_putnc,
   .write  = strbuf_port_write,
   .swrite = strbuf_port_swrite,
   .flush  = strbuf_port_flush,

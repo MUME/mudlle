@@ -63,7 +63,7 @@ struct _fncode
   valuelist csts;		/* Constants of this function */
   uword cstindex;		/* Index of next constant */
   blocks blks;			/* Stack of named blocks */
-  int toplevel;
+  bool toplevel;
   block_t memory;
   int lineno;
 };
@@ -110,7 +110,7 @@ void adjust_depth(int by, fncode fn)
   if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
 }
 
-fncode new_fncode(int toplevel)
+fncode new_fncode(bool toplevel)
 /* Returns: A new function code structure (in which code for functions
      may be generated).
 */
@@ -148,7 +148,7 @@ block_t fnmemory(fncode fn)
   return fn->memory;
 }
 
-int fntoplevel(fncode fn)
+bool fntoplevel(fncode fn)
 /* Returns: true if 'fn' is the toplevel function
  */
 {
@@ -562,7 +562,6 @@ struct icode *generate_fncode(fncode fn,
   instruction *codeins;
   uword i;
   struct local_value *scancst;
-  struct icode *gencode;
   ulong size;
   struct string *lineno_data = NULL;
 
@@ -581,27 +580,36 @@ struct icode *generate_fncode(fncode fn,
   size = offsetof(struct icode, constants) + fn->cstindex * sizeof(value) +
     sequence_length * sizeof (instruction);
   bc_length += size;
-  gencode = gc_allocate(size);
+  struct icode *gencode = gc_allocate(size);
   UNGCPRO();
 
-  gencode->code.o.size = size;
-  gencode->code.o.garbage_type = garbage_code;
-  gencode->code.o.type = type_code;
-  gencode->code.o.flags = OBJ_IMMUTABLE; /* Code is immutable */
-  gencode->code.return_typeset = return_typeset;
-  gencode->nb_constants = fn->cstindex;
-  gencode->nb_locals = 0; /* Initialised later */
-  gencode->stkdepth = fn->max_depth;
-  gencode->code.seclevel = seclev;
-  gencode->code.help = help;
-  gencode->code.lineno = alineno;
-  gencode->code.filename = afilename;
-  gencode->code.nicename = anicename;
-  gencode->code.varname = varname;
-
-  gencode->call_count = gencode->instruction_count = 0;
-  gencode->lineno_data = lineno_data;
-  gencode->code.arg_types = arg_types;
+  *gencode = (struct icode){
+    .code = {
+      .o = {
+        .size         = size,
+        .garbage_type = garbage_code,
+        .type         = type_code,
+        .flags        = OBJ_IMMUTABLE, /* code is immutable */
+#ifdef GCDEBUG
+        .generation = gencode->code.o.generation,
+#endif
+      },
+      .varname        = varname,
+      .filename       = afilename,
+      .nicename       = anicename,
+      .help           = help,
+      .arg_types      = arg_types,
+      .lineno         = alineno,
+      .seclevel       = seclev,
+      .return_typeset = return_typeset,
+    },
+    .nb_constants      = fn->cstindex,
+    .nb_locals         = 0,     /* initialized later */
+    .stkdepth          = fn->max_depth,
+    .call_count        = 0,
+    .instruction_count = 0,
+    .lineno_data       = lineno_data,
+  };
 
   /* Copy the sequence (which is reversed) */
   codeins = (instruction *)(gencode->constants + fn->cstindex);
@@ -651,6 +659,8 @@ struct icode *generate_fncode(fncode fn,
   /* jmp *%ecx */
   gencode->magic_dispatch[5] = 0xff;
   gencode->magic_dispatch[6] = 0xe1;
+  /* nop */
+  gencode->magic_dispatch[7] = 0x90;
 #endif
 
 #ifdef GCSTATS

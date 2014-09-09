@@ -19,11 +19,29 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-load_library = fn (s)
+load_library = fn (string s)
 [
-  dformat("loading %s%n", s);
+  silent == true || dformat("loading %s%n", s);
   if (load(s + ".mud"))
-    dformat("loaded %s%n", s)
+    silent == true || dformat("loaded %s%n", s)
   else
     error(error_bad_value);
+];
+
+[
+  // this is just a dummy implementation for testing purposes
+  | st |
+  st = make_table();
+  get_static = symbol fn (string name)
+    [
+      | sym |
+      sym = table_lookup(st, name);
+      if (!sym)
+        [
+          st[name] = 0;
+          sym = table_lookup(st, name);
+          st[name] = null;
+        ];
+      sym
+    ];
 ];

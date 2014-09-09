@@ -26,37 +26,40 @@ requires sequences, misc, dlist, compiler, vars, ins3, mx86, inference,
 defines
   x86:nscratch, x86:ncaller, x86:nregargs, x86:ncallee,
   x86:select_registers, x86:mgen_preamble, x86:mgen_instruction,
-  x86:migrate, x86:gassemble, x86:spillreg, x86:reg_globals
+  x86:migrate, x86:gassemble, x86:spillreg, x86:reg_globals,
+  x86:uses_scratch?
 
-reads mc:verbose, mc:myself
-writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
+reads mc:verbose, mc:myself, mc:update_maxseclev
+writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 [
 
   | reg_argcount, reg_closure_in, relop, reg_result,
     regs_scratch, regs_caller, select_registers,
-    builtins, relops, reg_dest, mgen_return, mgen_branch,
+    builtins, relops, var_in_reg, reg_dest, mgen_return, mgen_branch,
     mgen_compute, mgen_memory, mgen_closure, mgen_vref, mgen_call,
-    callop1, callop2, rev_x86relop, fetch1, move, commute, compare,
+    callop1, callop2, callop3, rev_x86relop, fetch1, move, commute, compare,
     reg_scratch, reg_arg0, reg_arg1, reg_closure, reg_fp,
     reg_sp, mgen_trap, regs_allscratch, type_branch, get_type,
     typearg1, typearg2, inline1?, inline2?, mgen_inline1, mgen_inline2,
-    type_trap, makeint, intval, mfalse, mtrue, call,
+    type_trap, call, set_seclev, mzero, mfalse,
     call_closure, call_primitive, call_varargs,
     call_builtin, perform3, perform3cst, setcc, intcst?, argstart, enames,
     commute_x86relop, in_scratch?, logical_or, safemove, myvexists?,
     push_args,
-    cmpeq, kset, kequal?, call_bset, needs_closure?, secure_call?, is_leaf?,
-    needs_global?, leaaddcst, fetch2, get_constant |
+    cmpeq, kset, kequal?, kseclevel, kmaxseclevel, call_kset, call_seclevel,
+    kglobal_lookup, maybe_call_global_lookup,
+    needs_closure?, is_leaf?, update_maxseclev?,
+    needs_global?, leaaddcst, fetch2, fetch_for_dest,
+    fake_prim_type |
 
-  c1 = c2 = nops_inlined = nops_called = 0;
-  framesizes = make_vector(10);
-  vector_fill!(framesizes, 0);
+  // used to indicate any primitive; i.e., stype_function - type_closure
+  fake_prim_type = -1;
 
-  // integers
-  makeint = fn (n) n << 1 | 1;
-  intval = fn (n) n >> 1;
-  mfalse = makeint(false);
-  mtrue = makeint(true);
+  mc:nops_inlined = mc:nops_called = 0;
+  mc:framesizes = make_vector(10);
+  vector_fill!(mc:framesizes, 0);
+
+  mfalse = mzero = x86:mudlleint(0);
 
   // Register summary:
   //   ax: argument count, function result, scratch, first args to builtins
@@ -86,56 +89,14 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
   reg_arg1 = x86:reg_ecx;
 
   // General regs
-  regs_scratch = sequence(reg_scratch);
-  regs_allscratch = sequence(reg_scratch, x86:reg_ecx);
-  regs_caller = sequence(x86:reg_edx, x86:reg_edi);
+  regs_scratch = '[,reg_scratch];
+  regs_allscratch = '[,reg_scratch ,x86:reg_ecx];
+  regs_caller = '[,x86:reg_edx ,x86:reg_edi];
 
-  x86:spillreg = sequence(reg_closure, reg_fp, reg_fp);
-
-  get_constant = fn (v)
-    if (v[mc:v_class] == mc:v_constant)
-      v[mc:v_kvalue]
-    else null;
-
-  // return true if this is a call that requires setting seclevel
-  secure_call? = fn (il)
-    [
-      | ins, class, called |
-
-      ins = il[mc:il_ins];
-      class = ins[mc:i_class];
-
-      if (class == mc:c_execute)
-	[
-	  called = car(ins[mc:i_cargs]);
-	  if (called[mc:v_class] == mc:v_global_constant)
-	    [
-	      | f, t |
-
-	      f = global_value(called[mc:v_goffset]);
-	      t = typeof(f);
-	      exit<function> t == type_secure || t == type_varargs;
-	    ]
-	];
-      false
-    ];
-
+  x86:spillreg = '[,reg_closure ,reg_fp ,reg_fp];
 
   needs_closure? = fn (ifn)
-    [
-      | secure_call |
-
-      // need closure if have closure vars or making a secure primitive call
-      if (ifn[mc:c_fclosure] != null)
-	exit<function> true;
-
-      secure_call = false;
-      graph_nodes_apply(fn (n) [
-        dforeach(fn (il) secure_call = secure_call || secure_call?(il),
-                 graph_node_get(n)[mc:f_ilist])
-      ], cdr(ifn[mc:c_fvalue]));
-      secure_call
-    ];
+    (ifn[mc:c_fclosure] != null);
 
   needs_global? = fn (ifn)
     // Types: ifn : intermediate function
@@ -189,17 +150,42 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       ncallee = 0;
 
       ifn[mc:c_fmisc][mc:c_fm_globalsbase] = ng = needs_global?(ifn);
-      if (!ng) ncallee = ncallee + 1;
+      if (!ng) ++ncallee;
 
       ifn[mc:c_fmisc][mc:c_fm_closurebase] = nc = needs_closure?(ifn);
-      if (!nc) ncallee = ncallee + 1;
+      if (!nc) ++ncallee;
 
       ncallee
     ];
 
-  // call bset rather than set!
-  kset = mc:var_make_kglobal("set!", global_lookup("set!"));
-  kequal? = mc:var_make_kglobal("equal?", global_lookup("equal?"));
+  kset           = mc:make_kglobal("set!");
+  kequal?        = mc:make_kglobal("equal?");
+  kseclevel      = mc:make_kglobal("seclevel");
+  kmaxseclevel   = mc:make_kglobal("maxseclevel");
+  kglobal_lookup = mc:make_kglobal("global_lookup");
+
+  x86:uses_scratch? = fn (ins)
+    [
+      | class, op |
+      class = ins[mc:i_class];
+
+      // These operations must not clobber the scratch register
+      if (class == mc:i_branch)
+        !((op = ins[mc:i_bop]) == mc:branch_always
+          || op == mc:branch_true
+          || op == mc:branch_false
+          || op == mc:branch_and
+          || op == mc:branch_nand
+          || (op >= mc:branch_eq && op <= mc:branch_gt)
+          || (op >= mc:branch_type?
+              && op < mc:branch_ntype? + last_synthetic_type)
+          || op == mc:branch_any_prim
+          || op == mc:branch_not_prim)
+      else if (class == mc:i_trap)
+        !((op = ins[mc:i_top]) == mc:trap_type)
+      else
+        true
+    ];
 
   get_type = fn (v) // minimalistic type inference ...
     [
@@ -274,10 +260,14 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      cvarloc = cvar[mc:v_location];
 	      if (cvarloc[mc:v_lclass] == mc:v_lspill)
 		cvarloc[mc:v_lsoffset] = offset;
-	      offset = offset + 4;
+	      offset += 4;
 	    ];
 	  cvars = cdr(cvars);
 	];
+
+      | localofs |
+      // [0] is old bp, [1] is vararg vector (optionally), [2+] are locals
+      localofs = if (ifn[mc:c_fvarargs]) 2 else 1;
 
       // spilled locals are stored below bp
       locals = ifn[mc:c_flocals];
@@ -288,7 +278,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  localoc = car(locals)[mc:v_location];
 	  if (localoc[mc:v_lclass] == mc:v_lspill &&
 	      localoc[mc:v_lstype] == mc:spill_spill)
-	    localoc[mc:v_lsoffset] = -4 * localoc[mc:v_lsoffset] - 4;
+	    localoc[mc:v_lsoffset] = -4 * (localofs + localoc[mc:v_lsoffset]);
 	  locals = cdr(locals);
 	];
 
@@ -299,12 +289,12 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  | vargloc |
 
 	  vargloc = car(args)[mc:v_location];
-	  ainfo[3] = ainfo[3] + 1;
+	  ++ainfo[3];
 	  if (vargloc)
 	    [
 	      vargloc[mc:v_lclass] = mc:v_lspill;
 	      vargloc[mc:v_lstype] = mc:spill_spill;
-	      vargloc[mc:v_lsoffset] = -4 * ainfo[3];
+	      vargloc[mc:v_lsoffset] = -4;
 	    ]
 	]
       else
@@ -318,7 +308,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      if (argloc && argloc[mc:v_lclass] == mc:v_lspill &&
 		  argloc[mc:v_lstype] == mc:spill_args)
 		argloc[mc:v_lsoffset] = offset;
-	      offset = offset + 4;
+	      offset += 4;
 	      args = cdr(args);
 	    ];
 	];
@@ -379,19 +369,64 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
            | errno, label |
            @[errno mc:lineno label] = err;
 	   x86:label(code, label);
-	   call_builtin(code, enames[errno]);
+           if (errno == -error_wrong_parameters)
+             call_builtin(code, "bearly_error_wrong_parameters")
+           else
+             [
+               assert(errno >= 0);
+               call_builtin(code, enames[errno]);
+             ];
 	 ],
 	 code[2]);
       x86:assemble(code);
     ];
 
   is_leaf? = fn (ifn)
-    !dexists?(fn (il) il[mc:il_ins][mc:i_class] == mc:c_execute,
-              ifn[mc:c_fvalue]);
+    !dexists?(fn (il) [
+      | ins |
+      ins = il[mc:il_ins];
+      if (ins[mc:i_class] == mc:c_execute)
+        [
+          | called, args |
+          @(called . args) = ins[mc:i_cargs];
+          if ((called == kseclevel || called == kmaxseclevel) && args == null)
+            exit<function> false;
+
+          if (called == kset && llength(args) == 3)
+            [
+              | types, type |
+              types = ins[mc:i_ctypes];
+              type = if (types) cadr(types) else get_type(car(args));
+              // count vector/string assignment as a leaf operation
+              if (type & ~(itype_vector | itype_string) == 0)
+                exit<function> false;
+            ]
+          else if (called == kglobal_lookup && llength(args) == 1
+                   && get_type(car(args)) == itype_string)
+            exit<function> false;
+
+          exit<function> true;
+        ];
+
+      false
+    ], ifn[mc:c_fvalue]);
+
+  update_maxseclev? = fn (ifn)
+    (mc:update_maxseclev == true && !is_leaf?(ifn));
+
+  set_seclev = fn (code, dreg, type)
+    [
+      if (type == x86:sl_c)
+        x86:op16(code);
+      x86:mov(code, x86:lseclev, type, x86:lreg, dreg);
+    ];
 
   x86:mgen_preamble = fn (ifn, ainfo)
     [
       | code, ilist, argcheck, locals, cvars, offset, args, fmisc |
+
+      if (mc:verbose < 1)
+        x86:reset_ins_count();
 
       code = x86:new_code();
       ilist = ifn[mc:c_fvalue];
@@ -407,9 +442,10 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       // Make argument vector for varargs functions
       if (ifn[mc:c_fvarargs])
 	[
+          set_seclev(code, reg_arg1, x86:sl_c);
 	  // Must call even if arg is unused to check seclevel, etc
 	  call_builtin(code, "bvarargs");
-	  offset = -4 * ainfo[3]; // varargs arg is special...
+          offset = -4;
 	  move(code, x86:lreg, reg_arg0, x86:lidx, reg_fp . offset);
 	]
       else
@@ -422,10 +458,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      | argcount |
 
 	      argcount = car(argcheck[mc:i_targs])[mc:v_kvalue];
-              if (argcount == 1)
-                x86:dec(code, x86:lreg, reg_argcount)
-              else
-                cmpeq(code, x86:limm, argcount, x86:lreg, reg_argcount);
+              cmpeq(code, x86:limm, argcount, x86:lreg, reg_argcount);
 
 	      // Remove trap ins
 	      ifn[mc:c_fvalue] = ilist = dremove!(ilist, ilist);
@@ -434,9 +467,9 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	    fail(); // only vararg fns should have no check
 
 	  if (ainfo[3] < 10)
-	    framesizes[ainfo[3]] = framesizes[ainfo[3]] + 1
+	    ++mc:framesizes[ainfo[3]]
 	  else
-	    framesizes[9] = framesizes[9] + 1;
+	    ++mc:framesizes[9];
 
 	  if (is_leaf?(ifn) && ainfo[3] < 3)
 	    [
@@ -444,18 +477,19 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 
 	      // skip the infinite loop and minlevel security checks for leaf
 	      // functions (note that this is a minor security hole)
-	      x86:trap(code, x86:bne, error_wrong_parameters, mc:lineno);
+	      x86:trap(code, x86:bne, -error_wrong_parameters, mc:lineno);
 	      i = ainfo[3];
 	      while (i > 0)
 		[
 		  // initialise stack frame to legal mudlle values
 		  x86:mov(code, x86:lreg, reg_closure_in,
                           x86:lidx, reg_fp . -(i << 2));
-		  i = i - 1;
+		  --i;
 		];
 	    ]
 	  else
 	    [
+              set_seclev(code, reg_arg1, x86:sl_c);
 	      if (ainfo[3] == 0)
 		call_builtin(code, "bcleargc0")
 	      else if (ainfo[3] == 1)
@@ -468,6 +502,21 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 
 	  offset = argstart;
 	];
+
+      if (update_maxseclev?(ifn))
+        [
+          set_seclev(code, reg_arg1, x86:sl_maxlev);
+          x86:mov(code, x86:lspecial, "maxseclevel",
+                  x86:lreg, reg_arg0);
+          x86:cmp(code, x86:lreg, reg_arg0, x86:lreg, reg_arg1);
+          | l |
+          l = x86:new_label(code);
+          x86:jcc(code, x86:bge, l);
+          x86:mov(code, x86:lreg, reg_arg1, x86:lspecial,
+                  "maxseclevel");
+          x86:label(code, l);
+          x86:push(code, x86:lreg, reg_arg0);
+        ];
 
       // Save callee-saved registers
       fmisc = ifn[mc:c_fmisc];
@@ -501,7 +550,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  loc = x86:lidx;
 	  locarg = reg_fp . offset;
 
-	  offset = offset + 4;
+	  offset += 4;
 
 	  if (arg[mc:v_location]) // ignore unused arguments
 	    [
@@ -540,7 +589,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 		     x86:lreg, cvarloc[mc:v_lrnumber]);
 	      assert_message(!in_scratch?(cvar),
                              "oops - closure var unspilt to scratch");
-	      offset = offset + 4;
+	      offset += 4;
 	    ];
 	  cvars = cdr(cvars);
 	];
@@ -616,11 +665,18 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  x86:dec(code, x86:lspecial, "xcount");
 	  x86:trap(code, x86:be, nerror, mc:lineno);
 	]
-      else if (trap == mc:trap_global_write)
+      else if (trap == mc:trap_global_write || trap == mc:trap_global_read)
 	[
-	  // ignores nerror value
-	  x86:lea(code, x86:lglobal, arg1[mc:v_name], x86:lreg, reg_arg0);
-	  call_builtin(code, "bwglobal");
+          // Don't check reads for >= V
+          if (trap == mc:trap_global_write || mc:update_maxseclev == true)
+            [
+              // ignores nerror value
+              x86:mov(code, x86:lglobal, arg1[mc:v_name] . x86:gl_c,
+                      x86:lreg, reg_arg0);
+              call_builtin(code,
+                           if (trap == mc:trap_global_write) "bwglobal"
+                           else "brglobal");
+            ];
 	]
       else if (trap == mc:trap_type)
 	// ignores nerror value
@@ -642,23 +698,25 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       if (fmisc[mc:c_fm_closurebase] ||
 	  vfind?(reg_closure, fmisc[mc:c_fm_regs_callee]))
 	x86:pop(code, x86:lreg, reg_closure);
+      if (update_maxseclev?(ifn))
+        x86:pop(code, x86:lspecial, "maxseclevel");
       x86:leave(code);
       x86:ret(code);
     ];
 
-  relops = sequence // map relops to x86 relops
-    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-     x86:bl, x86:bge, x86:ble, x86:bg);
+  // map relops to x86 relops
+  relops = '[0 0 0 0 0 0 0 0
+             ,x86:be ,x86:bne ,x86:bl ,x86:bge ,x86:ble ,x86:bg];
   rev_x86relop = fn (op) op ^ 1; // reverse meaning of x86 branch
   // change op assuming cmp operands have been commuted
-  commute_x86relop = sequence(-1, -1, // meaningless
-			      x86:ba, x86:bbe,
-			      x86:be, x86:bne, // no change
-			      x86:bae, x86:bb, // swap
-			      -1, -1, // meaningless
-			      -1, -1, // meaningless
-			      x86:bg, x86:ble, // swap
-			      x86:bge, x86:bl); // swap
+  commute_x86relop = '[-1 -1              // meaningless
+                       ,x86:ba ,x86:bbe
+                       ,x86:be ,x86:bne   // no change
+                       ,x86:bae ,x86:bb   // swap
+                       -1 -1              // meaningless
+                       -1 -1              // meaningless
+                       ,x86:bg ,x86:ble   // swap
+                       ,x86:bge ,x86:bl]; // swap
 
 
   mgen_branch = fn (code, ins)
@@ -731,19 +789,18 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       else if (op == mc:branch_eq || op == mc:branch_ne)
 	[
           | cop |
-	  cop = compare(code, arg1, arg2,
-                        if (op == mc:branch_eq) x86:be else x86:bne);
+	  cop = compare(code, arg1, arg2, relops[op]);
 	  x86:jcc(code, cop, dest);
 	]
       else if (op == mc:branch_equal || op == mc:branch_nequal)
         [
           push_args(code, ins[mc:i_bargs]);
-          call_primitive(code, kequal?, equal?);
+          call_primitive(code, kequal?, equal?, null);
           x86:add(code, x86:limm, 4 * 2, x86:lreg, reg_sp); // pop args
           x86:cmp(code, x86:limm, mfalse, x86:lreg, reg_result);
           x86:jcc(code, if (op == mc:branch_equal) x86:bne else x86:be, dest);
         ]
-      else if (op <= mc:branch_gt) // relop
+      else if (op >= mc:branch_lt && op <= mc:branch_gt) // relop
 	[
 	  | x86op |
 
@@ -753,7 +810,35 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  x86op = compare(code, arg2, arg1, relops[op]);
 	  x86:jcc(code, x86op, dest);
 	]
-      else if (op <= mc:branch_writable)
+      else if (op >= mc:branch_slength && op < mc:branch_equal)
+        [
+          | n |
+          n = mc:var_value(arg2);
+          assert(integer?(n));
+
+          | areg |
+          arg1 = fetch_for_dest(code, arg1, arg1);
+          areg = mc:get_reg(arg1);
+
+          if (op >= mc:branch_vlength)
+            [
+              op -= mc:branch_vlength;
+              n *= 4;
+              type_trap(code, type_vector, arg1, type1);
+            ]
+          else
+            [
+              op -= mc:branch_slength;
+              ++n;              // trailing zero
+              type_trap(code, type_string, arg1, type1);
+            ];
+          op = relops[op + mc:branch_eq];
+          n += x86:object_offset;
+
+          x86:cmp(code, x86:limm, n, x86:lidx, areg . x86:object_size);
+          x86:jcc(code, op, dest);
+        ]
+      else if (op >= mc:branch_immutable && op <= mc:branch_writable)
         [
           | inv?, flag |
 
@@ -795,114 +880,138 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
               if (usef) x86:label(code, fdest);
             ];
         ]
-      else if (op < mc:branch_ntype?)
+      else if (op == mc:branch_any_prim || op == mc:branch_not_prim)
+        type_branch(code, fake_prim_type, op == mc:branch_not_prim,
+                    arg1, type1, dest)
+      else if (op >= mc:branch_type? && op < mc:branch_ntype?)
 	type_branch(code, op - mc:branch_type?, false, arg1, type1, dest)
-      else
+      else if (op >= mc:branch_ntype?
+               && op < mc:branch_ntype? + last_synthetic_type)
 	type_branch(code, op - mc:branch_ntype?, true, arg1, type1, dest)
+      else
+        fail();
     ];
 
-  builtins = sequence
-    (0, 0,
-     "bleq", "blne", "bllt", "blle", "blgt", "blge",
-     "bbitor", "bbitxor", "bbitand", "bshift_left", "bshift_right",
-     "badd", "bsubtract", "bmultiply", "bdivide", "bremainder",
-     "bnegate", "bnot", "bbitnot", 0, 0, 0, 0, "bref", 0, 0, 0,
-     "bcar", "bcdr", 0, 0, 0, "btypeof", 0, 0, 0, 0);
+  builtins =
+    '[0 0
+      "bleq" "blne" "bllt" "blle" "blgt" "blge"
+      "bbitor" "bbitxor" "bbitand" "bshift_left" "bshift_right"
+      "badd" "bsubtract" "bmultiply" "bdivide" "bremainder"
+      "bnegate" "bnot" "bbitnot" 0 0 0 0 "bref" 0 0 0
+      "bcar" "bcdr" 0 0 0 "btypeof" 0 0 0 0 0 0 0];
   assert(vlength(builtins) == mc:builtins);
 
-  commute = sequence
-    (0, 0,
-     false, false, false, false, false, false,
-     true, true, true, false, false,
-     false, false, true, false, false,
-     0, 0, 0, 0, 0, 0, 0, false, 0, false, 0,
-     0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  commute =
+    '[0 0
+      ,false ,false ,false ,false ,false ,false
+      ,true ,true ,true ,false ,false
+      ,false ,false ,true ,false ,false
+      0 0 0 0 0 0 0 ,false 0 ,false 0
+      0 0 0 0 0 0 0 0 0 0 0 0 0];
   assert(vlength(commute) == mc:builtins);
 
   // Type of compute op arguments (uses type_xxx/stype_xxx sets)
-  typearg1 = sequence
-    (0,            // sc_or
-     0,            // sc_and
-     stype_any,    // eq
-     stype_any,    // ne
-     type_integer, // lt
-     type_integer, // le
-     type_integer, // gt
-     type_integer, // ge
-     type_integer, // bitor
-     type_integer, // bitxor
-     type_integer, // bitand
-     type_integer, // shift_left
-     type_integer, // shift_right
-     stype_any,    // add
-     type_integer, // subtract
-     type_integer, // multiply
-     type_integer, // divide
-     type_integer, // remainder
-     type_integer, // negate
-     stype_any,    // not
-     type_integer, // bitnot
-     0,            // ifelse
-     0,            // if
-     0,            // while
-     0,            // loop
-     stype_any,    // ref
-     0,            // set
-     0,            // cons
-     0,            // assign
-     type_pair,    // car
-     type_pair,    // cdr
-     type_string,  // slength
-     type_vector,  // vlength
-     type_integer, // iadd
-     stype_any,    // typeof
-     0,            // loop_count
-     0,            // max_loop_count
-     type_symbol,  // symbol_name
-     type_symbol); // symbol_get
+  typearg1 =
+    '[0             // sc_or
+      0             // sc_and
+      ,stype_any    // eq
+      ,stype_any    // ne
+      ,type_integer // lt
+      ,type_integer // le
+      ,type_integer // gt
+      ,type_integer // ge
+      ,type_integer // bitor
+      ,type_integer // bitxor
+      ,type_integer // bitand
+      ,stype_any    // shift_left; special handling
+      ,type_integer // shift_right
+      ,stype_any    // add
+      ,type_integer // subtract
+      ,stype_any    // multiply; special handling
+      ,type_integer // divide
+      ,type_integer // remainder
+      ,type_integer // negate
+      ,stype_any    // not
+      ,type_integer // bitnot
+      0             // ifelse
+      0             // if
+      0             // while
+      0             // loop
+      ,stype_any    // ref
+      0             // set
+      0             // cons
+      0             // assign
+      ,type_pair    // car
+      ,type_pair    // cdr
+      ,type_string  // slength
+      ,type_vector  // vlength
+      ,type_integer // iadd
+      ,stype_any    // typeof
+      0             // loop_count
+      0             // max_loop_count
+      ,type_symbol  // symbol_name
+      ,type_symbol  // symbol_get
+      0             // vector
+      0             // sequence
+      0             // pcons
+    ];
   assert(vlength(typearg1) == mc:builtins);
 
-  typearg2 = sequence
-    (0,            // sc_or
-     0,            // sc_and
-     stype_any,    // eq
-     stype_any,    // ne
-     type_integer, // lt
-     type_integer, // le
-     type_integer, // gt
-     type_integer, // ge
-     type_integer, // bitor
-     type_integer, // bitxor
-     type_integer, // bitand
-     type_integer, // shift_left
-     type_integer, // shift_right
-     stype_any,    // add
-     type_integer, // subtract
-     type_integer, // multiply
-     type_integer, // divide
-     type_integer, // remainder
-     0,            // negate
-     0,            // not
-     0,            // bitnot
-     0,            // ifelse
-     0,            // if
-     0,            // while
-     0,            // loop
-     stype_any,    // ref
-     0,            // set
-     0,            // cons
-     0,            // assign
-     0,            // car
-     0,            // cdr
-     0,            // slength
-     0,            // vlength
-     type_integer, // iadd
-     0,            // typeof
-     0,            // loop_count
-     0,            // max_loop_count
-     0,            // symbol_name
-     0);           // symbol_get
+  typearg2 =
+    '[0             // sc_or
+      0             // sc_and
+      ,stype_any    // eq
+      ,stype_any    // ne
+      ,type_integer // lt
+      ,type_integer // le
+      ,type_integer // gt
+      ,type_integer // ge
+      ,type_integer // bitor
+      ,type_integer // bitxor
+      ,type_integer // bitand
+      ,type_integer // shift_left
+      ,type_integer // shift_right
+      ,stype_any    // add
+      ,type_integer // subtract
+      ,stype_any    // multiply; special handling
+      ,type_integer // divide
+      ,type_integer // remainder
+      0             // negate
+      0             // not
+      0             // bitnot
+      0             // ifelse
+      0             // if
+      0             // while
+      0             // loop
+      ,stype_any    // ref
+      0             // set
+      0             // cons
+      0             // assign
+      0             // car
+      0             // cdr
+      0             // slength
+      0             // vlength
+      ,type_integer // iadd
+      0             // typeof
+      0             // loop_count
+      0             // max_loop_count
+      0             // symbol_name
+      0             // symbol_get
+      0             // vector
+      0             // sequence
+      0             // pcons
+    ];
   assert(vlength(typearg2) == mc:builtins);
+
+  var_in_reg = fn (var, reg)
+    if (mc:in_reg(var) && mc:get_reg(var) == reg)
+      var
+    else
+      [
+        var = vcopy(var);
+        var[mc:v_location] = vector(mc:v_lregister, mc:reg_scratch, reg);
+        var
+      ];
 
   reg_dest = fn (dvar)
     if (mc:in_reg(dvar)) mc:get_reg(dvar)
@@ -928,7 +1037,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       [
 	move(code, x86:lvar, r, x86:lvar, d);
 	x86:not(code, x86:lvar, d);
-	x86:bts(code, x86:limm, 0, x86:lvar, d);
+	x86:or(code, x86:limm, 1, x86:lvar, d);
       ]
     else if (op == mc:b_not)
       [
@@ -994,11 +1103,14 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
     else if (op == mc:b_ref) // may inline vector_ref or string_ref
       [
         | c |
-        c = get_constant(arg2);
+        c = mc:var_value(arg2);
         ((integer?(c) && c >= 0 && c < (1 << 27)) &&
          (!(type1 & itype_vector) || !(type1 & itype_string)))
       ]
-    else !(op == mc:b_divide || op == mc:b_remainder || op == mc:b_multiply);
+    else if (op == mc:b_multiply)
+      intcst?(arg1) || intcst?(arg2)
+    else
+      !(op == mc:b_divide || op == mc:b_remainder);
 
   relop = fn (code, branch, r1, r2, d)
     [
@@ -1015,9 +1127,9 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 
       if (!mc:in_reg(d)) exit<function> false;
 
-      if (!subtract && integer?(cst = get_constant(r1)))
+      if (!subtract && integer?(cst = mc:var_value(r1)))
 	r1 = r2
-      else if (!integer?(cst = get_constant(r2)))
+      else if (!integer?(cst = mc:var_value(r2)))
 	exit<function> false;
 
       if (!mc:in_reg(r1)) exit<function> false;
@@ -1033,7 +1145,63 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       true
     ];
 
-  mgen_inline2 = fn (code, op, r1, type1, r2, type2, d)
+  // return list of factors of n:
+  //   9, 8, 5, 4, 3, 2, or -n for other powers of 2: (1 << n)
+  // or null if we should use imul
+  | multiply_factorize |
+  multiply_factorize = fn (n, neg?)
+    [
+      assert(n > 0);
+
+      | f, n2, n3, n5, d |
+      n2 = 0;                   // number of powers of 2
+      while (!(n & 255))
+        [
+          n2 += 8;
+          n >>= 8;
+        ];
+      while (!(n & 1))
+        [
+          ++n2;
+          n >>= 1;
+        ];
+      n3 = 0;                   // number of powers of 3
+      while ((d = n / 3) * 3 == n)
+        [
+          ++n3;
+          n = d;
+        ];
+      n5 = 0;                   // number of powers of 5
+      while ((d = n / 5) * 5 == n)
+        [
+          ++n5;
+          n = d;
+        ];
+
+      if (n != 1)
+        // other prime factors than 2, 3, and 5
+        exit<function> null;
+      if (n5 + (n3 + 1) / 2 + (n2 > 0) > (if (neg?) 2 else 3))
+        // too expensive, use imul
+        exit<function> null;
+
+      while (--n5 >= 0)
+        f = 5 . f;
+      while (n3 >= 2)
+        [
+          f = 9 . f;
+          n3 -= 2;
+        ];
+      if (n3)
+        f = 3 . f;
+      if (n2 > 3)
+        f = -n2 . f
+      else if (n2 > 0)
+        f = (1 << n2) . f;
+      f
+    ];
+
+  mgen_inline2 = fn (code, op, r1, type1, r2, type2, d, ins)
     // Effects: Generates code for d = r1 op r2
     //   type1 & type2 are provided to help generate code for polymorphic ops
     //   r1, r2, d are variables
@@ -1057,53 +1225,125 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	normalxor = fn (code, m1, a1, m2, a2)
 	  [
 	    x86:xor(code, m1, a1, m2, a2);
-	    x86:inc(code, m2, a2);
+	    x86:or(code, x86:limm, 1, m2, a2);
 	  ];
 
 	perform3cst(code, r1, r2, d, normalxor, normalxor,
 		    cstxor, cstxor);
       ]
     else if (op == mc:b_shift_left)
-      [
-	| i |
-
-	i = r2[mc:v_kvalue];
-	if (i == 1)
-	  [
-	    | r, dr |
-
-	    r = fetch1(code, r1);
-	    dr = reg_dest(d);
-	    x86:lea(code, x86:lridx, r . 1 . r . -1, x86:lreg, dr);
-	    move(code, x86:lreg, dr, x86:lvar, d);
-	  ]
-	else if (i == 2 || i == 3)
-	  [
-	    | r, dr |
-
-	    r = fetch1(code, r1);
-	    dr = reg_dest(d);
-	    i = 1 << i;
-	    x86:lea(code, x86:lqidx, r . i . -(i - 1), x86:lreg, dr);
-	    move(code, x86:lreg, dr, x86:lvar, d);
-	  ]
-	else
-	  [
-	    move(code, x86:lvar, r1, x86:lvar, d);
-	    x86:btr(code, x86:limm, 0, x86:lvar, d);
-	    x86:shl(code, x86:limm, i & 31, x86:lvar, d);
-	    x86:inc(code, x86:lvar, d);
-	  ];
-      ]
+      mgen_inline2(code, mc:b_multiply, r1, type1,
+                   mc:var_make_constant(1 << (r2[mc:v_kvalue] & 31)),
+                   itype_integer, d, ins)
     else if (op == mc:b_shift_right)
       [
 	| i |
 
-	i = r2[mc:v_kvalue];
-
+	i = r2[mc:v_kvalue] & 31;
 	move(code, x86:lvar, r1, x86:lvar, d);
-	x86:sar(code, x86:limm, i & 31, x86:lvar, d);
-	x86:bts(code, x86:limm, 0, x86:lvar, d);
+        if (i != 0)
+          [
+            x86:sar(code, x86:limm, i & 31, x86:lvar, d);
+            x86:or(code, x86:limm, 1, x86:lvar, d);
+          ]
+      ]
+    else if (op == mc:b_multiply) // integer multiply with constant
+      [
+        | c, neg? |
+        c = mc:var_value(r2);
+        assert(integer?(c));
+
+        if (c >= -1 && c <= 1)
+          [
+            type_trap(code, type_integer, r1, type1);
+            if (c == 0)
+              move(code, x86:limm, mzero, x86:lvar, d)
+            else if (c == 1)
+              move(code, x86:lvar, r1, x86:lvar, d)
+            else
+              mgen_inline1(code, mc:b_negate, r1, type1, d);
+            exit<function> null;
+          ];
+
+        if (neg? = (c < 0))
+          c = -c;
+
+        | dr, factors |
+        dr = reg_dest(d);
+        if (c == minint)
+          [
+            neg? = false;
+            factors = '(,(-(intbits - 1)))
+          ]
+        else
+          [
+            factors = multiply_factorize(c, neg?);
+            if (factors == null)
+              [
+                type_trap(code, type_integer, r1, type1);
+                if (neg?)
+                  c = -c;
+                x86:imul(code, x86:lvar, r1, x86:lidx, dr . c);
+                x86:sub(code, x86:limm, c - 1, x86:lreg, dr);
+                exit<function> move(code, x86:lreg, dr, x86:lvar, d);
+              ];
+          ];
+
+        | r |
+        r = fetch1(code, r1);
+        type_trap(code, type_integer, var_in_reg(r1, r), type1);
+
+        | excess |
+        excess = 1;
+        while (factors != null)
+          <next> [
+            | f |
+            @(f . factors) = factors;
+
+            if (f < 0)
+              [
+                f = -f;
+                move(code, x86:lreg, r, x86:lreg, dr);
+                x86:shl(code, x86:limm, f, x86:lreg, dr);
+                excess <<= f;
+              ]
+            else
+              [
+                | mod |
+                excess *= f;
+                mod = 0;
+                if (factors == null)
+                  [
+                    mod = (if (neg?) -1 else 1) - excess;
+                    excess += mod;
+                  ];
+
+                if (f == 2 && r == dr && mod == 0)
+                  x86:add(code, x86:lreg, r, x86:lreg, dr)
+                else if (f == 2 || f == 3 || f == 5 || f == 9)
+                  x86:lea(code, x86:lridx, r . (f - 1) . r . mod, x86:lreg, dr)
+                else if (f == 4 || f == 8)
+                  x86:lea(code, x86:lqidx, r . f . mod, x86:lreg, dr)
+                else
+                  fail();
+              ];
+            r = dr;
+          ];
+
+        assert(r == dr);
+        if (neg?)
+          [
+            x86:neg(code, x86:lreg, dr);
+            excess = -excess;
+          ];
+        --excess;               // need one left
+        if (excess > 0)
+          x86:sub(code, x86:limm, excess, x86:lreg, dr)
+        else if (excess == -1)
+          x86:or(code, x86:limm, 1, x86:lreg, dr)
+        else if (excess < 0)
+          x86:add(code, x86:limm, -excess, x86:lreg, dr);
+        exit<function> move(code, x86:lreg, dr, x86:lvar, d);
       ]
     else if (op == mc:b_add || op == mc:b_iadd) // integer addition only
       [
@@ -1148,7 +1388,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 		      fn (code, m1, a1, m2, a2)
 		      [
 			x86:sub(code, m1, a1, m2, a2);
-			x86:inc(code, m2, a2);
+                        x86:or(code, x86:limm, 1, m2, a2);
 		      ],
 		      false,
 		      fn (code, i, m1, a1)
@@ -1157,21 +1397,28 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       ]
     else if (op == mc:b_ref)
       [
-	| c |
+	| c, reg1 |
 
-	c = get_constant(r2);
+	c = mc:var_value(r2);
+        r1 = fetch_for_dest(code, r1, r1);
+        reg1 = mc:get_reg(r1);
 
 	if (!(type1 & itype_string)) // vector
 	  [
-	    type_trap(code, type_vector, r1, type1);
+	    type_trap(code, type_vector, r1, type1 & ~itype_null);
 
 	    if (integer?(c) && c >= 0 && c < (1 << 27))
 	      [
+                | unsafe? |
+                unsafe? = c >= ins[mc:i_asizeinfo];
 		c = 4 * c + x86:object_offset;
-		r1 = fetch1(code, r1);
-		x86:cmp(code, x86:limm, c, x86:lidx, r1 . x86:object_size);
-		x86:trap(code, x86:bbe, error_bad_index, mc:lineno);
-		move(code, x86:lidx, r1 . c, x86:lvar, d);
+                if (unsafe?)
+                  [
+                    x86:cmp(code, x86:limm, c,
+                            x86:lidx, reg1 . x86:object_size);
+                    x86:trap(code, x86:bbe, error_bad_index, mc:lineno);
+                  ];
+		move(code, x86:lidx, reg1 . c, x86:lvar, d);
 	      ]
 	    else
               fail();
@@ -1185,11 +1432,16 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 
 	    if (integer?(c) && c >= 0 && c < (1 << 27))
 	      [
-		c = c + x86:object_offset;
-		r1 = fetch1(code, r1);
-		x86:cmp(code, x86:limm, c + 1, x86:lidx, r1 . x86:object_size);
-		x86:trap(code, x86:bbe, error_bad_index, mc:lineno);
-		x86:movzxbyte(code, x86:lidx, r1 . c, x86:lreg, dr);
+                | unsafe? |
+                unsafe? = c >= ins[mc:i_asizeinfo];
+		c += x86:object_offset;
+                if (unsafe?)
+                  [
+                    x86:cmp(code, x86:limm, c + 1, x86:lidx,
+                            reg1 . x86:object_size);
+                    x86:trap(code, x86:bbe, error_bad_index, mc:lineno);
+                  ];
+		x86:movzxbyte(code, x86:lidx, reg1 . c, x86:lreg, dr);
 	      ]
 	    else
               fail();
@@ -1241,7 +1493,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
           x86:lea(code, x86:lspecial, "max_loop_count", x86:lreg, dr);
           move(code, x86:lreg, dr, x86:lvar, dest);
         ]
-      else if (op == mc:b_cons)
+      else if (op == mc:b_cons || op == mc:b_pcons)
 	[
 	  if (in_scratch?(arg2) || in_scratch?(arg1)) fail();
 	  call_builtin(code, "balloc_cons");
@@ -1249,18 +1501,50 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
                reg_arg1 . x86:object_offset);
 	  move(code, x86:lvar, arg2, x86:lidx,
                reg_arg1 . x86:object_offset + 4);
+          if (op == mc:b_pcons)
+            x86:or(code, x86:limm, MUDLLE_READONLY, x86:lidx,
+                   reg_arg1 . x86:object_flags);
+	  move(code, x86:lreg, reg_arg1, x86:lvar, dest);
+	]
+      else if (op == mc:b_vector || op == mc:b_sequence)
+	[
+          | nargs, ofs |
+          nargs = llength(args);
+          move(code, x86:limm, 4 * nargs + x86:object_offset,
+               x86:lreg, reg_arg0);
+	  call_builtin(code, "balloc_vector");
+          ofs = 0;
+          lforeach(fn (arg) [
+            assert(!in_scratch?(arg));
+            move(code, x86:lvar, arg, x86:lidx,
+                 reg_arg1 . x86:object_offset + ofs);
+            ofs += 4
+          ], args);
+          if (op == mc:b_sequence)
+            x86:or(code, x86:limm, MUDLLE_READONLY, x86:lidx,
+                   reg_arg1 . x86:object_flags);
 	  move(code, x86:lreg, reg_arg1, x86:lvar, dest);
 	]
       else if (arg2 == null)	// 1-argument ops
 	if (inline1?(op, arg1, type1))
 	  [
+            if (op == mc:b_car || op == mc:b_cdr
+                || op == mc:b_symbol_name
+                || op == mc:b_symbol_get
+                || op == mc:b_slength
+                || op == mc:b_vlength)
+              [
+                // will cause error later on otherwise
+                type1 &= ~itype_null;
+                arg1 = fetch_for_dest(code, arg1, dest);
+              ];
 	    type_trap(code, typearg1[op], arg1, type1);
 	    mgen_inline1(code, op, arg1, type1, dest);
-	    nops_inlined = nops_inlined + 1;
+	    ++mc:nops_inlined;
 	  ]
 	else
 	  [
-	    nops_called = nops_called + 1;
+	    ++mc:nops_called;
             callop1(code, builtins[op], arg1);
 	    move(code, x86:lreg, reg_arg0, x86:lvar, dest);
 	  ]
@@ -1277,13 +1561,19 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      ];
 	    type_trap(code, typearg1[op], arg1, type1);
 	    type_trap(code, typearg2[op], arg2, type2);
-	    mgen_inline2(code, op, arg1, type1, arg2, type2, dest);
-	    nops_inlined = nops_inlined + 1;
+	    mgen_inline2(code, op, arg1, type1, arg2, type2, dest, ins);
+	    ++mc:nops_inlined;
 	  ]
 	else
 	  [
-	    nops_called = nops_called + 1;
-	    callop2(code, builtins[op], commute[op], arg1, arg2);
+            | c |
+	    ++mc:nops_called;
+            // empty string addition commutes as well
+            c = (commute[op]
+                 || (op == mc:b_add
+                     && (equal?(mc:var_value(arg1), "")
+                         || equal?(mc:var_value(arg1), ""))));
+	    callop2(code, builtins[op], c, arg1, arg2);
 	    move(code, x86:lreg, reg_arg0, x86:lvar, dest);
 	  ]
     ];
@@ -1332,7 +1622,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
         ];
 
       move(code, x86:limm, 4 * (1 + llength(cvars)) + x86:object_offset,
-	   x86:lreg, reg_arg1);
+	   x86:lreg, reg_arg0);
       call_builtin(code, "balloc_closure");
       move(code, x86:lfunction, f, x86:lidx, reg_arg1 . x86:object_offset);
       offset = x86:object_offset + 4;
@@ -1345,7 +1635,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	    move(code, x86:lreg, reg_arg1, x86:lidx, reg_arg1 . offset)
 	  else
 	    move(code, x86:lvar, cvar, x86:lidx, reg_arg1 . offset);
-	  offset = offset + 4;
+	  offset += 4;
 	  cvars = cdr(cvars);
 	];
       move(code, x86:lreg, reg_arg1, x86:lvar, cdest);
@@ -1363,13 +1653,13 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
   push_args = fn (code, args)
     lforeach(fn (v) x86:push(code, x86:lvar, v), lreverse(args));
 
-  call_primitive = fn (code, called, prim)
+  call_primitive = fn (code, called, prim, {null,vector} dest)
     [
       | flags |
 
       flags = primitive_flags(prim);
 
-      // Save stack frame address (for GC)
+      // Save stack frame address (for GC and call traces)
       x86:lea(code, x86:lspecial, "ccontext", x86:lreg, x86:reg_eax);
       x86:mov(code, x86:lreg, x86:reg_esp, x86:lidx,
               x86:reg_eax . x86:cc_frame_end_sp);
@@ -1387,39 +1677,59 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 
       x86:callrel_prim(code, called[mc:v_name]);
 
+      | dreg |
+      if (vector?(dest) && mc:in_reg(dest))
+        dreg = mc:get_reg(dest);
+
       if (!(flags & OP_NOALLOC))
 	[
 	  // restore callee registers
 	  x86:lea(code, x86:lspecial, "ccontext", x86:lreg, x86:reg_edx);
-	  x86:mov(code, x86:lidx, x86:reg_edx . x86:cc_callee,
-                  x86:lreg, reg_closure);
-	  x86:mov(code, x86:lidx, x86:reg_edx . x86:cc_callee + 4,
-                  x86:lreg, x86:reg_globals);
+          if (dreg != reg_closure)
+            x86:mov(code, x86:lidx, x86:reg_edx . x86:cc_callee,
+                    x86:lreg, reg_closure);
+          if (dreg != x86:reg_globals)
+            x86:mov(code, x86:lidx, x86:reg_edx . x86:cc_callee + 4,
+                    x86:lreg, x86:reg_globals);
 	];
 
-      x86:xor(code, x86:lreg, x86:reg_edx, x86:lreg, x86:reg_edx);
-      if (!(flags & OP_NOALLOC)) // if noalloc, %edi cannot have "gone bad"
-	x86:xor(code, x86:lreg, x86:reg_edi, x86:lreg, x86:reg_edi);
+      if (dreg != x86:reg_edx)
+        x86:xor(code, x86:lreg, x86:reg_edx, x86:lreg, x86:reg_edx);
+      if (dreg != x86:reg_edi
+          && !(flags & OP_NOALLOC)) // if noalloc, %edi cannot have "gone bad"
+        x86:xor(code, x86:lreg, x86:reg_edi, x86:lreg, x86:reg_edi);
 
       true
     ];
 
-  call_closure = fn (code, called, nargs)
+  call_closure = fn (code, called, nargs, f)
     [
-      move(code, x86:lvar, called, x86:lreg, reg_closure_in);
+      if (called[mc:v_class] == mc:v_function)
+        move(code, x86:lvar, called, x86:lreg, x86:reg_ecx)
+      else if (closure?(f) && (closure_flags(f) & clf_noclosure))
+        [
+          assert(called[mc:v_class] == mc:v_global_constant);
+          move(code, x86:lfunction, called[mc:v_name], x86:lreg, x86:reg_ecx);
+        ]
+      else
+        [
+          move(code, x86:lvar, called, x86:lreg, reg_closure_in);
+          move(code, x86:lidx, reg_closure_in . x86:object_offset,
+               x86:lreg, x86:reg_ecx);
+        ];
       move(code, x86:limm, nargs, x86:lreg, reg_argcount);
-      move(code, x86:lidx, reg_closure_in . x86:object_offset,
-           x86:lreg, x86:reg_ecx);
       x86:add(code, x86:limm, x86:object_offset + x86:function_offset,
-	      x86:lreg, x86:reg_ecx);
+              x86:lreg, x86:reg_ecx);
       x86:call(code, x86:lreg, x86:reg_ecx);
       true
     ];
 
-  call = fn (code, called, nargs, callprimop)
+  call = fn (code, called, nargs, callprimop, seclev?)
     [
       move(code, x86:lvar, called, x86:lreg, reg_closure_in);
       move(code, x86:limm, nargs, x86:lreg, reg_argcount);
+      if (seclev?)
+        set_seclev(code, reg_arg1, x86:sl_c);
       call_builtin(code, callprimop);
 
       true
@@ -1441,8 +1751,9 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
           assert(immutable?(argv));
 
           move(code, x86:lvar, mc:var_make_constant(argv), x86:lreg, reg_arg0);
-          x86:lea(code, x86:lprimitive, called[mc:v_name], x86:lreg, reg_arg1);
-
+          x86:lea(code, x86:lprimitive, called[mc:v_name], x86:lreg,
+                  reg_closure_in);
+          set_seclev(code, reg_arg1, x86:sl_c);
           call_builtin(code, "bapply_varargs");
           move(code, x86:lreg, reg_result, x86:lvar, dest);
 
@@ -1453,19 +1764,90 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       x86:lea(code, x86:lprimitive, called[mc:v_name],
               x86:lreg, reg_closure_in);
       move(code, x86:limm, nargs, x86:lreg, reg_argcount);
+      set_seclev(code, reg_arg1, x86:sl_c);
       call_builtin(code, "bcall_varargs");
-      move(code, x86:lreg, reg_result, x86:lvar, dest);
       if (nargs > 0)
 	x86:add(code, x86:limm, 4 * nargs, x86:lreg, reg_sp); // pop args
+      move(code, x86:lreg, reg_result, x86:lvar, dest);
     ];
 
-  call_bset = fn (code, args, dest)
+  call_kset = fn (code, args, dest, types, sizeinfo)
     [
-      // call bset, value to be set on stack, first 2 args in arg0/1
-      x86:push(code, x86:lvar, caddr(args));
-      callop2(code, "bset", false, car(args), cadr(args));
-      x86:add(code, x86:limm, 4, x86:lreg, reg_sp); // pop arg
-      move(code, x86:lreg, reg_result, x86:lvar, dest);
+      | obj, idx, nidx, val, type1 |
+      @(obj idx val) = args;
+
+      if (!(types
+            && ((type1 = car(types = cdr(types))) == itype_vector
+                || type1 == itype_string)
+            && integer?(nidx = mc:var_value(idx))
+            && nidx >= 0 && nidx < sizeinfo))
+        [
+          callop3(code, "bset", obj, idx, val);
+          move(code, x86:lreg, reg_result, x86:lvar, dest);
+          exit<function> null;
+        ];
+
+      | robj, rval, rdest |
+
+      rval = fetch1(code, val);
+      if (rval == reg_scratch)
+        robj = fetch1(code, obj)
+      else
+        robj = fetch2(code, obj);
+      // robj == rval is still possible for obj[idx] = obj
+
+      x86:test(code, x86:limm, MUDLLE_READONLY,
+               x86:lidx, robj . x86:object_flags);
+      x86:trap(code, x86:bne, error_value_read_only, mc:lineno);
+
+      rdest = reg_dest(dest);
+      if (type1 == itype_vector)
+        [
+          nidx = nidx * 4 + x86:object_offset;
+          x86:mov(code, x86:lreg, rval, x86:lidx, robj . nidx);
+          move(code, x86:lreg, rval, x86:lvar, dest);
+          exit<function> null;
+        ];
+
+      // it's a string
+      nidx += x86:object_offset;
+
+      // make sure we have an 8-bit capable register that isn't
+      // GC-protected as it will end up with a non-mudlle value
+      if (!vfind?(rval, regs_allscratch))
+        [
+          | nr |
+          nr = if (robj == reg_scratch) reg_arg1 else reg_scratch;
+          move(code, x86:lreg, rval, x86:lreg, nr);
+          rval = nr
+        ];
+
+      type_trap(code, type_integer, var_in_reg(val, rval),
+                caddr(types));
+
+      assert(rval != robj);
+
+      | rval8 |
+      rval8 = x86:reg8[rval];
+
+      x86:shr(code, x86:limm, 1, x86:lreg, rval);
+      x86:movbyte(code, x86:lreg, rval8, x86:lidx, robj . nidx);
+      x86:movzxbyte(code, x86:lreg, rval8, x86:lreg, rdest);
+      x86:lea(code, x86:lridx, rdest . 1 . rdest . 1,
+              x86:lreg, rdest);
+      move(code, x86:lreg, rdest, x86:lvar, dest);
+    ];
+
+  call_seclevel = fn (code, dest, type)
+    move(code, x86:lseclev, type, x86:lvar, dest);
+
+  maybe_call_global_lookup = fn (code, arg, dest)
+    [
+      | val |
+      if (!string?(val = mc:var_value(arg)))
+        exit<function> false;
+      move(code, x86:lglobal, val . x86:gl_mudlle, x86:lvar, dest);
+      exit<function> true;
     ];
 
   mgen_call = fn (code, ins)
@@ -1480,7 +1862,17 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       done = false;
 
       if (called == kset && nargs == 3)
-	exit<function> call_bset(code, args, dest);
+	exit<function> call_kset(code, args, dest, ins[mc:i_ctypes],
+                                 ins[mc:i_csizeinfo]);
+
+      if (called == kseclevel && nargs == 0)
+	exit<function> call_seclevel(code, dest, x86:sl_mudlle);
+      if (called == kmaxseclevel && nargs == 0)
+	exit<function> call_seclevel(code, dest, x86:sl_maxlev);
+
+      if (called == kglobal_lookup && nargs == 1
+          && maybe_call_global_lookup(code, car(args), dest))
+        exit<function> null;
 
       // Optimise calls to global constants
       if (called[mc:v_class] == mc:v_global_constant)
@@ -1495,20 +1887,24 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
           push_args(code, args);
 
 	  if (t == type_primitive && primitive_nargs(f) == nargs)
-            done = call_primitive(code, called, f)
+            done = call_primitive(code, called, f, dest)
 	  else if (t == type_secure)
-	    done = call(code, called, nargs, "bcall_secure")
+	    done = call(code, called, nargs, "bcall_secure", true)
 	  else if (t == type_closure)
-	    done = call_closure(code, called, nargs);
+	    done = call_closure(code, called, nargs, f);
 	]
       else
         push_args(code, args);
 
-      if (!done) done = call(code, called, nargs, "bcall");
+      if (!done)
+        if (vector?(ins[mc:i_cfunction]))
+          call_closure(code, called, nargs, null)
+        else
+          call(code, called, nargs, "bcall", false);
 
-      move(code, x86:lreg, reg_result, x86:lvar, dest);
       if (nargs > 0)
 	x86:add(code, x86:limm, 4 * nargs, x86:lreg, reg_sp); // pop args
+      move(code, x86:lreg, reg_result, x86:lvar, dest);
     ];
 
   type_branch = fn (code, type, reversed, arg, typeset, dest)
@@ -1562,7 +1958,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	[
 	  if (typeset & itype_integer)
 	    [
-	      x86:test(code, x86:limm, 3, x86:lreg, r);
+	      x86:test(code, x86:limm, 1, x86:lreg, r);
 	      abort(x86:bne);
 	    ];
 	  if (typeset & itype_null)
@@ -1591,7 +1987,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	    ]
 	  else if (type == type_null)
 	    [
-	      x86:cmp(code, x86:limm, 0, x86:lvar, arg);
+              cmpeq(code, x86:limm, 0, x86:lvar, arg);
 	      commit(x86:be);
 	    ]
 	  else if (type == stype_list)
@@ -1611,7 +2007,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 		    ];
 		  if (typeset & itype_integer)
 		    [
-		      x86:test(code, x86:limm, 3, x86:lreg, r);
+		      x86:test(code, x86:limm, 1, x86:lreg, r);
 		      abort(x86:bne);
 		    ];
 		  // stype_list becomes type_pair as we now know it's
@@ -1635,22 +2031,19 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      typeset &= ~(itype_null | itype_integer);
 	      exit<continue> null;
 	    ]
-	  else if (type == stype_function)
+	  else if (type == stype_function || type == fake_prim_type)
 	    [
 	      if (r == null)
 		r = fetch1(code, arg);
-	      x86:movzxbyte(code, x86:lidx, r . x86:object_type,
-			    x86:lreg, reg_scratch);
-	      x86:cmpbyte(code, x86:limm, type_closure,
-			  x86:lreg, reg_scratch);
-	      success(x86:be);
-	      // primitive, varargs & secure are contiguous
-	      x86:cmpbyte(code, x86:limm, type_primitive,
-			  x86:lreg, reg_scratch);
-	      abort(x86:bb);
-	      x86:cmpbyte(code, x86:limm, type_secure,
-			  x86:lreg, reg_scratch);
-	      commit(x86:bbe);
+              if (type == stype_function)
+                [
+                  x86:cmpbyte(code, x86:limm, type_closure,
+                              x86:lidx, r . x86:object_type);
+                  success(x86:be);
+                ];
+	      x86:cmpbyte(code, x86:limm, garbage_primitive,
+			  x86:lidx, r . x86:object_info);
+	      commit(x86:be);
 	    ]
 	  else			// generic type check
 	    [
@@ -1675,7 +2068,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       trap = fn (cc) x86:trap(code, cc, error_bad_type, mc:lineno);
       trap_unaligned = fn (r)
 	[
-	  x86:test(code, x86:limm, 3, x86:lreg, r);
+	  x86:test(code, x86:limm, 1, x86:lreg, r);
 	  trap(x86:bne);
 	];
 
@@ -1690,52 +2083,51 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  if (type == type_integer)
 	    [
 	      x86:test(code, x86:limm, 1, x86:lvar, var);
-	      trap(x86:be);
-	    ]
-	  else if (type == type_null)
+	      exit<function> trap(x86:be);
+	    ];
+	  if (type == type_null)
 	    [
 	      x86:cmp(code, x86:limm, 0, x86:lvar, var);
-	      trap(x86:bne);
-	    ]
-	  else if (type == stype_function)
-	    [
-	      | ok, r |
+	      exit<function> trap(x86:bne);
+	    ];
 
-	      ok = x86:new_label(code);
+	  if (type == stype_function)
+	    [
+	      | r |
+
 	      r = fetch1(code, var);
 	      if (typeset & itype_integer)
-		trap_unaligned(r);
+                [
+                  trap_unaligned(r);
+                  var = var_in_reg(var, r);
+                  exit<function>
+                    type_trap(code, type, var, typeset & ~itype_integer);
+                ];
 
-	      x86:movzxbyte(code, x86:lidx, r . x86:object_type,
-                            x86:lreg, reg_scratch);
               x86:cmpbyte(code, x86:limm, type_closure,
-                          x86:lreg, reg_scratch);
+                          x86:lidx, r . x86:object_type);
 
+	      | ok |
+              ok = x86:new_label(code);
 	      x86:jcc(code, x86:be, ok);
-	      // primitive, varargs, secure are contiguous
-              x86:sub(code, x86:limm, type_primitive,
-                      x86:lreg, reg_scratch);
-              x86:cmpbyte(code, x86:limm, type_secure - type_primitive,
-                          x86:lreg, reg_scratch);
-	      trap(x86:ba);
+              x86:cmpbyte(code, x86:limm, garbage_primitive,
+                          x86:lidx, r . x86:object_info);
+	      trap(x86:bne);
 	      x86:label(code, ok);
 	    ]
 	  else if (type == stype_list)
 	    [
-	      | ok, r |
+              if (!(typeset & itype_null))
+                exit<function> type_trap(code, type_pair, var, typeset);
 
+	      | ok, r |
 	      ok = x86:new_label(code);
 	      r = fetch1(code, var);
-	      if (itype_null & typeset)
-		[
-		  x86:test(code, x86:lreg, r, x86:lreg, r);
-		  x86:jcc(code, x86:be, ok);
-		];
-	      if (typeset & itype_integer)
-		trap_unaligned(r);
-	      x86:cmpbyte(code, x86:limm, type_pair,
-			  x86:lidx, r . x86:object_type);
-	      trap(x86:bne);
+              x86:test(code, x86:lreg, r, x86:lreg, r);
+              x86:jcc(code, x86:be, ok);
+
+              var = var_in_reg(var, r);
+              type_trap(code, type_pair, var, typeset & ~itype_null);
 	      x86:label(code, ok);
 	    ]
 	  else
@@ -1746,9 +2138,18 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	      // traps
 	      r = fetch1(code, var);
 	      if (typeset & itype_integer)
-		trap_unaligned(r);
-	      x86:cmpbyte(code, x86:limm, type, x86:lidx, r . x86:object_type);
-	      trap(x86:bne);
+                [
+                  trap_unaligned(r);
+                  var = var_in_reg(var, r);
+                  exit<function>
+                    type_trap(code, type, var, typeset & ~itype_integer);
+                ];
+              x86:cmpbyte(code, x86:limm, type, x86:lidx, r . x86:object_type);
+              if ((typeset & ~itype_null & mc:itypemap_inverse[type])
+                  != itype_none)
+                // only trap if the test could conceivably fail; the cmp is
+                // there to test for null
+                trap(x86:bne);
 	    ];
 	];
     ];
@@ -1758,7 +2159,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       | r, r8 |
 
       r = reg_dest(dest);
-      r8 = x86:reg8[if (r <= x86:reg_ebx) r else reg_scratch];
+      r8 = x86:reg8[if (r < vlength(x86:reg8)) r else reg_scratch];
 
       x86:setcc(code, cc, x86:lreg, r8);
       x86:movzxbyte(code, x86:lreg, r8, x86:lreg, r);
@@ -1790,6 +2191,18 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	  reg_scratch
 	]
     ];
+
+  // fetch var into dest's register, or reg_arg1
+  fetch_for_dest = fn (code, var, dest)
+    if (mc:in_reg(var))
+      var
+    else if (mc:in_reg(dest))
+      [
+        move(code, x86:lvar, var, x86:lvar, dest);
+        dest
+      ]
+    else
+      var_in_reg(var, fetch1(code, var));
 
   call_builtin = fn (code, op)
     x86:callrel(code, op);
@@ -1823,6 +2236,57 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       call_builtin(code, builtin);
     ];
 
+  [
+    | regs, allregs |
+    regs = '[,reg_arg0 ,reg_arg1 ,x86:reg_edx];
+    allregs = make_vector(x86:nregs);
+    for (|i|i = vlength(regs); --i >= 0; )
+      allregs[regs[i]] = i;
+    protect(allregs);
+
+    callop3 = fn (code, builtin, arg1, arg2, arg3)
+      // Scratch register usage: reg_scratch
+      [
+        | regargs, args, aregs |
+        regargs = make_vector(vlength(regs));
+        args = vector(arg1, arg2, arg3);
+        aregs = vmap(fn (arg) [
+          | r |
+          r = mc:get_reg(arg);
+          if (r >= 0 && integer?(r = allregs[r]))
+            r
+          else
+            null
+        ], args);
+        for (|i, n| i = vlength(regs); --i >= 0; )
+          if ((n = aregs[i]) != null)
+            regargs[n] = i;
+
+        // move vars to empty registers
+        for (|i| i = vlength(regs); --i >= 0; )
+          if (regargs[i] == null)
+            loop <again> [
+              | ni |
+              if (integer?(ni = aregs[i]))
+                regargs[ni] = null;
+              // will not clobber any register
+              // dformat("HERE MOVE %w -> %w\n", aregs[i], regs[i]);
+              move(code, x86:lvar, args[i], x86:lreg, regs[i]);
+              aregs[i] = i;
+              regargs[i] = i;
+              if (integer?(ni) && ni > i)
+                exit<again> i = ni;
+              exit null;
+            ];
+
+        // if necessary, exchange reg_arg0 and edx; reg_arg1 (scratch)
+        // must be correct already
+        if (aregs[0] != 0)
+          x86:xchg(code, x86:lreg, reg_arg0, x86:lreg, x86:reg_edx);
+
+        call_builtin(code, builtin);
+      ];
+  ];
 
   move = fn (code, stype, source, dtype, dest)
     safemove(code, stype, source, dtype, dest, regs_scratch);
@@ -1835,7 +2299,7 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       loop
 	if (i == l) exit null
 	else if (f(v[i])) exit v[i]
-	else i = i + 1
+	else ++i
     ];
 
   safemove = fn (code, stype, source, dtype, dest, scratchregs)
@@ -1860,29 +2324,32 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
       // type: x86:limm, x86:lcst, x86:lfunction, x86:lreg,
       // x86:lidx, x86:l[rq]idx, x86:lglobal(_constant)
 
-      if (!equal?(sea, dea))
-	[
-	  // can use mov if source or destination is a register or if
-	  // source is a constant
-	  if (dtype == x86:lreg ||
-	      (stype != x86:lidx && stype != x86:lridx && stype != x86:lqidx &&
-	       stype != x86:lglobal && stype != x86:lglobal_constant))
-	    x86:mov(code, stype, source, dtype, dest)
-	  else
-	    [
-	      | sr |
+      if (equal?(sea, dea)) exit<function> null;
 
-	      assert_message(dtype != x86:lridx && dtype != x86:lqidx,
-			    "scaled destination unsupported (for now)");
-	      // find a usable scratch register
-	      // can't use vexists? because 0 is a valid register number. grr.
-	      sr = myvexists?(fn (r) !(dtype == x86:lidx && car(dest) == r),
-                              scratchregs);
-	      assert_message(sr != null, "no register for move");
-	      x86:mov(code, stype, source, x86:lreg, sr);
-	      x86:mov(code, x86:lreg, sr, dtype, dest);
-	    ];
-	];
+      // can use mov if source or destination is a register or if
+      // source is a constant
+
+      if (dtype == x86:lreg && stype == x86:limm && source == 0)
+        x86:xor(code, dtype, dest, dtype, dest)
+      else if (dtype == x86:lreg
+               || (stype != x86:lidx && stype != x86:lridx
+                   && stype != x86:lqidx && stype != x86:lglobal
+                   && stype != x86:lglobal_constant))
+        x86:mov(code, stype, source, dtype, dest)
+      else
+        [
+          | sr |
+
+          assert_message(dtype != x86:lridx && dtype != x86:lqidx,
+                         "scaled destination unsupported (for now)");
+          // find a usable scratch register
+          // can't use vexists? because 0 is a valid register number. grr.
+          sr = myvexists?(fn (r) !(dtype == x86:lidx && car(dest) == r),
+                          scratchregs);
+          assert_message(sr != null, "no register for move");
+          x86:mov(code, stype, source, x86:lreg, sr);
+          x86:mov(code, x86:lreg, sr, dtype, dest);
+        ];
     ];
 
   compare = fn (code, arg1, arg2, relop)
@@ -1954,31 +2421,33 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
   // > 7 bytes (e.g. global = global + 5120))
   perform3 = fn (code, arg1, arg2, dest, op, commute_op)
     [
-      | sea1, sea2, dea, stype1, source1, stype2, source2, dtype |
+      | stype1, source1, stype2, source2, dtype |
 
-      sea1 = x86:resolve(x86:lvar, arg1);
-      stype1 = car(sea1); source1 = cdr(sea1);
-      sea2 = x86:resolve(x86:lvar, arg2);
-      stype2 = car(sea2); source2 = cdr(sea2);
-      if (integer?(dest)) // a register
-	dea = x86:lreg . dest
+      @(stype1 . source1) = x86:resolve(x86:lvar, arg1);
+      @(stype2 . source2) = x86:resolve(x86:lvar, arg2);
+      if (integer?(dest))
+        dtype = x86:lreg
       else
-	dea = x86:resolve(x86:lvar, dest);
-      dtype = car(dea); dest = cdr(dea);
+        @(dtype . dest) = x86:resolve(x86:lvar, dest);
 
       if (dtype == x86:lreg)
 	[
-	  if (equal?(sea2, dea)) // oops - can't overwrite dest yet
+	  if (dtype == stype2 && dest == source2)
+            // cannot overwrite dest yet
 	    if (commute_op)
 	      // no need for move, arg2 is already in dest
 	      commute_op(code, stype1, source1, dtype, dest)
 	    else
 	      [
-		// if we knew that arg1 lived in a register and was dead,
-		// we could skip the first move
-		move(code, stype1, source1, x86:lreg, x86:reg_ecx);
-		op(code, stype2, source2, x86:lreg, x86:reg_ecx);
-		move(code, x86:lreg, x86:reg_ecx, dtype, dest);
+                // if we know that source1 is dead, we can skip the move
+                if (stype1 != x86:lreg || source1 != reg_scratch)
+                  [
+                    move(code, stype1, source1, x86:lreg, x86:reg_ecx);
+                    stype1 = x86:lreg;
+                    source1 = x86:reg_ecx;
+                  ];
+                op(code, stype2, source2, stype1, source1);
+		move(code, stype1, source1, dtype, dest);
 	      ]
 	  else
 	    [
@@ -1988,11 +2457,15 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
 	]
       else
 	[
-	  // again, if arg1 or arg2 are known to die, and either live
-	  // in a register, we could avoid a move here
-	  move(code, stype1, source1, x86:lreg, x86:reg_ecx);
-	  op(code, stype2, source2, x86:lreg, x86:reg_ecx);
-	  move(code, x86:lreg, x86:reg_ecx, dtype, dest);
+          // if we know that source1 is dead, we can skip the move
+          if (stype1 != x86:lreg || source1 != reg_scratch)
+            [
+              move(code, stype1, source1, x86:lreg, x86:reg_ecx);
+              stype1 = x86:lreg;
+              source1 = x86:reg_ecx;
+            ];
+	  op(code, stype2, source2, stype1, source1);
+	  move(code, stype1, source1, dtype, dest);
 	];
     ];
 
@@ -2001,12 +2474,12 @@ writes nops_called, nops_inlined, framesizes, c1, c2, mc:lineno
     [
       | cst |
 
-      if (integer?(cst = get_constant(arg2)))
+      if (integer?(cst = mc:var_value(arg2)))
 	[
 	  move(code, x86:lvar, arg1, x86:lvar, dest);
 	  cstop(code, cst, x86:lvar, dest);
 	]
-      else if (commute_cstop && integer?(cst = get_constant(arg1)))
+      else if (commute_cstop && integer?(cst = mc:var_value(arg1)))
 	[
 	  move(code, x86:lvar, arg2, x86:lvar, dest);
 	  commute_cstop(code, cst, x86:lvar, dest);

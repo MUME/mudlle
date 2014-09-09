@@ -24,11 +24,12 @@ requires compiler, vars, ins3, graph,
   system, dlist, sequences, misc
 defines
   mc:flow_gen, mc:flow_kill, mc:flow_in, mc:flow_out, mc:flow_map,
-  mc:flow_ambiguous, mc:scan_ambiguous, mc:flow_uses, mc:flow_copies,
+  mc:flow_ambiguous, mc:scan_ambiguous, mc:build_ambiguous_list,
+  mc:flow_uses, mc:flow_copies,
   mc:flow_live, mc:rscan_live, mc:flow_display, mc:clear_dataflow,
   mc:split_blocks, mc:flatten_blocks, mc:display_blocks, mc:f_ilist,
-  mc:f_ambiguous, mc:f_uses, mc:f_copies, mc:f_live, mc:f_dvars, mc:f_types,
-  mc:all_functions
+  mc:f_ambiguous_w, mc:f_ambiguous_rw, mc:f_uses, mc:f_copies, mc:f_live,
+  mc:f_dvars, mc:f_types, mc:f_sizes, mc:all_functions, mc:flow_sizes
 
 reads mc:show_type_info, mc:verbose
 
@@ -37,13 +38,17 @@ reads mc:show_type_info, mc:verbose
     bflow_display, clear_nodes, set_ilist_node, order_nodes, new_block |
 
   // Flow graph node representation:
-  mc:f_ilist = 0;
-  mc:f_ambiguous = 1; // data-flow: variables which have escaped into a closure (list of var)
-  mc:f_uses = 2; // data-flow: definition use information
-  mc:f_copies = 3; // data-flow: copy propagation information
-  mc:f_live = 4; // data-flow: live variable information
-  mc:f_dvars = 5; // varset of vars definitely assigned in block
-  mc:f_types = 6; // data-flow: inferred types
+  mc:f_ilist        = 0; // the dlist of the ilists
+  mc:f_ambiguous_w  = 1; // data-flow: variables which are written from
+                         // a closure (list of var)
+  mc:f_ambiguous_rw = 2; // data-flow: variables which have escaped into
+                         // a closure (list of var)
+  mc:f_uses         = 3; // data-flow: definition use information
+  mc:f_copies       = 4; // data-flow: copy propagation information
+  mc:f_live         = 5; // data-flow: live variable information
+  mc:f_dvars        = 6; // varset of vars definitely assigned in block
+  mc:f_types        = 7; // data-flow: inferred types
+  mc:f_sizes        = 8; // data-flow: min/max sizes of strings and vectors
 
   // All data-flow problems use the same basic structure:
   //  [0]: generated info
@@ -58,9 +63,28 @@ reads mc:show_type_info, mc:verbose
   mc:flow_out = 3;
   mc:flow_map = 4;
 
+  | kset, kstring_set, kvector_set, kref, kvector_ref, kstring_ref,
+    referencers,
+    kmake_vector, kmake_string, kvappend, ksappend, kvcopy, kscopy |
+  kset         = mc:make_kglobal("set!");
+  kstring_set  = mc:make_kglobal("string_set!");
+  kvector_set  = mc:make_kglobal("vector_set!");
+  kref         = mc:make_kglobal("ref");
+  kstring_ref  = mc:make_kglobal("string_ref");
+  kvector_ref  = mc:make_kglobal("vector_ref");
+  referencers  = sequence(kset, kstring_set, kvector_set,
+                          kref, kstring_ref, kvector_ref);
+  kmake_vector = mc:make_kglobal("make_vector");
+  kmake_string = mc:make_kglobal("make_string");
+  kvappend     = mc:make_kglobal("vappend");
+  ksappend     = mc:make_kglobal("sappend");
+  kscopy       = mc:make_kglobal("scopy");
+  kvcopy       = mc:make_kglobal("vcopy");
+
   // Part1: data-flow graph creation, destruction, display
 
-  new_block = fn (ilist) vector(ilist, false, false, false, false, false, false);
+  new_block = fn (ilist)
+    vector(ilist, false, false, false, false, false, false, false, false);
 
   mc:clear_dataflow = fn (ifn)
     // Effects: Clears data-flow information from ifn
@@ -70,9 +94,9 @@ reads mc:show_type_info, mc:verbose
 			| block |
 
 			block = graph_node_get(n);
-			block[mc:f_ambiguous] = block[mc:f_uses] =
-			  block[mc:f_copies] = block[mc:f_live] =
-			  block[mc:f_types] = false;
+			block[mc:f_ambiguous_w] = block[mc:f_ambiguous_rw]
+                          = block[mc:f_uses] = block[mc:f_copies]
+                          = block[mc:f_live] = block[mc:f_types] = false;
 		      ], cdr(ifn[mc:c_fvalue]));
 
   // basic block handling
@@ -145,7 +169,7 @@ reads mc:show_type_info, mc:verbose
 			  | last |
 			  last = dget(dprev(graph_node_get(node)[mc:f_ilist]))[mc:il_ins];
 			  if (last[mc:i_class] == mc:i_branch)
-			    graph_add_edge(node, last[mc:i_bdest][mc:l_ins][mc:il_node], false)
+			    graph_add_edge(node, last[mc:i_bdest][mc:l_ilist][mc:il_node], false)
 			], flow);
 
       ifn[mc:c_fvalue] = entry_node . flow
@@ -221,8 +245,8 @@ reads mc:show_type_info, mc:verbose
 	      // prefer the destination of previous block
 	      lastins = dget(dprev(graph_node_get(entry)[mc:f_ilist]))[mc:il_ins];
 	      if (lastins[mc:i_class] == mc:i_branch &&
-		  memq(lastins[mc:i_bdest][mc:l_ins][mc:il_node], nodes))
-		next = lastins[mc:i_bdest][mc:l_ins][mc:il_node]
+		  memq(lastins[mc:i_bdest][mc:l_ilist][mc:il_node], nodes))
+		next = lastins[mc:i_bdest][mc:l_ilist][mc:il_node]
 	      else
 		next = car(nodes);
 	    ];
@@ -316,7 +340,296 @@ union_successors = fn (n, problem)
       ]
   ];
 
-mc:flow_ambiguous = fn (ifn, rwmask)
+// flow minimum known sizes of vectors and strings
+mc:flow_sizes = fn (ifn)
+  [
+    | fg, change, new_sizeset |
+    fg = ifn[mc:c_fvalue];
+
+    new_sizeset = fn (ifn) make_string(ifn[mc:c_fnvars]);
+
+    // initialise data-flow problem
+    graph_nodes_apply(fn (n)
+		      [
+			| block |
+			block = graph_node_get(n);
+                        block[mc:f_sizes] = vector
+                          (null, null,
+                           new_sizeset(ifn),    // in
+                           new_sizeset(ifn),    // out
+                           ifn[mc:c_fallvars]); // map
+		      ], cdr(fg));
+
+    | size_block, merge_in_sizes |
+
+    merge_in_sizes = fn (predecessor, first_il, new_in)
+      [
+        | pnode, pout, override_var, override_value |
+        pnode = graph_node_get(graph_edge_from(predecessor));
+        pout = pnode[mc:f_sizes][mc:flow_out];
+
+        override_var = 0;
+
+        <done> [
+          // check if the 'predecessor' block ended in a size-length
+          // branch
+          | plast, pins |
+          plast = dprev(pnode[mc:f_ilist]);
+          pins = dget(plast)[mc:il_ins];
+          if (pins[mc:i_class] != mc:i_branch)
+            exit<done> null;
+
+          | bop |
+          bop = pins[mc:i_bop];
+          if (bop < mc:branch_slength || bop >= mc:branch_equal)
+            exit<done> null;
+
+          // it's either an slength or vlength branch
+          | bvar1, val |
+          @(_ bvar1) = pins[mc:i_bargs];
+          val = mc:var_value(bvar1);
+          assert(integer?(val));
+
+          // avoid overflow problems
+          if (val < 0 || val >= (1 << 20))
+            exit<done> null;
+
+          if (bop >= mc:branch_vlength)
+            bop += mc:branch_eq - mc:branch_vlength
+          else
+            bop += mc:branch_eq - mc:branch_slength;
+
+          | blabel, nlabel |
+          blabel = pins[mc:i_bdest];
+          while (nlabel = blabel[mc:l_alias]) blabel = nlabel;
+          if (blabel[mc:l_ilist] != first_il)
+            [
+              // the fall-through is to our block; invese operator logic
+              bop ^= 1;
+            ];
+
+          if (bop == mc:branch_eq)
+            null
+          else if (bop == mc:branch_gt)
+            ++val
+          else if (bop == mc:branch_ge)
+            null
+          else
+            exit<done> null;
+
+          if (val > 255)
+            val = 255;
+
+          | pnvar |
+          pnvar = car(pins[mc:i_aargs])[mc:v_number];
+          if (val <= pout[pnvar])
+            exit<done> null;
+
+          // 'override_var' is known to at least be of size 'override_value'
+          override_var = pnvar;
+          override_value = val
+        ];
+
+        if (new_in == null)
+          [
+            new_in = scopy(pout);
+            if (override_var > 0)
+              new_in[override_var] = override_value;
+          ]
+        else
+          for (|i| i = slength(new_in); --i > 0; )
+            new_in[i] = min(new_in[i],
+                            if (i == override_var) override_value
+                            else pout[i]);
+        new_in
+      ];
+
+    size_block = fn (n)
+      [
+        | info, new_in, block, ilist, first_il |
+        block = graph_node_get(n);
+        info = block[mc:f_sizes];
+        ilist = block[mc:f_ilist];
+        first_il = dget(ilist);
+        new_in = null;
+        graph_edges_in_apply(fn (predecessor) [
+          new_in = merge_in_sizes(predecessor, first_il, new_in)
+        ], n);
+
+        if (new_in == null)
+          new_in = new_sizeset(ifn);
+        info[mc:flow_in] = new_in;
+
+        | new_out, amb |
+        new_out = scopy(new_in);
+        amb = block[mc:f_ambiguous_w][mc:flow_in];
+        for (|scan| scan = ilist; ;)
+          [
+            | il, ins, class |
+            il = dget(scan);
+            ins = il[mc:il_ins];
+            class = ins[mc:i_class];
+
+            <noref> [
+              | rvar, ivar, sizefield |
+              if (class == mc:i_compute && ins[mc:i_aop] == mc:b_ref)
+                [
+                  @(rvar ivar) = ins[mc:i_aargs];
+                  sizefield = mc:i_asizeinfo;
+                ]
+              else if (class == mc:i_call
+                       && vfind?(car(ins[mc:i_cargs]), referencers)
+                       && llength(cdr(ins[mc:i_cargs])) > 2)
+                [
+                  @(rvar ivar . _) = cdr(ins[mc:i_cargs]);
+                  sizefield = mc:i_csizeinfo;
+                ]
+              else
+                exit<noref> null;
+
+              // 'rvar' will be at least of size 'ivar'; record previous size
+              // information in the 'sizefield' of the instruction
+              | nrvar |
+              nrvar = rvar[mc:v_number];
+              if (nrvar <= 0)
+                [
+                  ins[sizefield] = 0;
+                  exit<noref> null;
+                ];
+
+              ins[sizefield] = new_out[nrvar];
+
+              | ival |
+              ival = mc:var_value(ivar);
+              if (!integer?(ival))
+                exit<noref> null;
+
+              // convoluted to avoid the -minint problem
+              if (ival <= -255 || ival >= 254)
+                ival = 255
+              else if (ival < 0)
+                ival = -ival
+              else
+                ++ival;
+
+              if (ival > new_out[nrvar])
+                new_out[nrvar] = ival;
+            ];
+
+	    if (class == mc:i_closure)
+	      mc:set_closure_vars!(ins, mc:closure_write, amb)
+            else if (class == mc:i_vref)
+              set_bit!(amb, ins[mc:i_varg][mc:v_number])
+            else if (class == mc:i_call && mc:call_escapes?(ins)
+                     || class == mc:i_return)
+              [
+                // if call escapes, reset information for all variables that
+                // may change
+                lforeach(fn (v) new_out[v[mc:v_number]] = 0,
+                         ifn[mc:c_fglobals]);
+                bforeach(fn (n) new_out[n] = 0, amb);
+              ];
+
+            // check for known calls or operations that return objects of known
+            // sizes
+            | dvar, ndvar |
+            dvar = mc:defined_var(ins);
+            if (dvar && (ndvar = dvar[mc:v_number]) > 0)
+              [
+                | new, get_size |
+
+                get_size = fn (vec, var)
+                  [
+                    if (var[mc:v_class] == mc:v_constant)
+                      [
+                        | val |
+                        val = var[mc:v_kvalue];
+                        if (string?(val))
+                          exit<function> slength(val);
+                        if (vector?(val))
+                          exit<function> vlength(val);
+                      ];
+                    | num |
+                    num = var[mc:v_number];
+                    if (num > 0)
+                      vec[num]
+                    else
+                      0
+                  ];
+
+                new = 0;
+                if (class == mc:i_compute)
+                  [
+                    | aop |
+                    aop = ins[mc:i_aop];
+                    if (aop == mc:b_assign)
+                      new = get_size(new_out, car(ins[mc:i_aargs]))
+                    else if (aop == mc:b_add)
+                      new = (get_size(new_out, car(ins[mc:i_aargs]))
+                             + get_size(new_out, cadr(ins[mc:i_aargs])))
+                    else if (aop == mc:b_vector || aop == mc:b_sequence)
+                      new = llength(ins[mc:i_aargs]);
+                  ]
+                else if (class == mc:i_call)
+                  [
+                    | f, args |
+                    @(f . args) = ins[mc:i_cargs];
+                    if (f == kmake_vector || f == kmake_string)
+                      match (args) [
+                        (arg) => [
+                          | n |
+                          n = mc:var_value(arg);
+                          if (integer?(n))
+                            new = n
+                        ]
+                      ]
+                    else if (f == kvappend || f == ksappend)
+                      match (args) [
+                        (arg1 arg2) => [
+                          new = (get_size(new_out, arg1)
+                                 + get_size(new_out, arg2));
+                        ]
+                      ]
+                    else if (f == kvcopy || f == kscopy)
+                      match (args) [
+                        (arg) => [
+                          new = get_size(new_out, arg);
+                        ]
+                      ];
+                  ];
+                new_out[ndvar] = new;
+              ];
+
+            scan = dnext(scan);
+            if (scan == ilist)
+              exit<break> null;
+          ];
+
+        if (string_cmp(new_out, info[mc:flow_out]) != 0)
+          [
+            info[mc:flow_out] = new_out;
+            change = true;
+          ];
+      ];
+
+    change = true;
+    while (change)
+      [
+	change = false;
+	graph_nodes_apply(size_block, cdr(fg));
+      ];
+  ];
+
+| type_rwmask |
+type_rwmask = fn (type)
+  if (type == mc:f_ambiguous_rw)
+    mc:closure_write | mc:closure_read
+  else if (type == mc:f_ambiguous_w)
+    mc:closure_write
+  else
+    fail();
+
+mc:flow_ambiguous = fn (ifn, type)
   // Types: ifn: intermediate function, rwmask: int
   // Effects: A simple data-flow problem (no info killed):
   //   computes which variables have escaped into closures by the start
@@ -327,8 +640,9 @@ mc:flow_ambiguous = fn (ifn, rwmask)
   //     mc:closure_write: variables written in some closure
   //     mc:closure_read|mc:closure_write: all variables that escape
   [
-    | fg, merge_block, change, block_ambiguous |
+    | fg, merge_block, change, block_ambiguous, rwmask |
 
+    rwmask = type_rwmask(type);
     fg = ifn[mc:c_fvalue];
 
     block_ambiguous = fn (ilist)
@@ -359,7 +673,7 @@ mc:flow_ambiguous = fn (ifn, rwmask)
 		      [
 			| block |
 			block = graph_node_get(n);
-			block[mc:f_ambiguous] = vector
+			block[type] = vector
 			  (block_ambiguous(block[mc:f_ilist]),
 			   mc:new_varset(ifn), // nothing is ever killed
 			   mc:new_varset(ifn),
@@ -372,7 +686,7 @@ mc:flow_ambiguous = fn (ifn, rwmask)
     //   out(i) = in(i) U gen(i)
 
     merge_block = fn (n)
-      if (union_predecessors(n, mc:f_ambiguous)) change = true;
+      if (union_predecessors(n, type)) change = true;
 
     loop
       [
@@ -382,7 +696,7 @@ mc:flow_ambiguous = fn (ifn, rwmask)
       ];
   ];
 
-mc:scan_ambiguous = fn (f, x, block, globals, rwmask)
+mc:scan_ambiguous = fn (f, x, block, globals, type)
   // Types: f : function (see effects)
   //        x : any
   //        block : flow graph node
@@ -391,18 +705,19 @@ mc:scan_ambiguous = fn (f, x, block, globals, rwmask)
   // Effects: Scans the instructions of the block in order, doing
   //     x = f(ins, ambiguous, x)
   //   at each instruction, where ambiguous is the current "ambiguous"
-  //   information (represented as a bitset)
+  //   information (represented as a mutable bitset)
   //   rwmask is used to select the variables that are considered ambiguous:
   //     mc:closure_read: variables read in some closure
   //     mc:closure_write: variables written in some closure
   //     mc:closure_read|mc:closure_write: all variables that escape
   // Returns: The final x
   [
-    | scan, ilist, ambiguous |
+    | scan, ilist, ambiguous, rwmask |
 
+    rwmask = type_rwmask(type);
     ilist = block[mc:f_ilist];
     scan = ilist;
-    ambiguous = bunion(block[mc:f_ambiguous][mc:flow_in], globals);
+    ambiguous = bunion(block[type][mc:flow_in], globals);
     loop
       [
 	| ins, il |
@@ -416,6 +731,54 @@ mc:scan_ambiguous = fn (f, x, block, globals, rwmask)
 
 	scan = dnext(scan);
 	if (scan == ilist) exit x
+      ]
+  ];
+
+mc:build_ambiguous_list = fn (block, globals, type)
+  // same as mc:scan_ambiguous() but returns a list of ambiguous
+  // bitset per ilist
+  [
+    | scan, ilist, ambiguous, rwmask, result |
+
+    rwmask = type_rwmask(type);
+    ilist = block[mc:f_ilist];
+    scan = ilist;
+    ambiguous = bunion(block[type][mc:flow_in], globals);
+    loop
+      [
+	| ins, il |
+
+	il = dget(scan);
+	ins = il[mc:il_ins];
+
+        result = ambiguous . result;
+
+	scan = dnext(scan);
+	if (scan == ilist) exit result;
+
+	if (ins[mc:i_class] == mc:i_closure)
+          [
+            | vars, new? |
+            new? = false;
+            vars = ins[mc:i_ffunction][mc:c_fclosure];
+            while (vars != null)
+              [
+                | var |
+                @(var . vars) = vars;
+                if (rwmask == (mc:closure_read | mc:closure_write)
+                    || (mc:var_base(var)[mc:v_lclosure_uses] & rwmask))
+                  [
+                    | vnum |
+                    vnum = var[mc:v_cparent][mc:v_number];
+                    if (!new? && bit_clear?(ambiguous, vnum))
+                      [
+                        ambiguous = bcopy(ambiguous);
+                        new? = true;
+                      ];
+                    set_bit!(ambiguous, vnum);
+                  ];
+              ];
+          ];
       ]
   ];
 
@@ -433,7 +796,8 @@ mc:flow_uses = fn (ifn)
     fg = ifn[mc:c_fvalue];
     vmap = ifn[mc:c_fallvars];
     uindex = -1;
-    vars = lappend(ifn[mc:c_fclosure], lappend(ifn[mc:c_fglobals], ifn[mc:c_flocals]));
+    vars = lappend(ifn[mc:c_fclosure],
+                   lappend(ifn[mc:c_fglobals], ifn[mc:c_flocals]));
     // not interested in uses of variables which are not written in ifn
     globals = mc:set_vars!(mc:new_varset(ifn), ifn[mc:c_fglobals_write]);
     mc:set_vars!(globals, ifn[mc:c_fclosure_write]);
@@ -478,7 +842,7 @@ mc:flow_uses = fn (ifn)
 	  ];
 
 	defined = mc:new_varset(ifn);
-	mc:scan_ambiguous(use1, null, block, globals, mc:closure_write)
+	mc:scan_ambiguous(use1, null, block, globals, mc:f_ambiguous_w)
       ];
 
     // initialise data-flow problem
@@ -601,16 +965,25 @@ mc:flow_copies = fn (ifn)
 	  ];
 
 	if (class == mc:i_call && mc:call_escapes?(ins))
-	  // all ambiguous variables may be assigned
-	  copies = lfilter
-	    (fn (il)
-	     [
-	       | ins |
+          [
+            | block |
+            block = graph_node_get(il[mc:il_node]);
+            // add 'ambiguous' to the block's ambiguous set
+            if (block[mc:f_copies])
+              bunion!(block[mc:f_copies], ambiguous)
+            else
+              block[mc:f_copies] = bcopy(ambiguous);
 
-	       ins = il[mc:il_ins];
-	       bit_clear?(ambiguous, ins[mc:i_adest][mc:v_number]) &&
-	       bit_clear?(ambiguous, car(ins[mc:i_aargs])[mc:v_number])
-	     ], copies);
+            // all ambiguous variables may be assigned
+            copies = lfilter
+              (fn (il)
+               [
+                 | ins |
+                 ins = il[mc:il_ins];
+                 bit_clear?(ambiguous, ins[mc:i_adest][mc:v_number]) &&
+                   bit_clear?(ambiguous, car(ins[mc:i_aargs])[mc:v_number])
+               ], copies);
+          ];
 
 	if (class == mc:i_compute && ins[mc:i_aop] == mc:b_assign)
 	  copies = il . copies;
@@ -621,11 +994,18 @@ mc:flow_copies = fn (ifn)
     block_copies = fn (block, globals)
       // Types: block: flow graph node
       //        globals : list of var
-      // Returns: list of copy statement of ilist
+      // Returns: ambiguous set . list of copy statement of ilist
       //   On function calls, all the variables in ambiguous must be
       //   considered used.
-      lmap(fn (copy) (cindex = cindex + 1) . copy,
-	   mc:scan_ambiguous(copy1, null, block, globals, mc:closure_write));
+      [
+        // use this to hold ambiguous set
+        block[mc:f_copies] = false;
+        | copies |
+        copies = lmap(fn (copy) ++cindex . copy,
+                      mc:scan_ambiguous(copy1, null, block,
+                                        globals, mc:f_ambiguous_w));
+        block[mc:f_copies] . copies
+      ];
 
 
     // initialise data-flow problem
@@ -637,12 +1017,12 @@ mc:flow_copies = fn (ifn)
 			| block, copies |
 			block = graph_node_get(n);
 			copies = block_copies(block, globals);
-			all_copies = lappend(copies, all_copies);
+			all_copies = lappend(cdr(copies), all_copies);
 			block[mc:f_copies] = copies;
-		      ], cdr(fg));
+n		      ], cdr(fg));
 
     // make map of use number to uses (all_uses is in reverse order of use number)
-    cindex = cindex + 1;
+    ++cindex;
     i = cindex;
     copies = all_copies;
     all_copies = make_vector(cindex);
@@ -651,7 +1031,7 @@ mc:flow_copies = fn (ifn)
 
     while (copies != null)
       [
-	all_copies[i = i  - 1] = cdar(copies);
+	all_copies[--i] = cdar(copies);
 	copies = cdr(copies);
       ];
     assert(i == 0);
@@ -660,13 +1040,18 @@ mc:flow_copies = fn (ifn)
     graph_nodes_apply
       (fn (n)
        [
-	 | block, killed, copies, kvars, firstout, i |
+	 | block, killed, copies, kvars, firstout, firstin, i, ambiguous |
 
 	 block = graph_node_get(n);
 	 kvars = block[mc:f_dvars];
-	 copies = copy_set(block[mc:f_copies]);
+	 @(ambiguous . copies) = block[mc:f_copies];
+         copies = copy_set(copies);
 
-	 // killed = all copies whose vars are assigned in the block
+         if (ambiguous)
+           kvars = bunion(kvars, ambiguous);
+
+	 // killed = all copies whose vars are assigned or ambiguous
+	 // in the block
 	 i = 0;
 	 killed = bcopy(copyset);
 	 while (i < cindex)
@@ -679,18 +1064,19 @@ mc:flow_copies = fn (ifn)
 		 bit_set?(kvars, car(copy[mc:i_aargs])[mc:v_number]))
 	       set_bit!(killed, i);
 
-	     i = i + 1;
+	     ++i;
 	   ];
 	 // except those generated here
 	 bdifference!(killed, copies);
 
+         // start value for flow_in: all_copies
+	 firstin = string_fill!(bcopy(copyset), 255);
 	 // start value for flow_out: all_copies - kill
-	 string_fill!(firstout = bcopy(copyset), 255);
-	 bdifference!(firstout, killed);
+	 firstout = bdifference(firstin, killed);
 
 	 block[mc:f_copies] = vector(copies,
 				     killed,
-				     bcopy(copyset),
+				     firstin,
 				     firstout,
 				     all_copies);
        ], cdr(fg));
@@ -702,6 +1088,7 @@ mc:flow_copies = fn (ifn)
     //   out(entry) = gen(entry)
 
     eblock = graph_node_get(entry)[mc:f_copies];
+    eblock[mc:flow_in] = copyset;
     eblock[mc:flow_out] = eblock[mc:flow_gen];
 
     merge_block = fn (n)
@@ -843,18 +1230,47 @@ mc:rscan_live = fn (f, x, block)
       newline();
     ];
 
+  | display_sizes |
+  display_sizes = fn (info)
+    [
+      if (!info) exit<function> null;
+
+      | dlist |
+      dlist = fn (name, s)
+        [
+          display(name);
+          for (|i, l| [ l = slength(s); i = 0 ]; i < l; ++i)
+            [
+              | v |
+              v = s[i];
+              if (v == 0)
+                exit<continue> null;
+              dformat("  %d [%d]", i, v)
+            ];
+          newline();
+        ];
+
+      display("Size information:\n");
+      dlist("in:  ", info[mc:flow_in]);
+      dlist("out: ", info[mc:flow_out]);
+    ];
 
   mc:flow_display = fn (fnode)
     [
-      bflow_display("ambiguous", fnode[mc:f_ambiguous], fn (x) display(mc:svar(x)));
+      bflow_display("ambiguous(w)", fnode[mc:f_ambiguous_w],
+                    fn (x) display(mc:svar(x)));
+      bflow_display("ambiguous(rw)", fnode[mc:f_ambiguous_rw],
+                    fn (x) display(mc:svar(x)));
       bflow_display("uses", fnode[mc:f_uses],
 		    fn (use)
 		    [
 		      dformat("%s: ", mc:svar(car(use)));
 		      display(cdr(use)[mc:il_number]);
 		    ]);
-      bflow_display("copies", fnode[mc:f_copies], fn (copy) display(copy[mc:il_number]));
+      bflow_display("copies", fnode[mc:f_copies],
+                    fn (copy) display(copy[mc:il_number]));
       bflow_display("live", fnode[mc:f_live], fn (x) display(mc:svar(x)));
+      display_sizes(fnode[mc:f_sizes]);
       mc:show_type_info(fnode[mc:f_types]);
     ];
 
@@ -896,10 +1312,18 @@ mc:rscan_live = fn (f, x, block)
 
       check_ins = fn (ins)
         [
-          | i |
+          | i, cls |
           i = ins[mc:il_ins];
-          if (i[mc:i_class] == mc:i_closure)
-            todo = i[mc:i_ffunction] . todo;
+          cls = i[mc:i_class];
+          if (cls == mc:i_closure)
+            todo = i[mc:i_ffunction] . todo
+          else if (cls == mc:i_call)
+            [
+              | called |
+              called = car(i[mc:i_cargs]);
+              if (called[mc:v_class] == mc:v_function)
+                todo = called[mc:v_fvalue] . todo
+            ]
         ];
 
       todo = ifn . null;

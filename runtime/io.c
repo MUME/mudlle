@@ -64,7 +64,7 @@ TYPEDOP(standard_out, "stdout",
   return mudout;
 }
 
-static value pprint(struct oport *p, prt_level level, value v)
+static value pprint(struct oport *p, enum prt_level level, value v)
 {
   GCPRO1(v);
   p = get_oport(p);
@@ -89,7 +89,7 @@ TYPEDOP(pwrite, 0, "`oport `x -> . Print a representation of `x to"
         (struct oport *p, value x), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
         "xx.")
 {
-  return pprint(p, prt_print, x);
+  return pprint(p, prt_write, x);
 }
 
 TYPEDOP(pexamine, 0, "`oport `x -> . Print a representation of `x to"
@@ -104,7 +104,7 @@ TYPEDOP(pexamine, 0, "`oport `x -> . Print a representation of `x to"
 TYPEDOP(print, "write", "`x -> . Print a representation of `x", 1, (value v),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "x.")
 {
-  output_value(mudout, prt_print, false, v);
+  output_value(mudout, prt_write, false, v);
   if (mudout) pflush(mudout);
   undefined();
 }
@@ -136,7 +136,7 @@ TYPEDOP(ctime, 0, " -> `n. Returns the number of milliseconds of CPU"
 
   if (timer(clock)) runtime_error(error_bad_value);
 
-  return (makeint(1000 * (clock[0] % 86400) + clock[1] / 1000));
+  return makeint(1000 * (clock[0] % 86400) + clock[1] / 1000);
 #elif defined(hpux)
   return makeint(0);
 #else
@@ -152,7 +152,8 @@ TYPEDOP(ctime, 0, " -> `n. Returns the number of milliseconds of CPU"
 
 TYPEDOP(time, 0,
 	" -> `n. Returns the number of seconds since the 1st of January"
-        " 1970 GMT",
+        " 1970 GMT. Negative values are used for values greater than `MAXINT"
+        " (around 2004-01-10 13:37 UTC). Cf. `time_after().",
 	0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
@@ -160,16 +161,21 @@ TYPEDOP(time, 0,
 }
 
 TYPEDOP(time_afterp, "time_after?",
-	"`n0 `n1 -> `b. Returns true if time `n0 is after time `n1",
+	"`n0 `n1 -> `b. Returns true if time `n0 is after time `n1, as"
+        " returned from `time().",
 	2, (value t0, value t1),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "nn.n")
 {
   return makebool(GETUINT(t0) > GETUINT(t1));
 }
 
-static value make_tm(value t, struct tm *(*convert)(const time_t *time))
+static value make_tm(value t, struct tm *(*convert)(const time_t *time),
+                     const struct primitive_ext *op)
 {
-  time_t timeval = GETUINT(t);
+  if (!integerp(t))
+    primitive_runtime_error(error_bad_type, op, 1, t);
+
+  time_t timeval = uintval(t);
 
   struct tm *tm = convert(&timeval);
   struct vector *vtm = alloc_vector(time_fields);
@@ -193,7 +199,7 @@ TYPEDOP(gmtime, 0,
 	OP_LEAF | OP_NOESCAPE | OP_CONST, "n.v")
 {
 
-  return make_tm(t, gmtime);
+  return make_tm(t, gmtime, &op_gmtime);
 }
 
 TYPEDOP(localtime, 0,
@@ -203,7 +209,7 @@ TYPEDOP(localtime, 0,
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
 
-  return make_tm(t, localtime);
+  return make_tm(t, localtime, &op_localtime);
 }
 
 static void get_tm_struct(struct tm *tm, struct vector *v)
@@ -283,7 +289,7 @@ TYPEDOP(with_output, 0, "`oport `f -> `x. Evaluates `f() with output"
         "If `oport is not a port, just evaluates `f().\n"
         "Output is restored when done. Returns the result of `f().",
         2, (value out, value code),
-        0, "xf.x")
+        OP_APPLY, "xf.x")
 {
   struct oport *newout = mudout, *newerr = muderr;
 
@@ -326,10 +332,11 @@ UNSAFETOP(with_output_file, 0,
   {
     GCPRO2(code, oport);
     oport = make_file_oport(f);
-  }
 
-  if (!istrue(unhandled_only))
-    add_call_trace(oport, 0);
+    if (!istrue(unhandled_only))
+      add_call_trace(oport, 0);
+    UNGCPRO();
+  }
 
   struct oport *oout = mudout, *oerr = muderr;
   GCPRO3(oout, oerr, oport);
@@ -386,11 +393,11 @@ static void pformat(struct oport *p, struct string *str,
 
       if (percent == NULL)
         {
-          pswrite(p, str, spos, slen - spos);
+          pswrite_substring(p, str, spos, slen - spos);
           break;
         }
 
-      pswrite(p, str, spos, percent - str->str - spos);
+      pswrite_substring(p, str, spos, percent - str->str - spos);
 
       const char *s = percent + 1, *strend = str->str + slen;
 
@@ -400,7 +407,7 @@ static void pformat(struct oport *p, struct string *str,
       unsigned base, predigits;
       const char *prefix;
 
-      prt_level print_level;
+      enum prt_level print_level;
 
       /* look for flags */
       for (;; ++s)
@@ -537,22 +544,25 @@ static void pformat(struct oport *p, struct string *str,
             if (integerp(v))
               {
                 long l = intval(v);
-                sb_setminsize(sb, INTSTRLEN);
-
                 if (base != 10)
                   {
                     space = plus = false;
                     l &= MAX_TAGGED_INT * 2 + 1;
                   }
-                istr = int2str(sb->buf, base, l, true);
+
+                sb_setminsize(sb, INTSTRSIZE);
+                sb_setlen(sb, INTSTRSIZE);
+                istr = int2str(sb_mutable_str(sb), base, l, true);
               }
 #ifdef USE_GMP
             else if (TYPE(v, type_bigint))
               {
                 struct bigint *bi = v;
                 check_bigint(bi);
-                sb_setminsize(sb, mpz_sizeinbase(bi->mpz, base) + 2);
-                mpz_get_str(sb->buf, base, bi->mpz);
+                size_t size = mpz_sizeinbase(bi->mpz, base) + 2;
+                sb_setminsize(sb, size);
+                sb_setlen(sb, size - 1);
+                mpz_get_str(sb_mutable_str(sb), base, bi->mpz);
                 istr = sb_str(sb);
               }
 #endif
@@ -612,7 +622,7 @@ static void pformat(struct oport *p, struct string *str,
         case 'w':
         case 'W':
           {
-            print_level = hash ? prt_examine : prt_print;
+            print_level = hash ? prt_examine : prt_write;
           do_string:
             if (i >= nargs) runtime_error(error_wrong_parameters);
             sb_empty(sb);
@@ -922,7 +932,7 @@ TYPEDOP(pprint, 0, "`oport `s -> . Print `s to output port `oport."
 
   if (p == NULL)
     undefined();
-  pswrite(p, s, 0, string_len(s));
+  pswrite(p, s);
   undefined();
 }
 
@@ -945,7 +955,7 @@ TYPEDOP(pprint_substring, 0,
     start += string_len(s);
   if (start < 0 || length < 0 || start + length > string_len(s))
     runtime_error(error_bad_index);
-  pswrite(p, s, start, length);
+  pswrite_substring(p, s, start, length);
   undefined();
 }
 

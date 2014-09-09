@@ -55,10 +55,7 @@
 #include <string.h>
 
 static ulong op_count;
-static FILE *ops, *binops;
 static struct string *system_module;
-
-#define MAXNAME 32
 
 void system_define(const char *name, value val)
 /* Modifies: environment
@@ -67,6 +64,15 @@ void system_define(const char *name, value val)
      as a 'define' of the system module.
 */
 {
+  /* Technically this is not required, but you should think hard about whether
+     adding a mutable or writable global is the right thing to do. */
+  assert(readonlyp(val));
+  if (!immutablep(val))
+    {
+      check_immutable(val);
+      assert(immutablep(val));
+    }
+
   GCPRO1(val);
   ulong aindex = global_lookup(name);
   UNGCPRO();
@@ -88,10 +94,9 @@ void system_write(const char *name, value val)
   ulong aindex = global_lookup(name);
   UNGCPRO();
 
-  assert(!GCONSTANT(aindex));
-
+  if (!module_vset(aindex, var_system_write, NULL))
+    abort();
   GVAR(aindex) = val;
-  module_vset(aindex, var_system_write, NULL);
 }
 
 struct vector *define_string_vector(const char *name, const char *const *vec,
@@ -104,9 +109,8 @@ struct vector *define_string_vector(const char *name, const char *const *vec,
   struct vector *v = alloc_vector(count);
 
   GCPRO1(v);
-
   for (int n = 0; n < count; ++n)
-    v->data[n] = make_readonly(alloc_string(vec[n]));
+    SET_VECTOR(v, n, make_readonly(alloc_string(vec[n])));
   UNGCPRO();
   make_readonly(v);
   if (name != NULL)
@@ -138,7 +142,7 @@ void define_int_vector(const char *name, const int *vec, int count)
 
 static void validate_typing(const struct primitive_ext *op)
 {
-  static const char allowed[] = "fnsvluktryxo123456789SdDbB";
+  static const char allowed[] = "fnzZsvluktryxo123456789SdDbB";
 
   if (op->type == NULL)
     return;
@@ -171,6 +175,7 @@ static void validate_typing(const struct primitive_ext *op)
           else if (*s == '*')
             {
               tassert(s > this && s[1] == '.' && !saw_period);
+              tassert(s[-1] != ']'); /* not supported by recurse_typing */
               continue;
             }
           else
@@ -205,32 +210,7 @@ void runtime_define(const struct primitive_ext *op)
 
   validate_typing(op);
 
-  if (binops)
-    {
-      char bname[MAXNAME];
-      bname[MAXNAME - 1] = '\0';
-      strncpy(bname, op->name, MAXNAME - 1);
-      fwrite(bname, MAXNAME, 1, binops);
-    }
-
-  struct primitive *prim;
-  if (op->seclevel > 0)
-    {
-      prim = alloc_secure(op_count++, op);
-      if (ops) fprintf(ops, "%-20s %s SECURITY %d\n", op->name, op->help,
-                       op->seclevel);
-    }
-  else
-    {
-      prim = alloc_primitive(op_count++, op);
-
-      if (op->nargs < 0)	/* Varargs */
-        {
-          prim->o.type = type_varargs;
-          assert(~op->flags & OP_NOALLOC);
-        }
-      if (ops) fprintf(ops, "%-20s %s\n", op->name, op->help);
-    }
+  struct primitive *prim = allocate_primitive(op);
 
   if (primitives.used == primitives.size)
     {
@@ -364,13 +344,21 @@ static inline void check_segv(int sig, reg_context_t *scp)
 {
   const ubyte *eip = (const ubyte *)GETREG(scp, eip, EIP);
 
+  CASSERT_EXPR(offsetof (struct obj, size) == 0);
+
   if ((eip[0] == 0x80           /* cmpb $imm,object_type(reg) */
        && (eip[1] & 0xf8) == 0x78
        && eip[2] == 5)          /* offsetof(struct obj, type) */
       || (eip[0] == 0x0f        /* movzbl object_type(%ecx),%eax */
           && eip[1] == 0xb6
           && (eip[2] & 0xc0) == 0x40
-          && eip[3] == 5))      /* offsetof(struct obj, type) */
+          && eip[3] == 5)       /* offsetof(struct obj, type) */
+      || (eip[0] == 0x8b        /* mov (reg0),reg1 for size */
+          && (eip[1] & 0xf8) == 0)
+      || (eip[0] == 0x8b        /* mov car/cdr(reg0),reg1 */
+          && (eip[1] & 0xf8) == 0x40
+          && (eip[2] == offsetof(struct list, car)
+              || eip[2] == offsetof(struct list, cdr))))
     {
       /* mudlle code */
       if (eip >= gcblock && eip < gcblock + gcblocksize)
@@ -572,8 +560,6 @@ struct string *const static_empty_string
 
 void runtime_init(void)
 {
-  ops = fopen("mudlle-functions", "w+");
-  binops = fopen("mudlle-primitives", "w+");
   op_count = 0;
   system_module = alloc_string("system");
   staticpro(&system_module);
@@ -662,12 +648,7 @@ void runtime_init(void)
   pattern_init();
   mudlle_consts_init();
   xml_init();
-#if 0
-#endif
   module_set("system", module_protected, 0);
 
   sort_primitives();
-
-  if (ops) fclose(ops);
-  if (binops) fclose(binops);
 }

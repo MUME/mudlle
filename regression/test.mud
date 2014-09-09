@@ -22,8 +22,6 @@ eval("id = fn (x) x");
 
 regresseval = fn (name, x, expected)
   [
-    | val |
-
     resvar1 = 44;
     resvar2 = 445385798 . 23;
     resvar3 = "fufweoin";

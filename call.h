@@ -64,7 +64,16 @@
 #define PRIMARGS4     CONCATCOMMA(4, __PRIMARG)
 #define PRIMARGS5     CONCATCOMMA(5, __PRIMARG)
 
-extern ulong mudlle_call_count;
+extern const char *forbid_mudlle_calls;
+
+void fail_allow_mudlle_call(void);
+
+static inline void check_allow_mudlle_call(void)
+{
+  if (forbid_mudlle_calls == NULL)
+    return;
+  fail_allow_mudlle_call();
+}
 
 /* Effects: Calls c with listed arguments
    Returns: c's result

@@ -43,9 +43,10 @@ struct oport_stat {
 struct oport_methods
 {
   void (*close)(struct oport *p);
-  void (*putch)(struct oport *p, int c, size_t n);
+  void (*putnc)(struct oport *p, int c, size_t n);
   void (*write)(struct oport *p, const char *data, size_t nchars);
-  void (*swrite)(struct oport *p, struct string *s, size_t from, size_t nchars);
+  void (*swrite)(struct oport *p, struct string *s, size_t from,
+                 size_t nchars);
   void (*flush)(struct oport *p);
   void (*stat)(struct oport *p, struct oport_stat *buf);
 };
@@ -134,7 +135,7 @@ static inline void opclose(struct oport *op)
 static inline void pputnc(int c, size_t n, struct oport *op)
 {
   const struct oport_methods *m = oport_methods(op);
-  if (m) m->putch(op, c, n);
+  if (m) m->putnc(op, c, n);
 }
 
 static inline void pputc(int c, struct oport *op)
@@ -159,11 +160,16 @@ static inline void opstat(struct oport *op, struct oport_stat *buf)
   if (m) m->stat(op, buf);
 }
 
-static inline void pswrite(struct oport *op, struct string *s,
-                           size_t from, size_t nchars)
+static inline void pswrite_substring(struct oport *op, struct string *s,
+                                     size_t from, size_t nchars)
 {
   const struct oport_methods *m = oport_methods(op);
   if (m) m->swrite(op, s, from, nchars);
+}
+
+static inline void pswrite(struct oport *op, struct string *s)
+{
+  pswrite_substring(op, s, 0, string_len(s));
 }
 
 static inline void pflush(struct oport *op)
@@ -186,13 +192,13 @@ bool is_string_port(struct oport *oport);
 
 /* integers are 31 bits long, in base 2 this makes 31 characters +
    sign + null byte + 1 for luck */
-#define INTSTRLEN 34
+#define INTSTRSIZE 34
 
 char *int2str(char *str, int base, ulong n, bool is_signed);
-/* Requires: base be 2, 8, 10 or 16. str be at least INTSTRLEN characters long.
+/* Requires: base in [2, 8, 10, 16]; str be have at least INTSTRSIZE characters
    Effects: Prints the ASCII representation of n in base base to the
      string str.
-     If signed is true, n is actually a signed long
+     If is_signed is true, n is actually a signed long
    Returns: A pointer to the start of the result.
 */
 char *int2str_wide(char *str, ulong n, bool is_signed);

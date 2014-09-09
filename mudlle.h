@@ -48,7 +48,7 @@
 #else
 typedef unsigned long mpz_t;
 typedef char mp_limb_t;
-#define mpz_init_set_str(m, s, n) 0
+#define mpz_init_set_str(m, s, n) ((m) = 0)
 #define mpz_cmp(b1, b2) 1
 #endif
 

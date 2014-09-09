@@ -173,7 +173,7 @@ TYPEDOP(abs, 0, "`n1 -> `n2. `n2 = |`n1|", 1, (value v),
 {
   ISINT(v);
   if ((long)v < 0) v = makeint(-intval(v));
-  return (v);
+  return v;
 }
 
 EXT_TYPEDOP(bitor, "|", "`n1 `n2 -> `n. `n = `n1 | `n2", 2,
@@ -182,7 +182,7 @@ EXT_TYPEDOP(bitor, "|", "`n1 `n2 -> `n. `n = `n1 | `n2", 2,
             "nn.n")
 {
   check_integers(v1, v2, &op_bitor);
-  return ((value)((long)v1 | (long)v2));
+  return (value)((long)v1 | (long)v2);
 }
 
 TYPEDOP(bitxor, "^", "`n1 `n2 -> `n. `n = `n1 ^ `n2", 2, (value v1, value v2),
@@ -298,4 +298,5 @@ void arith_init(void)
 
   system_define("MAXINT", makeint(MAX_TAGGED_INT));
   system_define("MININT", makeint(MIN_TAGGED_INT));
+  system_define("INTBITS", makeint(TAGGED_INT_BITS));
 }

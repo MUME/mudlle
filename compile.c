@@ -28,6 +28,7 @@
 #include "context.h"
 #include "env.h"
 #include "global.h"
+#include "lexer.h"
 #include "mcompile.h"
 #include "module.h"
 #include "mparser.h"
@@ -39,8 +40,25 @@
 #include "runtime/bigint.h"
 
 
+static ulong g_get_static, g_symbol_set, g_symbol_get;
+static ulong g_make_variable_ref, g_make_symbol_ref;
+
 static ulong builtin_functions[last_builtin];
-static ubyte builtin_ops[last_builtin];
+static const ubyte builtin_ops[last_builtin] = {
+  [b_add]      = op_builtin_add,
+  [b_bitand]   = op_builtin_bitand,
+  [b_bitor]    = op_builtin_bitor,
+  [b_eq]       = op_builtin_eq,
+  [b_ge]       = op_builtin_ge,
+  [b_gt]       = op_builtin_gt,
+  [b_le]       = op_builtin_le,
+  [b_lt]       = op_builtin_lt,
+  [b_ne]       = op_builtin_neq,
+  [b_not]      = op_builtin_not,
+  [b_ref]      = op_builtin_ref,
+  [b_set]      = op_builtin_set,
+  [b_subtract] = op_builtin_sub,
+};
 component component_undefined, component_true, component_false;
 
 static struct string *last_filename;
@@ -62,24 +80,21 @@ struct string *make_filename(const char *fname)
 
 value make_constant(constant c);
 
-static value make_list(cstlist csts, int has_tail)
+static value make_list(cstlist csts)
 {
-  struct list *l;
+  if (csts == NULL)
+    return NULL;
 
-  if (has_tail && csts != NULL)
-    {
-      l = csts->cst ? make_constant(csts->cst) : NULL;
-      csts = csts->next;
-    }
-  else
-    l = NULL;
+  /* the first entry has the list tail */
+  struct list *l = csts->cst ? make_constant(csts->cst) : NULL;
+  csts = csts->next;
 
   GCPRO1(l);
   /* Remember that csts is in reverse order ... */
   while (csts)
     {
       value tmp = make_constant(csts->cst);
-
+      assert(immutablep(tmp));
       l = alloc_list(tmp, l);
       l->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
       csts = csts->next;
@@ -105,16 +120,19 @@ static value make_array(cstlist csts)
 
   for (cstlist scan = csts; scan; scan = scan->next) size++;
 
-  /* This intermediate step is necessary as v is IMMUTABLE
-     (so must be allocated after its contents) */
-  struct list *l = make_list(csts, 0);
-
-  GCPRO1(l);
   struct vector *v = alloc_vector(size);
-  v->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
+  GCPRO1(v);
+  for (cstlist scan = csts; scan; scan = scan->next)
+    {
+      value val = make_constant(scan->cst);
+      assert(immutablep(val));
+      v->data[--size] = val;
+    }
   UNGCPRO();
 
-  for (int i = 0; i < size; i++, l = l->cdr) v->data[i] = l->car;
+  assert(size == 0);
+
+  v->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
 
   return v;
 }
@@ -165,7 +183,7 @@ value make_constant(constant c)
       cst = (value)alloc_string_length(c->u.string.str, c->u.string.len);
       cst->flags |= OBJ_READONLY | OBJ_IMMUTABLE;
       return cst;
-    case cst_list: return make_list(c->u.constants, 1);
+    case cst_list: return make_list(c->u.constants);
     case cst_array: return make_array(c->u.constants);
     case cst_int: return makeint(c->u.integer);
     case cst_float: return (value)alloc_mudlle_float(c->u.mudlle_float);
@@ -179,7 +197,7 @@ value make_constant(constant c)
 
 typedef void (*gencode)(void *data, fncode fn);
 
-static struct icode *generate_function(function f, int toplevel, fncode fn);
+static struct icode *generate_function(function f, bool toplevel, fncode fn);
 static void generate_component(component comp, fncode fn);
 static void generate_condition(component condition,
 			       label slab, gencode scode, void *sdata,
@@ -370,7 +388,20 @@ static void generate_block(block b, fncode fn)
 {
   clist cc = b->sequence;
 
-  env_block_push(b->locals);
+  env_block_push(b->locals, b->statics);
+
+  if (b->statics)
+    for (vlist vl = b->locals; vl; vl = vl->next)
+      {
+        ulong offset;
+        bool is_static;
+        variable_class vclass = env_lookup(vl->var, &offset,
+                                           false, true, &is_static);
+        assert(is_static && vclass == local_var);
+        ins_constant(alloc_string(vl->var), fn);
+        mexecute(g_get_static, NULL, 1, fn);
+        ins1(op_assign + vclass, offset, fn);
+      }
 
   /* Generate code for sequence */
   for (; cc; cc = cc->next)
@@ -399,11 +430,13 @@ static void generate_execute(component acall, int count, fncode fn)
   if (acall->vclass == c_recall)
     {
       ulong offset;
+      bool is_static;
       variable_class vclass = env_lookup(acall->u.recall, &offset,
-                                         true, false);
+                                         true, false, &is_static);
 
       if (vclass == global_var)
 	{
+          assert(!is_static);
 	  mexecute(offset, acall->u.recall, count, fn);
 	  return;
 	}
@@ -423,8 +456,9 @@ static void generate_component(component comp, fncode fn)
     case c_assign:
       {
 	ulong offset;
+        bool is_static;
 	variable_class vclass = env_lookup(comp->u.assign.symbol, &offset,
-                                           false, true);
+                                           false, true, &is_static);
 	component val = comp->u.assign.value;
 
 	if (val->vclass == c_closure)
@@ -440,11 +474,20 @@ static void generate_component(component comp, fncode fn)
 		val->u.closure->varname = varname;
 	      }
 	  }
+
+        if (is_static)
+          {
+            ins1(op_recall + vclass, offset, fn);
+            generate_component(comp->u.assign.value, fn);
+            mexecute(g_symbol_set, NULL, 2, fn);
+            break;
+          }
+
 	generate_component(comp->u.assign.value, fn);
 
 	set_lineno(comp->lineno, fn);
 
-	if (vclass == global_var)
+        if (vclass == global_var)
 	  massign(offset, comp->u.assign.symbol, fn);
 	else
 	  ins1(op_assign + vclass, offset, fn);
@@ -458,9 +501,18 @@ static void generate_component(component comp, fncode fn)
       {
         bool is_vref = comp->vclass == c_vref;
 	ulong offset;
+        bool is_static;
 	variable_class vclass = env_lookup(comp->u.recall, &offset,
-                                           true, is_vref);
+                                           true, is_vref, &is_static);
 
+        if (is_static)
+          {
+            assert(vclass != global_var);
+            ins1(op_recall + vclass, offset, fn);
+            ulong gidx = is_vref ? g_make_symbol_ref : g_symbol_get;
+            mexecute(gidx, NULL, 1, fn);
+            break;
+          }
 	if (vclass != global_var)
           ins1((is_vref ? op_vref : op_recall) + vclass, offset, fn);
         else if (is_vref)
@@ -472,8 +524,7 @@ static void generate_component(component comp, fncode fn)
         else
           mrecall(offset, comp->u.recall, fn);
         if (is_vref)
-          mexecute(global_lookup("make_variable_ref"),
-                   "make_variable_ref", 1, fn);
+          mexecute(g_make_variable_ref, "make_variable_ref", 1, fn);
 	break;
       }
     case c_constant:
@@ -585,7 +636,7 @@ static void generate_component(component comp, fncode fn)
 	  }
 	}
       break;
-    default: assert(0);
+    default: abort();
     }
 }
 
@@ -629,9 +680,10 @@ static void generate_typeset_check(unsigned typeset, unsigned arg,
   ins1(op_typecheck + t, arg, newfn);
 }
 
-static struct icode *generate_function(function f, int toplevel, fncode fn)
+static struct icode *generate_function(function f, bool toplevel, fncode fn)
 {
-  /* Make help string (must be allocated before code (immutability restriction)) */
+  /* make help string; must be allocated before code (immutability
+     restriction) */
   struct string *help = NULL;
   if (f->help.len)
     help = make_readonly(alloc_string_length(f->help.str, f->help.len));
@@ -732,10 +784,10 @@ struct closure *compile_code(mfile f, int seclev)
   env_reset();
   fncode top = new_fncode(true);
   env_push(NULL, top);		/* Environment must not be totally empty */
+  block body = new_toplevel_codeblock(fnmemory(top), f->statics, f->body);
   function func = new_function(fnmemory(top), TYPESET_ANY, sl, NULL,
-                               new_component(fnmemory(top), 0, c_block,
-                                             f->body),
-                               f->body->lineno,
+                               new_component(fnmemory(top), 0, c_block, body),
+                               body->lineno,
                                filename, nicename);
   func->varname = "top-level";
   struct icode *cc = generate_function(func, true, top);
@@ -791,6 +843,12 @@ bool interpret(value *result, int seclev, int reload)
 
 	  if (closure)
             {
+              if (debug_level >= 2)
+                {
+		  GCPRO1(closure);
+                  output_value(mudout, prt_examine, false, closure);
+                  UNGCPRO();
+                }
               struct call_info ci = {
                 .f      = closure,
                 .result = result
@@ -809,42 +867,38 @@ bool interpret(value *result, int seclev, int reload)
   return ok;
 }
 
-static block_t compile_block;
-
 void compile_init(void)
 {
+  static block_t compile_block;
   compile_block = new_block();
 
-  /* Note: These definitions actually depend on those in types.h and runtime.c */
-  component_undefined = new_component(compile_block, 0, c_constant,
-				      new_constant(compile_block, cst_int, 42));
-  component_true = new_component(compile_block, 0, c_constant,
-				 new_constant(compile_block, cst_int, true));
-  component_false = new_component(compile_block, 0, c_constant,
-				  new_constant(compile_block, cst_int, false));
+  /* Note: These definitions actually depend on those in types.h and
+     runtime.c */
+  component_undefined = new_component(
+    compile_block, 0, c_constant,
+    new_constant(compile_block, cst_int, 42));
+  component_true = new_component(
+    compile_block, 0, c_constant,
+    new_constant(compile_block, cst_int, true));
+  component_false = new_component(
+    compile_block, 0, c_constant,
+    new_constant(compile_block, cst_int, false));
 
-  builtin_ops[b_eq] = op_builtin_eq;
-  builtin_ops[b_ne] = op_builtin_neq;
-  builtin_ops[b_lt] = op_builtin_lt;
-  builtin_ops[b_le] = op_builtin_le;
-  builtin_ops[b_gt] = op_builtin_gt;
-  builtin_ops[b_ge] = op_builtin_ge;
-  builtin_ops[b_bitor] = op_builtin_bitor;
-  builtin_functions[b_bitxor] = global_lookup("^");
-  builtin_ops[b_bitand] = op_builtin_bitand;
-  builtin_functions[b_shift_left] = global_lookup("<<");
+  builtin_functions[b_bitnot]      = global_lookup("~");
+  builtin_functions[b_bitxor]      = global_lookup("^");
+  builtin_functions[b_cons]        = global_lookup("cons");
+  builtin_functions[b_divide]      = global_lookup("/");
+  builtin_functions[b_multiply]    = global_lookup("*");
+  builtin_functions[b_negate]      = global_lookup("negate");
+  builtin_functions[b_remainder]   = global_lookup("%");
+  builtin_functions[b_shift_left]  = global_lookup("<<");
   builtin_functions[b_shift_right] = global_lookup(">>");
-  builtin_ops[b_add] = op_builtin_add;
-  builtin_ops[b_subtract] = op_builtin_sub;
-  builtin_functions[b_multiply] = global_lookup("*");
-  builtin_functions[b_divide] = global_lookup("/");
-  builtin_functions[b_remainder] = global_lookup("%");
-  builtin_functions[b_negate] = global_lookup("negate");
-  builtin_ops[b_not] = op_builtin_not;
-  builtin_functions[b_bitnot] = global_lookup("~");
-  builtin_ops[b_ref] = op_builtin_ref;
-  builtin_ops[b_set] = op_builtin_set;
-  builtin_functions[b_cons] = global_lookup("cons");
+
+  g_get_static = global_lookup("get_static");
+  g_symbol_get = global_lookup("symbol_get");
+  g_symbol_set = global_lookup("symbol_set!");
+  g_make_variable_ref = global_lookup("make_variable_ref");
+  g_make_symbol_ref = global_lookup("make_symbol_ref");
 
   staticpro(&last_filename);
   last_filename = static_empty_string;

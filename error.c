@@ -82,6 +82,20 @@ static void display_code_location(struct code *code, int lineno)
   UNGCPRO();
 }
 
+static void output_arg(value arg)
+{
+  output_value(muderr, prt_write, false, arg);
+}
+
+static int get_icode_line(struct call_stack *frame)
+{
+  struct icode *code = frame->u.mudlle.code;
+  int offset = (frame->u.mudlle.offset - 1 -
+                ((instruction *)(&code->constants[code->nb_constants]) -
+                 (instruction *)code));
+  return get_code_line_number(code, offset);
+}
+
 static void print_bytecode_frame(struct call_stack *frame, bool onstack)
 {
   struct icode *fcode = frame->u.mudlle.code;
@@ -113,16 +127,12 @@ static void print_bytecode_frame(struct call_stack *frame, bool onstack)
 	    }
 
 	  if (i > 0) pputs(", ", muderr);
-	  output_value(muderr, prt_print, false, v);
+	  output_arg(v);
 	}
 
       pputc(')', muderr);
 
-      struct icode *code = frame->u.mudlle.code;
-      int offset = (frame->u.mudlle.offset - 1 -
-                    ((instruction *)(&code->constants[code->nb_constants]) -
-                     (instruction *)code));
-      int lineno = get_code_line_number(fcode, offset);
+      int lineno = get_icode_line(frame);
 
       display_code_location(&fcode->code, lineno);
       pputc('\n', muderr);
@@ -202,25 +212,25 @@ static void print_c_frame(const struct call_stack *frame, bool onstack)
         {
         case 1:
           pputs(strcmp("negate", info.name) == 0 ? "-" : info.name, muderr);
-          output_value(muderr, prt_print, false, getarg(frame, &info, 0));
+          output_arg(getarg(frame, &info, 0));
           goto done;
         case 3:
           is_set = strcmp(info.name, "set!") == 0;
           assert(is_set);
         case 2:
           is_ref = strcmp(info.name, "ref") == 0;
-          output_value(muderr, prt_print, false, getarg(frame, &info, 0));
+          output_arg(getarg(frame, &info, 0));
           if (is_ref || is_set)
             pputc('[', muderr);
           else
             pprintf(muderr, " %s ", info.name);
-          output_value(muderr, prt_print, false, getarg(frame, &info, 1));
+          output_arg(getarg(frame, &info, 1));
           if (is_ref || is_set)
             pputc(']', muderr);
           if (is_set)
             {
               pputs(" = ", muderr);
-              output_value(muderr, prt_print, false, getarg(frame, &info, 2));
+              output_arg(getarg(frame, &info, 2));
             }
           goto done;
         default:
@@ -233,7 +243,7 @@ static void print_c_frame(const struct call_stack *frame, bool onstack)
   for (int i = 0; i < info.actual_args; ++i)
     {
       pputs(prefix, muderr);
-      output_value(muderr, prt_print, false, getarg(frame, &info, i));
+      output_arg(getarg(frame, &info, i));
       prefix = ", ";
     }
   pputc(')', muderr);
@@ -292,7 +302,9 @@ static long find_line(struct mcode *mcode, ulong ofs)
     }
 }
 
-static void print_mcode(struct mcode *base, ulong ofs)
+/* nargs < 0 means *args points to an argument vector */
+static void print_mcode(struct mcode *base, ulong ofs, value *args, int nargs,
+                        void *data)
 {
   long line = find_line(base, ofs);
 
@@ -302,9 +314,23 @@ static void print_mcode(struct mcode *base, ulong ofs)
   else
     pputs("<fn>", muderr);
 
-  pputs("(<compiled>)", muderr);
+  bool vararg = nargs < 0;
+  if (vararg)
+    nargs = vector_len((struct vector *)*args);
+
+  pputc('(', muderr);
+  const char *prefix = "";
+  for (int n = 0; n < nargs; ++n)
+    {
+      pputs(prefix, muderr);
+      value arg = vararg ? ((struct vector *)*args)->data[n] : args[n];
+      output_arg(arg);
+      prefix = ", ";
+    }
+
+  pputc(')', muderr);
   display_code_location(&base->code, line);
-  pputc('\n', muderr);
+  pputs(" [c]\n", muderr);
   UNGCPRO();
 }
 
@@ -366,9 +392,14 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 #endif /* sparc */
 
 #if defined(i386) && !defined(NOCOMPILER)
-static int find_mcode(ulong pcadr, void (*func)(struct mcode *, ulong ofs),
+static int find_mcode(ulong pcadr,
+                      void (*func)(struct mcode *, ulong ofs, value *args,
+                                   int nargs, void *data),
                       const struct primitive_ext *last_primop,
-                      void (*primfunc)(const struct primitive_ext *))
+                      void (*primfunc)(const struct primitive_ext *),
+                      ulong *bp,
+                      int nargs,
+                      void *data)
 {
   ulong *pc = (ulong *)(pcadr & ~(CODE_ALIGNMENT - 1));
 
@@ -417,36 +448,42 @@ static int find_mcode(ulong pcadr, void (*func)(struct mcode *, ulong ofs),
             primfunc(prim);
         }
     }
-  func(mcode, pcadr - (ulong)pc);
+
+  value *args = (value *)bp + 2;
+  if (nargs >= 0)
+    ;
+  else if (mcode->code.arg_types == NULL)
+    {
+      /* vararg argument vector is the first spilled local */
+      args = (value *)bp - 1;
+      assert(TYPE((struct vector *)*args, type_vector));
+    }
+  else
+    nargs = vector_len(mcode->code.arg_types);
+
+  func(mcode, pcadr - (ulong)pc, args, nargs, data);
 
   return true;
 }
 
 static struct ccontext *iterate_cc_frame(
   struct ccontext *cc,
-  void (*func)(struct mcode *, ulong),
+  void (*func)(struct mcode *mcode, ulong ofs, value *args, int nargs,
+               void *data),
   const struct primitive_ext *last_primop,
-  void (*primfunc)(const struct primitive_ext *))
+  void (*primfunc)(const struct primitive_ext *),
+  int nargs,
+  void *data)
 {
-  ulong *sp, *bp;
-  int count = 0;
-
   assert(cc->frame_start);
 
-  sp = cc->frame_end_sp;
-  bp = cc->frame_end_bp;
-  if (bp == 0)
-    {
-      /* sp points to the stack position where the previous ebp was
-         pushed by the push %ebp/mov %esp,%ebp preamble */
-      bp = (ulong *)*sp;
-      sp += 2;
-    }
-  assert(bp >= sp && cc->frame_start > sp && bp != cc->frame_start);
+  ulong *sp, *bp;
+  ccontext_frame(cc, &bp, &sp);
 
   /* The return address is at sp[-1] */
-  find_mcode(sp[-1], func, last_primop, primfunc);
+  find_mcode(sp[-1], func, last_primop, primfunc, bp, nargs, data);
 
+  int count = 0;
   while (bp < cc->frame_start)
     {
       if (count++ == BEFORE_SKIP_FRAMES)
@@ -475,27 +512,33 @@ static struct ccontext *iterate_cc_frame(
 	    }
 	}
 
-      /* bp[-1] is caller's closure
+      /* bp[<=-1] are locals
+       * bp[-1] is the vararg vector (if applicable)
        * bp[0] is previous bp
        * bp[1] is return address
+       * bp[>=2] are arguments
        * sp[0] -> bp[-2] is mudlle values
        */
       /* Not using closure because plan on removing it in some cases */
-      find_mcode(bp[1], func, NULL, NULL);
+      find_mcode(bp[1], func, NULL, NULL, (ulong *)(bp[0]), -1, data);
       assert(bp[0] > (ulong)bp);
       bp = (ulong *)bp[0];
     }
 
   assert(bp == cc->frame_start);
 
+  /* see START_INVOKE: ebx, esi, edi, and the non-union field of
+     struct call_stack are pushed above this frame's ccontext */
   return (struct ccontext *)((char *)bp - (12 + sizeof *cc + 8));
 }
 
 static struct ccontext *print_cc_frame(
   struct ccontext *cc,
-  const struct primitive_ext *last_primop)
+  const struct primitive_ext *last_primop,
+  int nargs)
 {
-  return iterate_cc_frame(cc, print_mcode, last_primop, print_prim);
+  return iterate_cc_frame(cc, print_mcode, last_primop, print_prim, nargs,
+                          NULL);
 }
 #endif /* i386 && !NOCOMPILER */
 
@@ -507,7 +550,8 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 }
 #endif
 
-static void print_call_trace(runtime_errors error, bool onstack)
+static void print_call_trace(runtime_errors error, bool onstack,
+                             int c_onstack_nargs)
 {
   struct catch_context *catch_ctxt = catch_context;
   int count = 0;
@@ -578,7 +622,7 @@ static void print_call_trace(runtime_errors error, bool onstack)
 #ifdef NOCOMPILER
 	  abort();
 #else
-	  cc = print_cc_frame(cc, last_primop);
+	  cc = print_cc_frame(cc, last_primop, c_onstack_nargs);
 	  break;
 #endif
 	}
@@ -587,81 +631,104 @@ static void print_call_trace(runtime_errors error, bool onstack)
 #endif
       /* Only the first frame can be on the stack */
       onstack = false;
+      c_onstack_nargs = -1;
     }
 }
 
-static long stack_depth_count;
-static struct vector *stack_trace_res;
-
 #ifndef NOCOMPILER
-static void count_stack_depth(struct mcode *mcode, ulong ofs)
+static void count_stack_depth(struct mcode *mcode, ulong ofs, value *args,
+                              int nargs, void *data)
 {
-  ++stack_depth_count;
+  ++*(int *)data;
 }
 
-static void get_cc_stack_trace(struct mcode *mcode, ulong ofs)
+struct get_cc_stack_trace_data {
+  struct vector *vec;
+  int idx;
+  bool lines;
+};
+
+static void get_cc_stack_trace(struct mcode *mcode, ulong ofs, value *args,
+                               int nargs, void *data)
 {
-  stack_trace_res->data[stack_depth_count++] = mcode;
+  struct get_cc_stack_trace_data *sdata = data;
+  value v = mcode;
+  if (sdata->lines)
+    v = alloc_list(v, makeint(find_line(mcode, ofs)));
+  sdata->vec->data[sdata->idx++] = v;
 }
 #endif
 
-struct vector *get_mudlle_call_trace(void)
+struct vector *get_mudlle_call_trace(bool lines)
 {
 #ifndef NOCOMPILER
   struct ccontext *cc = &ccontext;
 #endif
 
-  stack_depth_count = 0;
+  int depth = 0;
 
   for (struct call_stack *scan = call_stack; scan; scan = scan->next)
 #ifndef NOCOMPILER
     if (scan->type == call_compiled)
-      cc = iterate_cc_frame(cc, count_stack_depth, NULL, NULL);
+      cc = iterate_cc_frame(cc, count_stack_depth, NULL, NULL, -1, &depth);
     else
 #endif
-      ++stack_depth_count;
+      ++depth;
 
-  stack_trace_res = alloc_vector(stack_depth_count);
+  struct get_cc_stack_trace_data sdata = {
+    .vec   = alloc_vector(depth),
+    .idx   = 0,
+    .lines = lines
+  };
 
-  GCPRO1(stack_trace_res);
+  GCPRO1(sdata.vec);
 
 #ifndef NOCOMPILER
   cc = &ccontext;
 #endif
 
-  stack_depth_count = 0;
   for (struct call_stack *scan = call_stack; scan; scan = scan->next)
     {
+      value v;
       switch (scan->type)
 	{
         case call_string:
-          SET_VECTOR(stack_trace_res, stack_depth_count,
-                     alloc_string(scan->u.c.u.name));
-          ++stack_depth_count;
-	  break;
+          v = alloc_string(scan->u.c.u.name);
+	  goto ok;
         case call_primop:
-          SET_VECTOR(stack_trace_res, stack_depth_count,
-                     alloc_string(scan->u.c.u.op->name));
-          ++stack_depth_count;
-	  break;
+          v = alloc_string(scan->u.c.u.op->name);
+	  goto ok;
 	case call_c:
-	  stack_trace_res->data[stack_depth_count++] = scan->u.c.u.prim;
-	  break;
+	  v = scan->u.c.u.prim;
+	  goto ok;
 	case call_bytecode:
-	  stack_trace_res->data[stack_depth_count++] = scan->u.mudlle.fn;
-	  break;
+          {
+            v = scan->u.mudlle.fn;
+            if (lines)
+              v = alloc_list(v, makeint(get_icode_line(scan)));
+            sdata.vec->data[sdata.idx++] = v;
+            continue;
+          }
 	case call_compiled:
 #ifdef NOCOMPILER
 	  abort();
 #else
-	  cc = iterate_cc_frame(cc, get_cc_stack_trace, NULL, NULL);
-	  break;
+	  cc = iterate_cc_frame(cc, get_cc_stack_trace, NULL, NULL, -1,
+                                &sdata);
+          continue;
 #endif
 	}
+      abort();
+    ok:
+      if (lines)
+        v = alloc_list(v, NULL);
+      sdata.vec->data[sdata.idx++] = v;
     }
   UNGCPRO();
 
-  return stack_trace_res;
+  assert(sdata.idx == depth);
+
+  return sdata.vec;
 }
 
 /* call f(e, data) for all error observers e (port or character), with
@@ -724,26 +791,29 @@ static void for_all_muderr(void (*f)(value e, void *data), void *data)
 struct basic_error_info {
   runtime_errors error;
   bool onstack;
-  const char *message;
+  int c_onstack_nargs;
+  const char *warning;
 };
 
 static void basic_error_print(value e, void *data)
 {
-  struct basic_error_info *info = data;
+  const struct basic_error_info *info = data;
 
-  if (info->message)
-    pprintf(muderr, "%s\n", info->message);
-  print_call_trace(info->error, info->onstack);
+  if (info->warning)
+    pprintf(muderr, "warning: %s\n", info->warning);
+  print_call_trace(info->error, info->onstack, info->c_onstack_nargs);
   if (TYPE(e, type_character))
     pputc('\n', muderr);
 }
 
-static void basic_error(runtime_errors error, bool onstack, const char *msg)
+static void basic_error(runtime_errors error, bool onstack,
+                        int c_onstack_nargs, const char *msg)
 {
   struct basic_error_info info = {
-    .error   = error,
-    .onstack = onstack,
-    .message = msg
+    .error           = error,
+    .onstack         = onstack,
+    .c_onstack_nargs = c_onstack_nargs,
+    .warning         = msg
   };
   for_all_muderr(basic_error_print, &info);
 }
@@ -753,7 +823,7 @@ void runtime_warning(const char *msg)
 #ifdef MUDLLE_INTERRUPT
   check_interrupt();
 #endif
-  basic_error(error_none, false, msg);
+  basic_error(error_none, false, -1, msg);
 }
 
 void runtime_error(runtime_errors error)
@@ -766,11 +836,17 @@ void runtime_error(runtime_errors error)
 #ifdef MUDLLE_INTERRUPT
   check_interrupt();
 #endif
-  basic_error(error, false, NULL);
+  basic_error(error, false, -1, NULL);
   mthrow(SIGNAL_ERROR, makeint(error));
 }
 
-void early_runtime_error(runtime_errors error)
+void compiled_early_runtime_error(runtime_errors error, int nargs)
+{
+  basic_error(error, true, nargs, NULL);
+  mthrow(SIGNAL_ERROR, makeint(error));
+}
+
+void interpreted_early_runtime_error(runtime_errors error)
 /* Effects: Runtime error 'error' has occured in a primitive operation.
      Dump the call_stack (plus the primitive operation call) to
      mudout & throw back to the exception handler with SIGNAL_ERROR
@@ -780,7 +856,7 @@ void early_runtime_error(runtime_errors error)
    Note: Never returns
 */
 {
-  basic_error(error, true, NULL);
+  basic_error(error, true, -1, NULL);
   mthrow(SIGNAL_ERROR, makeint(error));
 }
 

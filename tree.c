@@ -32,6 +32,11 @@
 
 #define GEP GLOBAL_ENV_PREFIX
 
+static block_t build_heap;
+
+static component build_exec(component f, int n, ...);
+static component build_recall(const char *var);
+
 const char *const builtin_op_names[] = {
   "sc_or", "sc_and", "eq", "ne", "lt", "le", "gt", "ge",
   "bitor", "bitxor", "bitand", "shift_left", "shift_right",
@@ -45,7 +50,7 @@ CASSERT_VLEN(builtin_op_names, very_last_builtin);
 
 mfile new_file(block_t heap, enum file_class vclass, const char *name,
 	       vlist imports, vlist defines, vlist reads, vlist writes,
-	       block body, int lineno)
+               vlist statics, block body, int lineno)
 {
   mfile newp = allocate(heap, sizeof *newp);
 
@@ -55,6 +60,7 @@ mfile new_file(block_t heap, enum file_class vclass, const char *name,
   newp->defines = defines;
   newp->reads = reads;
   newp->writes = writes;
+  newp->statics = statics;
   newp->body = body;
   newp->lineno = lineno;
 
@@ -111,12 +117,15 @@ block new_codeblock(block_t heap, vlist locals, clist sequence,
   newp->filename = filename;
   newp->nicename = nicename;
   newp->lineno = lineno;
+  newp->statics = false;
 
   return newp;
 }
 
 clist new_clist(block_t heap, component c, clist next)
 {
+  assert(c != NULL);
+
   clist newp = allocate(heap, sizeof *newp);
 
   newp->next = next;
@@ -174,9 +183,78 @@ constant new_constant(block_t heap, enum constant_class vclass, ...)
     case cst_string:
       newp->u.string = va_arg(args, str_and_len_t);
       break;
-    case cst_list: case cst_array: case cst_table:
-      newp->u.constants = va_arg(args, cstlist);
-      break;
+    case cst_list:
+      {
+        cstlist clhead = newp->u.constants = va_arg(args, cstlist);
+        cstlist *clp = &newp->u.constants;
+        while (*clp && ((*clp)->cst == NULL
+                        || (*clp)->cst->vclass != cst_expression))
+          clp = &(*clp)->next;
+        cstlist cltail = *clp;
+        if (cltail == NULL)
+          break;
+
+        if (clp == &newp->u.constants)
+          {
+            /* the first expression is the list tail */
+            newp = clhead->cst;
+            cltail = cltail->next;
+          }
+        else if (clp == &newp->u.constants->next)
+          {
+            /* the first expression is the last element before the tail */
+            if (newp->u.constants->cst)
+              newp = newp->u.constants->cst;
+            else
+              newp->u.constants = NULL;
+          }
+        else
+          {
+            /* the first expression is here, so truncate the tail */
+            *clp = NULL;
+          }
+
+        build_heap = heap;
+
+        component l = new_component(heap, -1, c_constant, newp);
+        for (; cltail; cltail = cltail->next)
+          {
+            component c = new_component(heap, -1, c_constant, cltail->cst);
+            l = build_exec(build_recall(GEP "pcons"), 2, c, l);
+          }
+        newp = allocate(heap, sizeof *newp);
+        newp->vclass = cst_expression;
+        newp->u.expression = l;
+        break;
+      }
+    case cst_array: case cst_table:
+      {
+        newp->u.constants = va_arg(args, cstlist);
+        bool dynamic = false;
+        for (cstlist cl = newp->u.constants; cl; cl = cl->next)
+          if (cl->cst->vclass == cst_expression)
+            {
+              dynamic = true;
+              break;
+            }
+        if (!dynamic)
+          break;
+
+        build_heap = heap;
+
+        clist cargs = NULL;
+        for (cstlist cl = newp->u.constants; cl; cl = cl->next)
+          cargs = new_clist(heap, new_component(heap, -1, c_constant,
+                                                cl->cst),
+                            cargs);
+        cargs = new_clist(heap, build_recall(GEP "sequence"), cargs);
+        component c = new_component(heap, 0, c_execute, cargs);
+        if (vclass == cst_table)
+          c = build_exec(build_recall(GEP "vector_to_ptable"), 1, c);
+        newp->vclass = cst_expression;
+        newp->u.expression = c;
+        break;
+      }
     case cst_float:
       newp->u.mudlle_float = va_arg(args, double);
       break;
@@ -184,9 +262,27 @@ constant new_constant(block_t heap, enum constant_class vclass, ...)
       newp->u.bigint_str = va_arg(args, const char *);
       break;
     case cst_symbol:
-      newp->u.constpair = va_arg(args, cstpair);
+      {
+        newp->u.constpair = va_arg(args, cstpair);
+        if (newp->u.constpair->cst1->vclass != cst_expression
+            && newp->u.constpair->cst2->vclass != cst_expression)
+          break;
+
+        build_heap = heap;
+
+        component c = build_exec(build_recall(GEP "make_psymbol"), 2,
+                                 new_component(heap, -1, c_constant,
+                                               newp->u.constpair->cst1),
+                                 new_component(heap, -1, c_constant,
+                                               newp->u.constpair->cst2));
+        newp->vclass = cst_expression;
+        newp->u.expression = c;
+        break;
+      }
+    case cst_expression:
+      newp->u.expression = va_arg(args, component);
       break;
-    default: assert(0);
+    default: abort();
     }
   va_end(args);
   return newp;
@@ -194,16 +290,17 @@ constant new_constant(block_t heap, enum constant_class vclass, ...)
 
 str_and_len_t *cstlist_find_symbol(cstlist list, str_and_len_t needle)
 {
-  while (list)
+  for (; list; list = list->next)
     {
       constant car = list->cst, str;
+      if (car->vclass == cst_expression)
+        continue;
       assert(car->vclass == cst_symbol);
       str = car->u.constpair->cst1;
       assert(str->vclass == cst_string);
       if (needle.len == str->u.string.len
           && mem8icmp(needle.str, str->u.string.str, needle.len) == 0)
 	return &str->u.string;
-      list = list->next;
     }
   return NULL;
 }
@@ -241,8 +338,14 @@ component new_component(block_t heap, int lineno,
       newp->u.recall = va_arg(args, const char *);
       break;
     case c_constant:
-      newp->u.cst = va_arg(args, constant);
-      break;
+      {
+        constant cst = va_arg(args, constant);
+        if (cst->vclass == cst_expression)
+          newp = cst->u.expression;
+        else
+          newp->u.cst = cst;
+        break;
+      }
     case c_closure:
       newp->u.closure = va_arg(args, function);
       break;
@@ -267,11 +370,11 @@ component new_component(block_t heap, int lineno,
   return newp;
 }
 
-pattern new_pattern_constant(block_t heap, constant c)
+pattern new_pattern_constant(block_t heap, constant c, int lineno)
 {
   pattern ap = allocate(heap, sizeof *ap);
   ap->vclass = pat_const;
-  ap->lineno = 0;
+  ap->lineno = lineno;
   ap->u.constval = c;
   return ap;
 }
@@ -307,7 +410,8 @@ pattern new_pattern_symbol(block_t heap, const char *sym, mtype type,
 pattern new_pattern_compound(block_t heap,
 			     enum pattern_class class,
 			     patternlist list,
-			     bool ellipsis)
+			     bool ellipsis,
+                             int lineno)
 {
   assert(class == pat_list || class == pat_array);
 
@@ -324,11 +428,12 @@ pattern new_pattern_compound(block_t heap,
   cl = reverse_cstlist(cl);
   return new_pattern_constant(
     heap,
-    new_constant(heap, class == pat_list ? cst_list : cst_array, cl));
+    new_constant(heap, class == pat_list ? cst_list : cst_array, cl),
+    lineno);
 
  not_const: ;
   pattern ap = allocate(heap, sizeof *ap);
-  ap->lineno = 0;
+  ap->lineno = lineno;
   ap->vclass = class;
   ap->u.l.patlist = list;
   ap->u.l.ellipsis = ellipsis;
@@ -486,20 +591,23 @@ static value mudlle_parse_component(component c)
 
 value mudlle_parse(block_t heap, mfile f)
 {
-  struct vector *file = alloc_vector(9);
+  struct vector *file = alloc_vector(parser_module_fields);
   GCPRO1(file);
 
   component cbody = new_component(heap, f->lineno, c_block, f->body);
 
-  SET_VECTOR(file, 0, makeint(f->vclass));
-  SET_VECTOR(file, 1, f->name ? alloc_string(f->name) : makebool(false));
-  SET_VECTOR(file, 2, mudlle_vlist(f->imports));
-  SET_VECTOR(file, 3, mudlle_vlist(f->defines));
-  SET_VECTOR(file, 4, mudlle_vlist(f->reads));
-  SET_VECTOR(file, 5, mudlle_vlist(f->writes));
-  SET_VECTOR(file, 6, mudlle_parse_component(cbody));
-  SET_VECTOR(file, 7, alloc_string(f->body->filename));
-  SET_VECTOR(file, 8, alloc_string(f->body->nicename));
+  SET_VECTOR(file, m_class,    makeint(f->vclass));
+  SET_VECTOR(file, m_name,     (f->name
+                                ? alloc_string(f->name)
+                                : makebool(false)));
+  SET_VECTOR(file, m_imports,  mudlle_vlist(f->imports));
+  SET_VECTOR(file, m_defines,  mudlle_vlist(f->defines));
+  SET_VECTOR(file, m_reads,    mudlle_vlist(f->reads));
+  SET_VECTOR(file, m_writes,   mudlle_vlist(f->writes));
+  SET_VECTOR(file, m_statics,  mudlle_vlist(f->statics));
+  SET_VECTOR(file, m_body,     mudlle_parse_component(cbody));
+  SET_VECTOR(file, m_filename, alloc_string(f->body->filename));
+  SET_VECTOR(file, m_nicename, alloc_string(f->body->nicename));
   UNGCPRO();
 
   return file;
@@ -508,20 +616,21 @@ value mudlle_parse(block_t heap, mfile f)
 #ifdef PRINT_CODE
 static void print_constant(FILE *f, constant c);
 
-static void print_list(FILE *f, cstlist l, int has_tail)
+static void print_list(FILE *f, cstlist head, constant tail)
 {
-  bool first = true;
-
-  while (l)
+  head = reverse_cstlist(head);
+  const char *prefix = "";
+  for (cstlist l = head; l; l = l->next)
     {
-      if (!first) fprintf(f, " ");
-      if (l->cst == NULL)
-        fprintf(f, "<0>");
-      else
-        print_constant(f, l->cst);
-      if (first) fprintf(f, " .");
-      first = false;
-      l = l->next;
+      fputs(prefix, f);
+      print_constant(f, l->cst);
+      prefix = " ";
+    }
+  head = reverse_cstlist(head);
+  if (tail)
+    {
+      fputs(" . ", f);
+      print_constant(f, tail);
     }
 }
 
@@ -539,6 +648,8 @@ static void print_vlist(FILE *f, vlist l)
     }
 }
 
+static void print_component(FILE *f, component c);
+
 static void print_constant(FILE *f, constant c)
 {
   switch (c->vclass)
@@ -554,19 +665,36 @@ static void print_constant(FILE *f, constant c)
       break;
     case cst_list:
       fprintf(f, "(");
-      print_list(f, c->u.constants, 1);
+      if (c->u.constants)
+        print_list(f, c->u.constants->next, c->u.constants->cst);
       fprintf(f, ")");
       break;
     case cst_array:
-      fprintf(f, "#(");
-      print_list(f, c->u.constants, 0);
+      fprintf(f, "[");
+      print_list(f, c->u.constants, NULL);
+      fprintf(f, "]");
+      break;
+    case cst_table:
+      fprintf(f, "{");
+      print_list(f, c->u.constants, NULL);
+      fprintf(f, "}");
+      break;
+    case cst_symbol:
+      fputs("<", f);
+      print_constant(f, c->u.constpair->cst1);
+      fputs("=", f);
+      print_constant(f, c->u.constpair->cst2);
+      fputs(">", f);
+      break;
+    case cst_expression:
+      fprintf(f, ",(");
+      print_component(f, c->u.expression);
       fprintf(f, ")");
       break;
-    default: assert(0);
+    default:
+      abort();
     }
 }
-
-static void print_component(FILE *f, component c);
 
 static void print_block(FILE *f, block c)
 {
@@ -651,7 +779,7 @@ static void print_component(FILE *f, component c)
       print_component(f, c->u.labeled.expression);
       fprintf(f, ")");
       break;
-    default: assert(0);
+    default: abort();
     }
 }
 
@@ -702,11 +830,6 @@ static char *heap_allocate_string(block_t heap, const char *s)
   return r;
 }
 
-static block_t build_heap;
-
-static int apc_symcount;
-static vlist apc_symbols;
-
 static clist build_clist(int n, ...)
 {
   va_list args;
@@ -749,6 +872,7 @@ static component build_string_component(const char *s)
 
 static component build_assign(int lineno, const char *var, component val)
 {
+  assert(var != NULL);
   return new_component(build_heap, lineno, c_assign, var, val);
 }
 
@@ -800,12 +924,22 @@ component new_binop_component(block_t heap, int lineno, enum builtin_op op,
   return new_component(heap, lineno, c_builtin, op, 2, e1, e2);
 }
 
+static component build_unop(enum builtin_op op, component e)
+{
+  return new_component(build_heap, 0, c_builtin, op, 1, e);
+}
+
 static component build_if(component cond, component ctrue, component cfalse)
 {
   return new_component(build_heap, 0, c_builtin,
                        cfalse ? b_ifelse : b_if,
                        cfalse ? 3 : 2,
                        cond, ctrue, cfalse);
+}
+
+static component build_unless(component cond, component otherwise)
+{
+  return build_if(build_unop(b_not, cond), otherwise, NULL);
 }
 
 static component build_exit(const char *name, component c)
@@ -818,41 +952,28 @@ static component build_binop(enum builtin_op op, component e1, component e2)
   return new_binop_component(build_heap, 0, op, e1, e2);
 }
 
-static component build_unop(enum builtin_op op, component e)
-{
-  return new_component(build_heap, 0, c_builtin, op, 1, e);
-}
-
-static component build_logic_and(component e1, component e2)
-{
-  assert(e1 || e2);
-  if (e2 == NULL || e2 == component_true)
-    return e1;
-  if (e1 == NULL || e1 == component_true)
-    return e2;
-  return build_binop(b_sc_and, e1, e2);
-}
-
 static component build_codeblock(vlist vl, clist code)
 {
   return new_component(build_heap, 0, c_block,
 		       new_codeblock(build_heap, vl, code, NULL, NULL, -1));
 }
 
-static component build_const_comparison(constant cst, component e)
+static component build_const_not_equal(constant cst, component e)
 {
   switch (cst->vclass) {
   case cst_int:
   simple:
-    return build_binop(b_eq, e,
+    return build_binop(b_ne, e,
 		       new_component(build_heap, 0, c_constant, cst));
   case cst_list:
     if (cst->u.constants == NULL)
       goto simple;
     /* fallthrough */
   default:
-    return build_exec(build_recall(GEP "equal?"), 2,
-		      new_component(build_heap, 0, c_constant, cst), e);
+    return build_unop(
+      b_not,
+      build_exec(build_recall(GEP "equal?"), 2,
+                 new_component(build_heap, 0, c_constant, cst), e));
   }
 }
 
@@ -875,56 +996,67 @@ static component build_typecheck(component e, mtype type)
   case type_null:
     return build_binop(b_eq, e,
 		       new_component(build_heap, 0, c_constant,
-				     new_constant(build_heap, cst_list, NULL)));
+				     new_constant(build_heap, cst_list,
+                                                  NULL)));
   case stype_none:
     return component_false;
   case stype_any:
     return component_true;
   default:
-    assert(0);
+    abort();
   }
   return build_exec(build_recall(f), 1, e);
 }
 
-/* returns true if this block can fail to match */
-static bool build_match_block(pattern pat, component e,
-                              int level, component *result)
+static component build_error(runtime_errors error)
 {
-  *result = NULL;
-  bool can_fail = true;
+  return build_exec(build_recall(GEP "error"), 1,
+		    build_int_component(error));
+}
+
+/* true if 'c' is a recall of a single-assignment variable */
+static bool is_safe_recall(component c)
+{
+  return c->vclass == c_recall && c->u.recall[0] == '$';
+}
+
+static component build_match_block(pattern pat, component e, int level,
+                                   vlist *psymbols,
+                                   component (*err)(void *data),
+                                   void *err_data)
+{
+  component result;
 
   switch (pat->vclass) {
   case pat_sink:
-    return false;
+    return NULL;
   case pat_symbol:
     {
-      for (vlist sym = apc_symbols; sym; sym = sym->next)
+      for (vlist sym = *psymbols; sym; sym = sym->next)
 	if (strcasecmp(sym->var, pat->u.sym.name) == 0)
 	  {
 	    compile_error("repeated variable name in match pattern (%s)",
                           pat->u.sym.name);
-	    return false;
+	    return NULL;
 	  }
 
-      apc_symbols = new_vlist(
-        build_heap, pat->u.sym.name, TYPESET_ANY, pat->lineno, apc_symbols);
+      *psymbols = new_vlist(
+        build_heap, pat->u.sym.name, TYPESET_ANY, pat->lineno, *psymbols);
 
-      component ca = build_assign(0, pat->u.sym.name, e);
-      if (pat->u.sym.type == stype_any)
-        {
-          *result = ca;
-          can_fail = false;
-        }
-      else
-        *result = build_codeblock(
+      result = build_assign(0, pat->u.sym.name, e);
+      if (pat->u.sym.type != stype_any)
+        result = build_codeblock(
           NULL,
-          build_clist(2, ca,
-                      build_typecheck(build_recall(pat->u.sym.name),
-                                      pat->u.sym.type)));
+          build_clist(
+            2, result,
+            build_unless(build_typecheck(build_recall(pat->u.sym.name),
+                                         pat->u.sym.type),
+                         err(err_data))));
       break;
     }
   case pat_const:
-    *result = build_const_comparison(pat->u.constval, e);
+    result = build_if(build_const_not_equal(pat->u.constval, e),
+                      err(err_data), NULL);
     break;
   case pat_array:
     {
@@ -940,101 +1072,70 @@ static bool build_match_block(pattern pat, component e,
        *  ]
        */
 
-      clist code;
-      int vlen, n;
-
-      char buf[16], *tmpname;
-
-      sprintf(buf, "$%d", level);
-      tmpname = heap_allocate_string(build_heap, buf);
-
-      code = build_clist(1, build_assign(0, tmpname, e));
-
-      patternlist apl;
-      for (vlen = 0, apl = pat->u.l.patlist; apl; apl = apl->next)
-	++vlen;
-
-      struct {
-        component c;
-        bool can_fail;
-      } checks[vlen];
-
-      for (n = vlen, apl = pat->u.l.patlist; apl; apl = apl->next)
-	{
-	  --n;
-
-	  component c;
-	  bool f = build_match_block(
-	    apl->pat, build_binop(b_ref,
-                                  build_recall(tmpname),
-                                  build_int_component(n)),
-            level + 1, &c);
-
-          checks[n].c = c;
-          checks[n].can_fail = f;
-	}
-
-      component check = build_exec(build_recall(GEP "vector?"), 1,
-                                   build_recall(tmpname));
-      if (!(pat->u.l.ellipsis && vlen == 0))
-	check = build_logic_and(
-          check,
-          build_binop(
-            pat->u.l.ellipsis ? b_ge : b_eq,
-	    build_exec(build_recall(GEP "vector_length"), 1,
-		       build_recall(tmpname)),
-	    build_int_component(vlen)));
-
-      bool used_next = false;
-      for (;;)
+      component elocal = e;
+      component eassign = NULL;
+      vlist vlocals = NULL;
+      if (!is_safe_recall(e))
         {
-          while (n < vlen && checks[n].can_fail)
-            check = build_logic_and(check, checks[n++].c);
-          if (n < vlen)
-            {
-              check = build_if(build_unop(b_not, check),
-                               build_exit("next", component_false),
-                               NULL);
-              used_next = true;
-            }
-          code = new_clist(build_heap, check, code);
-          if (n == vlen)
-            break;
-          check = NULL;
-          while (n < vlen && !checks[n].can_fail)
-            {
-              component c = checks[n++].c;
-              if (c != NULL)
-                code = new_clist(build_heap, c, code);
-            }
-          if (n == vlen)
-            {
-              code = new_clist(build_heap, component_true, code);
-              break;
-            }
+          char buf[16];
+          sprintf(buf, "$%d", level);
+          char *tmpname = heap_allocate_string(build_heap, buf);
+          elocal = build_recall(tmpname);
+          eassign = build_assign(0, tmpname, e);
+          vlocals = build_vlist(1, tmpname, TYPESET_ANY, pat->lineno);
         }
 
-      component c = build_codeblock(
-        build_vlist(1, tmpname, TYPESET_ANY, pat->lineno),
-        reverse_clist(code));
-      if (used_next)
-        c = new_component(build_heap, 0, c_labeled, "next", c);
-      *result = c;
+      int vlen = 0;
+      for (patternlist apl = pat->u.l.patlist; apl; apl = apl->next)
+        ++vlen;
 
+      component lc = NULL;
+      if (!pat->u.l.ellipsis || vlen > 0)
+        {
+          lc = build_if(
+            build_binop(
+              pat->u.l.ellipsis ? b_lt : b_ne,
+              build_exec(build_recall(GEP "vector_length"), 1, elocal),
+              build_int_component(vlen)),
+            err(err_data),
+            NULL);
+          lc->lineno = pat->lineno;
+        }
+
+      component tc = build_unless(build_exec(build_recall(GEP "vector?"), 1,
+                                             elocal),
+                                  err(err_data));
+      tc->lineno = pat->lineno;
+
+      clist code = NULL;
+      int n = vlen;
+      for (patternlist apl = pat->u.l.patlist; apl; apl = apl->next)
+	{
+          --n;
+	  component c = build_match_block(
+	    apl->pat, build_binop(b_ref, elocal, build_int_component(n)),
+            level + 1, psymbols, err, err_data);
+          if (c != NULL)
+            code = new_clist(build_heap, c, code);
+	}
+
+      if (lc != NULL)
+        code = new_clist(build_heap, lc, code);
+      code = new_clist(build_heap, tc, code);
+      if (eassign != NULL)
+        code = new_clist(build_heap, eassign, code);
+
+      result = build_codeblock(vlocals, code);
       break;
     }
   case pat_list:
     {
-      patternlist apl = pat->u.l.patlist;
-      component check, getcdr;
-      clist code;
-      char buf[16], *tmpname;
-      int first = true;
-
       if (pat->u.l.patlist == NULL)
 	{
-	  *result = build_const_comparison(
-            new_constant(build_heap, cst_list, NULL), e);
+	  result = build_if(
+            build_const_not_equal(
+              new_constant(build_heap, cst_list, NULL), e),
+            err(err_data), NULL);
 	  break;
 	}
 
@@ -1055,114 +1156,104 @@ static bool build_match_block(pattern pat, component e,
        *      ]
        *  ]
        */
-      sprintf(buf, "$%d", level);
-      tmpname = heap_allocate_string(build_heap, buf);
 
-      code = build_clist(1, build_assign(0, tmpname, e));
+      for (patternlist apl = pat->u.l.patlist->next; apl; apl = apl->next)
+        ++level;
+      int nlevel = level;
 
-      /* $tmp = cdr($tmp) */
-      getcdr = build_exec(build_recall(GEP "cdr"), 1,
-			  build_recall(tmpname));
-      getcdr->lineno = pat->lineno;
-
-      bool prev_can_fail = true;
-      /* this will go last: compare the tail */
-      if (apl->pat == NULL)
-	check = build_const_comparison(
-          new_constant(build_heap, cst_list, NULL), getcdr);
-      else
-        prev_can_fail = build_match_block(apl->pat, getcdr,
-                                          level + 1, &check);
-
-      for (apl = apl->next; apl; apl = apl->next)
+      clist code = NULL;
+      vlist locals = NULL;
+      component exp = NULL;
+      for (patternlist apl = pat->u.l.patlist->next; apl; apl = apl->next)
 	{
-          component cpair = build_exec(
-            build_recall(GEP "pair?"), 1,
-            build_recall(tmpname));
-
-	  component c;
-          if (build_match_block(
-                apl->pat,
-                build_exec(build_recall(GEP "car"), 1,
-                           build_recall(tmpname)),
-                level + 1, &c))
-            c = build_logic_and(cpair, c);
-          else if (c == NULL)
-            c = cpair;
+          component texp;
+          if (apl->next == NULL && is_safe_recall(e))
+            texp = e;
           else
-            c = build_if(cpair,
-                         build_codeblock(
-                           NULL, build_clist(2, c, component_true)),
-                         component_false);
+            {
+              char buf[16];
+              sprintf(buf, "$%d", --level);
+              char *tmpname = heap_allocate_string(build_heap, buf);
+              locals = new_vlist(build_heap, tmpname, TYPESET_ANY,
+                                 pat->lineno, locals);
+              texp = build_recall(tmpname);
+            }
 
-	  if (first)
-	    first = false;
-	  else
-	    {
-	      getcdr = build_exec(build_recall(GEP "cdr"), 1,
-				  build_recall(tmpname));
-	      component movecdr = build_assign(0, tmpname, getcdr);
-	      check = build_codeblock(NULL, build_clist(2, movecdr, check));
-	    }
-          if (prev_can_fail)
-            check = build_logic_and(c, check);
-          else if (check == NULL)
-            check = c;
+          if (exp == NULL)
+            {
+              component getcdr = build_exec(build_recall(GEP "cdr"), 1,
+                                            texp);
+              component c =
+                (pat->u.l.patlist->pat == NULL
+                 ? build_if(build_const_not_equal(
+                              new_constant(build_heap, cst_list, NULL),
+                              getcdr),
+                            err(err_data), NULL)
+                 : build_match_block(pat->u.l.patlist->pat, getcdr,
+                                     nlevel, psymbols, err, err_data));
+              if (c)
+                code = new_clist(build_heap, c, code);
+            }
           else
-            check = build_if(c,
-                             build_codeblock(
-                               NULL,
-                               build_clist(2, check, component_true)),
-                             component_false);
-          prev_can_fail = true;
-	  check->lineno = apl->pat->lineno;
-	}
+            {
+              code = new_clist(
+                build_heap,
+                build_assign(0, exp->u.recall,
+                             build_exec(build_recall(GEP "cdr"), 1, texp)),
+                code);
+            }
+          exp = texp;
 
-      code = new_clist(build_heap, check, code);
+          component mc = build_match_block(
+            apl->pat,
+            build_exec(build_recall(GEP "car"), 1, exp),
+            nlevel, psymbols, err, err_data);
+          if (mc != NULL)
+            code = new_clist(build_heap, mc, code);
 
-      *result = build_codeblock(
-        build_vlist(1, tmpname, TYPESET_ANY, pat->lineno),
-        reverse_clist(code));
+          component pc = build_unless(
+            build_exec(build_recall(GEP "pair?"), 1, exp),
+            err(err_data));
+          pc->lineno = apl->pat->lineno;
+          code = new_clist(build_heap, pc, code);
+        }
+
+      if (!is_safe_recall(e))
+        code = new_clist(build_heap, build_assign(0, exp->u.recall, e), code);
+
+      result = build_codeblock(reverse_vlist(locals), code);
       break;
     }
   case pat_expr:
-    *result = build_exec(build_recall(GEP "equal?"),
-                         2, pat->u.expr, e);
+    result = build_unless(build_exec(build_recall(GEP "equal?"),
+                                     2, pat->u.expr, e),
+                          err(err_data));
     break;
   default:
-    assert(0);
+    abort();
   }
-  (*result)->lineno = pat->lineno;
-  return can_fail;
+  result->lineno = pat->lineno;
+  return result;
 }
 
-static component build_error(runtime_errors error)
+static component no_match_error(void *data)
 {
-  return build_exec(build_recall(GEP "error"), 1,
-		    build_int_component(error));
+  return build_error(error_no_match);
 }
 
 component new_pattern_component(block_t heap, pattern pat, component e)
 {
   build_heap = heap;
-  apc_symcount = 0;
-  apc_symbols = NULL;
-
+  vlist psymbols = NULL;
   /* Warning: if the match fails, this might leave only some of the variables
    * in the pattern filled. But it's a feature, right? */
-  component mc;
-  build_match_block(pat, e, 0, &mc);
-  component res = build_if(build_unop(b_not, mc),
-                           build_error(error_no_match), NULL);
-  res->lineno = pat->lineno;
-  return res;
+  return build_match_block(pat, e, 0, &psymbols, no_match_error, NULL);
 }
 
 component new_dereference(block_t heap, int lineno, component e)
 {
   build_heap = heap;
-  component c = build_exec(build_recall(GEP "dereference"),
-                           1, e);
+  component c = build_exec(build_recall(GEP "dereference"), 1, e);
   c->lineno = lineno;
   return c;
 }
@@ -1287,10 +1378,14 @@ component new_for_component(block_t heap, vlist vars,
   return new_component(build_heap, c->lineno, c_labeled, "break", c);
 }
 
+static component next_error(void *count)
+{
+  ++*(int *)count;
+  return build_exit("$next", component_undefined);
+}
+
 component new_match_component(block_t heap, component e, matchnodelist matches)
 {
-  vlist vl;
-  clist code;
   build_heap = heap;
 
   /*
@@ -1298,7 +1393,7 @@ component new_match_component(block_t heap, component e, matchnodelist matches)
    *     | $exp |
    *
    *     $exp = <match-expression>
-   *     [                                       \
+   *     <$next> [                               \
    *       | <pattern-variables> |                |
    *       if (<pattern-match> [&& <condition>])  +- repeat for each match node
    *         exit<$match> <pattern-expression>;   |
@@ -1307,36 +1402,33 @@ component new_match_component(block_t heap, component e, matchnodelist matches)
    *   ]
    */
 
-  vl = build_vlist(1, "$exp", TYPESET_ANY, e->lineno);
-
-  code = build_clist(1, component_false);
+  vlist vl = build_vlist(1, "$exp", TYPESET_ANY, e->lineno);
+  clist code = build_clist(1, component_false);
   for (; matches; matches = matches->next)
     {
-      apc_symcount = 0;
-      apc_symbols = NULL;
-      component matchcode;
-      bool can_fail = build_match_block(matches->match->pattern,
-                                        build_recall("$exp"), 0,
-                                        &matchcode);
+      vlist psymbols = NULL;
+      int next_count = 0;
+      component matchcode = build_match_block(matches->match->pattern,
+                                              build_recall("$exp"), 0,
+                                              &psymbols,
+                                              next_error, &next_count);
       component cexit = build_exit("$match", matches->match->expression);
-      if (can_fail)
-        matchcode = build_logic_and(matchcode, matches->match->condition);
-      else if (matches->match->condition)
-        {
-          matchcode = build_codeblock(
-            NULL, build_clist(2, matchcode, matches->match->condition));
-          can_fail = true;
-        }
 
-      clist cl;
-      if (can_fail)
-        cl = build_clist(1, build_if(matchcode, cexit, NULL));
-      else
-        cl = build_clist(2, matchcode, cexit);
+      clist cl = build_clist(
+        3,
+        matchcode,
+        (matches->match->condition
+         ? build_unless(matches->match->condition, next_error(&next_count))
+         : NULL),
+        cexit);
 
-      component cblock = build_codeblock(apc_symbols, cl);
+      component cblock = build_codeblock(reverse_vlist(psymbols), cl);
       cblock->u.blk->filename = matches->match->filename;
       cblock->u.blk->lineno = matches->match->lineno;
+
+      if (next_count)
+        cblock = new_component(build_heap, 0, c_labeled, "$next", cblock);
+
       code = new_clist(build_heap, cblock, code);
     }
 
@@ -1446,4 +1538,24 @@ component new_assign_expression(block_t heap, component e0, enum builtin_op op,
  error:
   compile_error("can only assign to variables or references");
   return NULL;
+}
+
+block new_toplevel_codeblock(block_t heap, vlist statics, block body)
+{
+  if (statics == NULL)
+    return body;
+
+  build_heap = heap;
+  clist cl = build_clist(1, new_component(heap, body->lineno, c_block, body));
+  body = new_codeblock(build_heap, statics, cl, body->filename, body->nicename,
+                       body->lineno);
+  body->statics = true;
+  return body;
+}
+
+void str_and_len_dup(str_and_len_t *dest, const str_and_len_t *src)
+{
+  dest->len = src->len;
+  dest->str = xmalloc(src->len + 1);
+  memcpy(dest->str, src->str, src->len + 1);
 }

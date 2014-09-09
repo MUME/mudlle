@@ -22,8 +22,9 @@
 library misc // Miscellaneous useful functions
 requires system, sequences
 defines abbrev?, assert, assert_message, assoc, assq, bcomplement,
-  bcomplement!, bforeach, bitset_to_list, breduce, caaar, caadr, caar, cadar,
-  caddr, cadr, cdaar, cdadr, cdar, cddar, cdddr, cddr,
+  bcomplement!,  bcopy, bforeach, bitset_to_list, breduce,
+  caaar, caadr, caar, cadar, caddr, cadr, cdaar, cdadr, cdar, cddar,
+  cdddr, cddr,
   concat_words, difference, fail, fail_message, find_word?,
   intersection, last_element, last_pair, list_first_n!, list_index,
   list_to_vector, lprotect, lqsort, mappend, mapstr, member, memq, nth,
@@ -64,11 +65,11 @@ cdadr = fn "`x0 -> `x1. Returns cdr(car(cdr(`x0)))" (pair x) cdr(car(cdr(x)));
 cddar = fn "`x0 -> `x1. Returns cdr(cdr(car(`x0)))" (pair x) cdr(cdr(car(x)));
 cdddr = fn "`x0 -> `x1. Returns cdr(cdr(cdr(`x0)))" (pair x) cdr(cdr(cdr(x)));
 
-assert = fn "`b -> . Fail if `b is false" (b) if (!b) fail();
-assert_message = fn "`b `s -> . Fail with message `s if `b is false" (b, string s)
+assert = fn "`b -> . Cause `error_abort if `b is false" (b) if (!b) fail();
+assert_message = fn "`b `s -> . Cause `error_abort and `display(`s) if `b is false" (b, string s)
   if (!b) fail_message(s);
-fail = none fn " -> . Fail." () error(error_abort);
-fail_message = none fn "`s -> . Fail with message `s." (string s)
+fail = none fn " -> . Cause `error_abort." () error(error_abort);
+fail_message = none fn "`s -> . Cause `error_abort and `display(`s)." (string s)
   [
     display(s); newline();
     fail()
@@ -279,17 +280,25 @@ mapstr = fn "`c `s -> `l. Executes `c(`n) on every character `n in `s and makes 
     results
   ];
 
-mappend = fn "`f `l1 -> `l2. Like `lmap, but appends the results of `f(`x) for each element `x in `l1 together" (function f, list l)
+mappend = fn "`f `l1 -> `l2. Like `lmap, but (destructively) appends the results of `f(`x) for each element `x in `l1 together" (function f, list l)
   [
-    | results |
-
-    l = lreverse(l);
+    | result, tail |
     while (l != null)
-      [
-        results = lappend(f(car(l)), results);
-	l = cdr(l);
+      <next> [
+        | e, il |
+        @(e . l) = l;
+        il = f(e);
+        if (il == null) exit<next> null;
+
+        if (tail == null)
+          tail = result = il
+        else
+          [
+            tail = last_pair(tail);
+            set_cdr!(tail, il);
+          ];
       ];
-    results
+    result
   ];
 
 memq = fn "`x `l -> `p. Returns the first pair `p of list `l whose `car is == `x, or `false if none" (x, list l)
@@ -395,7 +404,7 @@ random_element = fn
    else null;
 ];
 
-last_pair = fn "`l0 -> `l1. Returns the last pair of list `l0" (list lst) [
+last_pair = fn "`l0 -> `l1. Returns the last pair of list `l0, or null." (list lst) [
    |tail|
    while (pair? (lst)) [
       tail = lst;
@@ -578,6 +587,8 @@ string_rjustify_cut = fn "`s1 `n -> `s2. Right justifies `s1 in a field `n chara
 ];
 
 // Bitsets (basic operations are in C)
+
+bcopy = fn "`b0 -> `b1. Returns a copy of `b0." (string s) s + "";
 
 bitset_to_list = list fn "`bitset `map -> `l. Returns a list of `map[`i] for all bits `i in `bitset. `map must be a vector or a string." (string set, {vector,string} map)
   breduce(fn (i, l) map[i] . l, null, set);

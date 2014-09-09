@@ -14,17 +14,6 @@ regress2branch = fn (name, a1, a2, op, exptruth)
 		 if (exptruth) 33 else 22);
   ];
 
-regress2branch("or1", 7, "fun", "arg1 or arg2", 7 or "fun");
-regress2branch("or2", false, false, "arg1 or arg2", false);
-regress2branch("or3", false, null, "arg1 or arg2", true);
-regress2branch("or4", '(1 2), false, "arg1 or arg2", true);
-
-regress2branch("and1", 7, "fun", "arg1 and arg2", 7 and "fun");
-regress2branch("and2", false, false, "arg1 and arg2", false);
-regress2branch("and3", false, null, "arg1 and arg2", false);
-regress2branch("and4", '(1 2), false, "arg1 and arg2", false);
-regress2branch("and5", true, true, "arg1 and arg2", true);
-
 regress2branch("==0", true, true, "arg1 == arg2", true);
 regress2branch("==1", true, '(1 2), "arg1 == arg2", false);
 regress2branch("!=0", "fun", '(1 2), "arg1 != arg2", true);

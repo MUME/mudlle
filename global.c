@@ -25,6 +25,9 @@
 #include "alloc.h"
 #include "error.h"
 #include "module.h"
+#include "context.h"
+
+#include "runtime/support.h"
 
 struct env *environment;
 struct vector *env_values;
@@ -54,24 +57,23 @@ void global_init(void)
 
 static ulong global_add(struct string *name, value val)
 {
-  ulong aindex, old_size;
-  struct vector *old_values = env_values;
-
   GCCHECK(val);
 
   assert(name->o.flags & OBJ_READONLY);
 
+  struct vector *old_values = env_values;
   GCPRO2(name, old_values);
-  old_size = intval(environment->size);
-  aindex = env_add_entry(environment, val);
-  if (intval(environment->size) != old_size) /* Increase mvars too */
+  long old_size = intval(environment->size);
+  long aindex = env_add_entry(environment, val);
+  long new_size = intval(environment->size);
+  if (new_size != old_size) /* Increase mvars too */
     {
-      struct vector *vec = alloc_vector(intval(environment->size));
+      struct vector *vec = alloc_vector(new_size);
 
       memcpy(vec->data, mvars->data, mvars->o.size - sizeof(struct obj));
       mvars = vec;
 
-      vec = alloc_vector(intval(environment->size));
+      vec = alloc_vector(new_size);
 
       memcpy(vec->data, global_names->data,
              global_names->o.size - sizeof (struct obj));
@@ -99,13 +101,21 @@ ulong global_lookup(const char *name)
    Modifies: environment
 */
 {
-  struct symbol *pos;
-  struct string *mname;
+  ulong ofs;
+  if (global_exists(name, &ofs))
+    return ofs;
 
-  if (table_lookup(global, name, &pos)) return (ulong)intval(pos->data);
-
-  mname = make_readonly(alloc_string(name));
+  struct string *mname = make_readonly(alloc_string(name));
   return global_add(mname, NULL);
+}
+
+bool global_exists(const char *name, ulong *ofs)
+{
+  struct symbol *pos;
+  if (!table_lookup(global, name, &pos))
+    return false;
+  *ofs = intval(pos->data);
+  return true;
 }
 
 ulong mglobal_lookup(struct string *name)
@@ -134,4 +144,50 @@ struct list *global_list(void)
 */
 {
   return table_list(global);
+}
+
+/* We can't rely on seclevel being set (not all code is calling secures),
+ * so for the purpose of check_global_*() we'll approximate with maxseclevel
+ * instead.
+ * As a result, a V+ session calling M code will enable that M code to mess
+ * with globals.
+ */
+static inline int seclevel_for_globals(void)
+{
+  return intval(maxseclevel);
+}
+
+void check_global_write(ulong goffset)
+{
+  assert(goffset < vector_len(global_names));
+
+  if (GMUTABLE(goffset))
+    return;
+
+  if (GCONSTANT(goffset))
+    global_runtime_error(error_variable_read_only, true, goffset);
+
+  if (seclevel_for_globals() < SECLEVEL_GLOBALS)
+    global_runtime_error(error_security_violation, true, goffset);
+}
+
+void check_global_read(ulong goffset)
+{
+  if (seclevel_for_globals() >= SECLEVEL_GLOBALS)
+    return;
+
+  assert(goffset < vector_len(global_names));
+
+  /* Using module_vstatus() instead of immutablep() because:
+   * - not all globals are born immutable (the GC makes them)
+   * - it nudges people to make libraries instead of modules
+   * - (Dain has a better feeling about module_vstatus())
+   *
+   * Caveat: sometimes non-immutable defines slip through.
+   */
+  struct string *module_name = NULL;
+  enum vstatus status = module_vstatus(goffset, &module_name);
+  if (status != var_system_mutable && status != var_system_write
+      && status != var_module)
+    global_runtime_error(error_security_violation, false, goffset);
 }

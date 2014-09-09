@@ -421,16 +421,6 @@ struct object *alloc_object(struct obj_data *obj)
   return (struct object *)allocate_temp(type_object, obj);
 }
 
-struct primitive *alloc_primitive(ulong nb, const struct primitive_ext *op)
-{
-  return (struct primitive *)allocate_permanent(type_primitive, nb, (void *)op);
-}
-
-struct primitive *alloc_secure(ulong nb, const struct primitive_ext *op)
-{
-  return (struct primitive *)allocate_permanent(type_secure, nb, (void *)op);
-}
-
 struct grecord *alloc_private(int id, ulong size)
 {
   struct grecord *p = allocate_record(type_private, size + 1);

@@ -52,20 +52,6 @@
 #include "vector.h"
 
 
-static bool is_function(value v)
-{
-  switch (TYPEOF(v))
-    {
-    case type_closure:
-    case type_primitive:
-    case type_secure:
-    case type_varargs:
-      return true;
-    default:
-      return false;
-    }
-}
-
 TYPEDOP(functionp, "function?", "`x -> `b. True if `x is a function;"
         " cf. callable?().",
         1, (value v),
@@ -80,7 +66,7 @@ TYPEDOP(callablep, "callable?", "`f `n -> `b. True if function `f"
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "fn.n")
 {
   if (!is_function(f))
-    runtime_error(error_bad_type);
+    runtime_error(error_bad_function);
   long nargs = GETINT(margs);
   if (nargs < 0)
     runtime_error(error_bad_value);
@@ -91,7 +77,8 @@ TYPEDOP(may_callp, "may_call?", "`f -> `b. True if the caller is allowed to"
 	" call `f without a security violation due to minlevel.", 1, (value f),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
-  callable(f, -1);
+  if (!is_function(f))
+    runtime_error(error_bad_function);
   return makebool(!minlevel_violator(f));
 }
 
@@ -118,18 +105,15 @@ static runtime_errors apply(value f, struct vector *args, value *r)
 {
   if (!TYPE(args, type_vector))
     return error_bad_type;
-  if (!pointerp(f))
+  if (!is_function(f))
     return error_bad_function;
 
   int nargs = vector_len(args);
-  mtype type = ((struct obj *)f)->type;
-  if (!((1 << type) & TYPESET_FUNCTION))
-    return error_bad_function;
-
   if (!callablep(f, nargs))
     return error_wrong_parameters;
 
-  if (type == type_closure)
+  struct obj *fobj = f;
+  if (fobj->type == type_closure)
     {
       *r = call(f, args);
       return error_none;
@@ -145,7 +129,7 @@ static runtime_errors apply(value f, struct vector *args, value *r)
   };
   call_stack = &me;
 
-  if (type == type_varargs)
+  if (fobj->type == type_varargs)
     {
       struct primitive *prim = f;
       prim->call_count++;
@@ -158,6 +142,10 @@ static runtime_errors apply(value f, struct vector *args, value *r)
       assert(nargs < MAX_PRIMITIVE_ARGS);
       memcpy(me.u.c.args, args->data, sizeof args->data[0] * nargs);
       me.u.c.nargs = nargs;
+
+      if (fobj->type == type_secure)
+        callable(f, nargs);     /* checks seclevel */
+
       *r = call(f, args);
     }
 
@@ -168,7 +156,7 @@ static runtime_errors apply(value f, struct vector *args, value *r)
 TYPEDOP(apply, 0,
         "`f `v -> `x. Excutes `f with arguments `v, returns its result",
 	2, (value f, struct vector *args),
-	0, "fv.x")
+	OP_APPLY, "fv.x")
 {
   value result;
   runtime_errors error = apply(f, args, &result);
@@ -177,58 +165,45 @@ TYPEDOP(apply, 0,
   return result;
 }
 
-TYPEDOP(apply_stack_entry, 0,
-        "`x0 `f `v -> `x1. Applies `v to `f as `apply does and returns its"
-        " result.\n"
-        "This primitive's call stack entry will display its arguments even"
-        " when called from a compiled closure.",
-        3, (value x, value f, struct vector *args), 0, "xfv.x")
-{
-  struct call_stack *old_call_stack = call_stack;
-  struct call_stack me;
-
-  /* prevent duplicate entries */
-  if (call_stack == NULL || call_stack->type != call_c
-      || call_stack->u.c.u.prim->op != &op_apply_stack_entry)
-    {
-      me = (struct call_stack){
-        .next = call_stack,
-        .type = call_primop,
-        .u.c = {
-          .u.op = &op_apply_stack_entry,
-          .nargs = 3,
-          .args = { x, f, args }
-        }
-      };
-      call_stack = &me;
-    }
-
-  value result;
-  runtime_errors error = apply(f, args, &result);
-
-  if (error != error_none)
-    runtime_error(error);
-
-  call_stack = old_call_stack;
-  return result;
-}
-
 #  define EVAL_NAME "ieval"
 SECTOP(eval, EVAL_NAME,
-       "`s -> `x. Excute the expression in `s and return its result."
-       " On compile error, the message is display()'ed and `error_compile"
-       " is caused.",
-       1, (struct string *str), 1, 0, "s.x")
+       "`s|`v -> `x. Excute the expression in `s (or `v, a vector of strings)"
+       " and return its result.\n"
+       "On compile error, the message is printed using `display() and"
+       " `error_compile is thrown.",
+       1, (value input), 1, 0, "[sv].x")
 {
-  TYPEIS(str, type_string);
+  ASSERT_NOALLOC_START();
 
-  char *scopy;
-  LOCALSTR(scopy, str);
-  read_from_string(scopy, "<eval>", "<eval>");
+  const char **lines;
+  if (TYPE(input, type_string))
+    {
+      lines = alloca(2 * sizeof *lines);
+      lines[0] = ((struct string *)input)->str;
+      lines[1] = NULL;
+    }
+  else
+    {
+      TYPEIS(input, type_vector);
+      struct vector *iv = input;
+      lines = alloca((vector_len(iv) + 1) * sizeof *lines);
+      for (int i = 0; i < vector_len(iv); ++i)
+        {
+          TYPEIS(iv->data[i], type_string);
+          lines[i] = ((struct string *)iv->data[i])->str;
+        }
+      lines[vector_len(iv)] = NULL;
+    }
 
-  runtime_errors error;
+  struct reader_state rstate;
+  save_reader_state(&rstate);
+  read_from_strings(lines, "<eval>", "<eval>");
   block_t parser_block = new_block();
   mfile f = parse(parser_block);
+
+  ASSERT_NOALLOC_END();
+
+  runtime_errors error;
   if (f == NULL)
     {
       error = error_compile;
@@ -247,6 +222,7 @@ SECTOP(eval, EVAL_NAME,
       mstop(f);
       if (closure != NULL)
         {
+          restore_reader_state(&rstate);
           free_block(parser_block);
           return call0(closure);
         }
@@ -254,16 +230,38 @@ SECTOP(eval, EVAL_NAME,
 
   error = error_compile;
  errout:
+  restore_reader_state(&rstate);
   free_block(parser_block);
   runtime_error(error);
 }
 
-TYPEDOP(call_trace, 0, " -> `v. Returns current call trace. Each entry is"
+TYPEDOP(call_trace, 0, "`b -> `v. Returns current call trace. Each entry is"
         " either a function, a machine code object (`type_mcode),"
-        " or a string.", 0, (void),
-        OP_NOESCAPE, ".v")
+        " or a string.\n"
+        "If `b is true, each entry becomes cons(`called, `line), where"
+        " `line is null if unknown.",
+        1, (value lines),
+        OP_NOESCAPE, "x.v")
 {
-  return get_mudlle_call_trace();
+  return get_mudlle_call_trace(istrue(lines));
+}
+
+TYPEDOP(maxseclevel, 0,
+        " -> `n. Returns the current maxseclevel, which is the highest"
+        " secure primitive seclevel that currently may be called."
+        " Cf. `effective_seclevel().",
+        0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
+{
+  return maxseclevel;
+}
+
+SECTOP(effective_seclevel, 0,
+       " -> `n. Returns the effective seclevel used for security checks"
+       " when calling secure primitives. This is the lowest value"
+       " of `maxseclevel() and `seclevel().",
+       0, (void), 1, OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
+{
+  return makeint(get_effective_seclevel());
 }
 
 TYPEDOP(error, 0, "`n -> . Causes error `n", 1, (value errn),
@@ -273,6 +271,17 @@ TYPEDOP(error, 0, "`n -> . Causes error `n", 1, (value errn),
   if (n < 0 || n >= last_runtime_error)
     runtime_error(error_bad_value);
   runtime_error(n);
+}
+
+TYPEDOP(warning, 0, "`s -> . Prints the warning message `s and a stack trace.",
+        1, (struct string *s),
+        0, "s.")
+{
+  TYPEIS(s, type_string);
+  char *msg;
+  LOCALSTR(msg, s);
+  runtime_warning(msg);
+  undefined();
 }
 
 TYPEDOP(compiledp, "compiled?",
@@ -347,8 +356,7 @@ static void docall0(void *x)
  */
 static int trap_error(value f, value handler,
                       enum call_trace_mode call_trace_mode,
-                      bool handle_loops,
-                      uword new_minlevel)
+                      bool handle_loops)
 {
   callable(f, 0);
   if (handler)
@@ -367,17 +375,12 @@ static int trap_error(value f, value handler,
       session_context->recursion_count -= saved_recursion_count;
     }
 
-  uword old_minlevel = minlevel;
-  minlevel = new_minlevel;
-
   int ok;
   {
     GCPRO1(handler);
     ok = mcatch(docall0, f, call_trace_mode);
     UNGCPRO();
   }
-
-  minlevel = old_minlevel;
 
   xcount                           += saved_xcount;
   session_context->call_count      += saved_call_count;
@@ -425,7 +428,7 @@ TYPEDOP(catch_error, 0, "`f `b -> `x. Executes `f() and returns its result."
         0, "fx.x")
 {
   trap_error(f, NULL, istrue(suppress) ? call_trace_off : call_trace_on,
-             false, minlevel);
+             false);
   return result;
 }
 
@@ -437,7 +440,7 @@ TYPEDOP(handle_error, 0, "`f0 `f1 -> `x. Executes `f0(). If an error occurs,"
 {
   if (handler == NULL)
     runtime_error(error_bad_function);
-  trap_error(f, handler, call_trace_off, false, minlevel);
+  trap_error(f, handler, call_trace_off, false);
   return result;
 }
 
@@ -463,7 +466,7 @@ TYPEDOP(trap_error, 0,
       || call_trace_mode > call_trace_on)
     runtime_error(error_bad_value);
 
-  trap_error(f, handler, call_trace_mode, istrue(handle_loops), minlevel);
+  trap_error(f, handler, call_trace_mode, istrue(handle_loops));
   return result;
 }
 
@@ -473,7 +476,7 @@ SECTOP(with_minlevel, 0,
        " closure's `function_seclevel().\n"
        "No closure whose `function_seclevel() is less than `n can be called"
        " from `c(), or an `error_security_violation will be caused.",
-       2, (value n, value f), 1, 0, "nf.x")
+       2, (value n, value f), 1, OP_APPLY, "nf.x")
 {
   long new_minlevel = GETINT(n);
   if (new_minlevel < 0 || new_minlevel > LVL_IMPLEMENTOR)
@@ -481,10 +484,36 @@ SECTOP(with_minlevel, 0,
   if (new_minlevel > get_seclevel())
     runtime_error(error_security_violation);
 
-  if (trap_error(f, NULL, call_trace_on, false, new_minlevel))
-    mthrow(exception_signal, exception_value);
+  int old_minlevel = minlevel;
+  minlevel = new_minlevel;
+  value r = call0(f);
+  minlevel = old_minlevel;
 
-  return result;
+  return r;
+}
+
+SECTOP(with_maxseclevel, 0,
+       "`n `c -> `x. Temporarily change `maxseclevel() to `n, then calls `c"
+       " and returns its result.\nUse this function in your code to make it"
+       " available to Ms- even if you need to call secure primitives. The"
+       " typical invocation is:\n"
+       "  \t`with_maxseclevel(\t`seclevel(), fn () secure_call(...))",
+       2, (value n, value f), 1, 0, "nf.x")
+{
+  callable(f, 0);
+  long new_maxseclev = GETINT(n);
+  if (new_maxseclev < MIN_SECLEVEL
+      || new_maxseclev > MAX_SECLEVEL)
+    runtime_error(error_bad_value);
+  if (new_maxseclev > get_seclevel())
+    runtime_error(error_security_violation);
+
+  value old_maxseclev = maxseclevel;
+  maxseclevel = n;
+  value r = call0(f);
+  maxseclevel = old_maxseclev;
+
+  return r;
 }
 
 TYPEDOP(setjmp, 0,
@@ -511,19 +540,19 @@ UNSAFETOP(session, 0, "`f -> . Calls `f() in it's own session and return its"
           " result.\n"
           "A session has its own recursion and loop limits; cf. `loop_count.\n"
           "If `f() causes an error, return null.",
-          1, (struct closure *fn), 0, "f.x")
+          1, (struct closure *fn), OP_APPLY, "f.x")
 {
-  struct session_context newc;
-  value aresult;
-
   callable(fn, 0);
+
+  struct session_context newc;
   session_start(&newc,
                 &(const struct session_info){
-                  .minlevel = minlevel,
-                  .muser    = muduser,
-                  .mout     = mudout,
-                  .merr     = muderr });
-  aresult = mcatch_call0(NULL, fn);
+                  .minlevel    = minlevel,
+                  .maxseclevel = intval(maxseclevel),
+                  .muser       = muduser,
+                  .mout        = mudout,
+                  .merr        = muderr });
+  value aresult = mcatch_call0(NULL, fn);
   session_end();
 
   return aresult;
@@ -612,7 +641,10 @@ TYPEDOP(dereference, 0, "`r -> `x. Return the value of the reference `r.",
         {
           long idx = intval(v);
           if (idx >= 0 && idx < intval(environment->used))
-            return GVAR(idx);
+            {
+              check_global_read(idx);
+              return GVAR(idx);
+            }
         }
       else if (pointerp(v))
         switch (r->data[0]->type)
@@ -655,8 +687,7 @@ TYPEDOP(set_ref, "set_ref!", "`r `x -> `x. Set the value of the reference"
         {
           long idx = intval(v);
           assert(idx >= 0 && idx < intval(environment->used));
-          if (GCONSTANT(idx))
-            runtime_error(error_variable_read_only);
+          check_global_write(idx);
           return GVAR(idx) = val;
         }
       else if (pointerp(v))
@@ -736,10 +767,9 @@ TYPEDOP(make_variable_ref, 0, "`n|`v -> `r. Return a reference to global"
 }
 
 TYPEDOP(make_custom_ref, 0, "`x0 `v -> `r. Returns a custom reference."
-        " `v must be a sequence(`desc, `deref, `setref) of functions that"
-        " defines what the reference does:\n"
-        "  `desc   \t`x0 -> `s. Return a description of the reference."
-        " An ampersand (&) is automatically prepended.\n"
+        " `v must be a sequence(`desc, `deref, `setref) that"
+        " defines the reference:\n"
+        "  `desc   \tA readonly string that describes the reference."
         "  `deref  \t`x0 -> `x1. Dereference the reference and return its"
         " value.\n"
         "  `setref \t`x0 `x1 -> `x2. Set the reference's value to `x1 and"
@@ -749,7 +779,9 @@ TYPEDOP(make_custom_ref, 0, "`x0 `v -> `r. Returns a custom reference."
   TYPEIS(fns, type_vector);
   if (vector_len(fns) != 3 || !readonlyp(fns))
     runtime_error(error_bad_value);
-  callable(fns->data[0], 1);
+  TYPEIS(fns->data[0], type_string);
+  if (!readonlyp(fns->data[0]))
+    runtime_error(error_bad_value);
   callable(fns->data[1], 1);
   callable(fns->data[2], 2);
 
@@ -1027,9 +1059,9 @@ TYPEDOP(rprotect, 0, "`x -> `x. Recursively (for pairs, vectors, symbols, and"
   return x;
 }
 
-UNSAFEOP(detect_immutability, 0, " -> . Detects immutable values.",
-	 0, (void),
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(detect_immutability, 0, " -> . Detects immutable values.",
+          0, (void),
+          OP_LEAF | OP_NOESCAPE, ".")
 {
   detect_immutability();
   undefined();
@@ -1051,16 +1083,19 @@ TYPEDOP(typeof, 0, "`x -> `n. Return type of `x",
   return makeint(TYPEOF(x));
 }
 
-TYPEDOP(seclevel, 0, " -> `n. Returns the current value of the global seclevel"
-        " variable.\n"
-        "All function calls from inside closures except those to regular"
-        " (non-secure and non-vararg) primitives set seclevel.\n"
-        "Use `with_minlevel() and `minlevel() if you need to write secure"
-        " functions in mudlle.",
-        0, (void),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
+SECTOP(seclevel, 0, " -> `n. Returns the current value of the global seclevel"
+       " variable.\n"
+       "When called directly from a closure, this returns that closure's"
+       " `function_seclevel().\n"
+       "All function calls from inside closures except those to regular"
+       " (non-secure and non-vararg) primitives set seclevel.\n"
+       "Use `with_minlevel() and `minlevel() if you need to write secure"
+       " functions in mudlle.\n"
+       " Cf. `effective_seclevel().",
+       0, (void),
+       1, OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
-  return makeint(internal_seclevel);
+  return makeint(get_seclevel());
 }
 
 TYPEDOP(minlevel, 0, " -> `n. Returns the minimum security level of the"
@@ -1071,11 +1106,11 @@ TYPEDOP(minlevel, 0, " -> `n. Returns the minimum security level of the"
   return makeint(minlevel);
 }
 
-UNSAFEOP(unlimited_execution, 0, " -> . Disables recursion and loop limits in"
-         " the current session; cf. `session() and `loop_count().\n"
-         "There is still a limit on the maximum amount of stack space"
-         " that can be used.",
-         0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE)
+UNSAFETOP(unlimited_execution, 0, " -> . Disables recursion and loop limits in"
+          " the current session; cf. `session() and `loop_count().\n"
+          "There is still a limit on the maximum amount of stack space"
+          " that can be used.",
+          0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".")
 {
   unlimited_execution();
   undefined();
@@ -1111,10 +1146,14 @@ void basic_init(void)
   DEFINE(may_callp);
 
   DEFINE(error);
+  DEFINE(warning);
   DEFINE(catch_error);
   DEFINE(handle_error);
   DEFINE(trap_error);
   DEFINE(with_minlevel);
+  DEFINE(with_maxseclevel);
+
+  system_write("SECLEVEL_GLOBALS",    makeint(SECLEVEL_GLOBALS));
 
   system_define("call_trace_off",     makeint(call_trace_off));
   system_define("call_trace_barrier", makeint(call_trace_barrier));
@@ -1129,7 +1168,6 @@ void basic_init(void)
 
   DEFINE(session);
   DEFINE(apply);
-  DEFINE(apply_stack_entry);
   DEFINE(eval);
 
   DEFINE(call_trace);
@@ -1166,8 +1204,11 @@ void basic_init(void)
   DEFINE(set_ref);
 
   DEFINE(unlimited_execution);
+
   DEFINE(seclevel);
   DEFINE(minlevel);
+  DEFINE(maxseclevel);
+  DEFINE(effective_seclevel);
 
 #ifdef ALLOC_STATS
   DEFINE(closure_alloc_stats);

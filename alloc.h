@@ -53,7 +53,7 @@ static inline void gccheck_debug(value x)
   if (!pointerp(x))
     return;
   struct obj *o = x;
-  assert(o->generation == o->generation & 1 ? minorgen : majorgen);
+  assert(o->generation == ((o->generation & 1) ? minorgen : majorgen));
 }
 #define GCCHECK(x) gccheck_debug(x)
 #else  /* ! GCDEBUG_CHECK */
@@ -202,13 +202,17 @@ struct vector *get_staticpro_data(void);
 #define INCREASE_A 14
 #define INCREASE_B 10
 
+#define ASSERT_NOALLOC_START() ubyte *__old_posgen0 = posgen0
+#define ASSERT_NOALLOC_END()   assert(__old_posgen0 == posgen0)
+
 struct grecord *allocate_record(mtype type, ulong entries);
 
 /* Do not call this function if you don't understand how the gc works !! */
 struct grecord *unsafe_allocate_record(mtype type, ulong entries);
 
+struct primitive *allocate_primitive(const struct primitive_ext *op);
+
 struct gstring *allocate_string(mtype type, ulong bytes);
-struct gpermanent *allocate_permanent(mtype type, ulong nb, void *ext);
 struct gtemp *allocate_temp(mtype type, void *ext);
 struct vector *allocate_locals(ulong n);
 /* Effect: Allocate a vector of local variables in an optimised fashion.
@@ -222,7 +226,7 @@ value gc_allocate(long n);
    Returns: Pointer to allocated area
 */
 
-int check_immutable(struct obj *obj);
+bool check_immutable(struct obj *obj);
 void detect_immutability(void);
 /* Effects: Detects all values that can be made immutable.
      Has the same restrictions as the normal GC, ie won't handle

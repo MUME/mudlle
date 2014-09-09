@@ -23,9 +23,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "alloc.h"
 #include "calloc.h"
 #include "compile.h"
 #include "mudlle.h"
+#include "print.h"
+#include "strbuf.h"
 #include "tree.h"
 #include "types.h"
 #include "utils.h"
@@ -61,6 +64,11 @@
   matchnode tmatchnode;
   matchnodelist tmatchnodelist;
   enum builtin_op bop;
+  struct {
+    enum file_class fclass;
+    char *name;
+    vlist defines, imports;
+  } tmodule_head;
 }
 
 %locations
@@ -117,6 +125,7 @@
 %token MODULE         "module"
 %token READS          "reads"
 %token WRITES         "writes"
+%token STATIC         "static"
 
 %token BIGINT         "bigint constant"
 %token FLOAT          "floating-point constant"
@@ -146,7 +155,7 @@
 %type <tcomponent> control_expression opt_match_condition optional_expression
 %type <tcomponent> if while optional_else
 %type <tvlist> variable_list plist plist1 optional_variable_list
-%type <tvlist> imports defines reads writes
+%type <tvlist> imports defines reads writes statics
 %type <tparameters> parameters
 %type <tmtype> type
 %type <tmtypeset> opt_typeset typeset typelist
@@ -156,12 +165,13 @@
 %type <integer> INTEGER
 %type <mudlle_float> FLOAT
 %type <bigint_str> BIGINT
-%type <tconstant> constant unary_constant simple_constant
+%type <tconstant> constant unary_constant simple_constant constant_expr
 %type <tconstant> optional_constant_tail table_entry string_constant
 %type <tblock> code_block optional_implicit_code_block
 %type <tfunction> function_expression
 %type <tcstlist> constant_list optional_constant_list table_entry_list
-%type <tfile> entry_types simple module library
+%type <tfile> entry_types simple module
+%type <tmodule_head> module_head;
 %type <tpattern> pattern pattern_list pattern_array pattern_atom
 %type <tpattern> opt_pattern_list_tail pattern_atom_expr
 %type <tpatternlist> opt_pattern_sequence pattern_sequence
@@ -270,24 +280,14 @@ static component make_unary(unsigned int op, int lineno, component arg)
   return new_component(parser_memory, lineno, c_builtin, op, 1, arg);
 }
 
-void parser_init(void)
-{
-}
-
-static block_t line_memory;
-
-int yyparse();
+int yyparse(void);
 
 mfile parse(block_t heap)
 {
-  int result;
-
   parser_memory = heap;
-  line_memory = new_block();
   erred = false;
-  result = yyparse();
-  free_block(line_memory);
-  line_memory = parser_memory = NULL;
+  int result = yyparse();
+  parser_memory = NULL;
 
   return result == 0 && !erred ? parsed_code : NULL;
 }
@@ -318,22 +318,31 @@ start : entry_types { parsed_code = $1; } ;
 
 entry_types :
   simple |
-  library |
   module ;
 
 simple : expression_list
- { $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL,
+{ $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, NULL,
 		 new_codeblock(parser_memory, NULL, $1, lexer_filename,
                                lexer_nicename, -1),
                  @1.first_line); } ;
 
-module : MODULE optional_symbol imports reads writes code_block optional_semi
-  { $$ = new_file(parser_memory, f_module, $2, $3, NULL, $4, $5, $6,
-                  @6.first_line); } ;
+module : module_head reads writes statics code_block optional_semi
+  { $$ = new_file(parser_memory, $1.fclass, $1.name, $1.imports, $1.defines,
+                  $2, $3, $4, $5, @5.first_line); } ;
 
-library : LIBRARY SYMBOL imports defines reads writes code_block optional_semi
-  { $$ = new_file(parser_memory, f_library, $2, $3, $4, $5, $6, $7,
-                  @7.first_line); } ;
+module_head:
+  MODULE optional_symbol imports {
+    $$.fclass = f_module;
+    $$.name = $2;
+    $$.imports = $3;
+    $$.defines = NULL;
+  } |
+  LIBRARY SYMBOL imports defines {
+    $$.fclass = f_library;
+    $$.name = $2;
+    $$.imports = $3;
+    $$.defines = $4;
+  };
 
 optional_symbol :
   SYMBOL |
@@ -352,6 +361,10 @@ reads :
 
 writes :
   WRITES variable_list { $$ = $2; } |
+  /* empty */ { $$ = NULL; } ;
+
+statics :
+  STATIC variable_list { $$ = $2; } |
   /* empty */ { $$ = NULL; } ;
 
 expression_list :
@@ -495,7 +508,7 @@ optional_help :
 
 help :
   help '+' STRING {
-  $$.len = $1.len + $3.len;
+    $$.len = $1.len + $3.len;
     $$.str = allocate(parser_memory, $$.len + 1);
     memcpy($$.str, $1.str, $1.len);
     memcpy($$.str + $1.len, $3.str, $3.len + 1);
@@ -673,15 +686,19 @@ unary_constant :
   '-' FLOAT { $$ = new_constant(parser_memory, cst_float, -$2); } |
   simple_constant;
 
-constant:
+constant :
   unary_constant |
-  '{' table_entry_list '}' { $$ = new_constant(parser_memory, cst_table, $2); } |
+  '{' table_entry_list '}' {
+    $$ = new_constant(parser_memory, cst_table, $2); } |
   '{' '}' { $$ = new_constant(parser_memory, cst_table, NULL); } |
-  '[' optional_constant_list ']' { $$ = new_constant(parser_memory, cst_array, $2); } |
+  '[' optional_constant_list ']' {
+    $$ = new_constant(parser_memory, cst_array, $2); } |
   '(' constant_list optional_constant_tail ')' {
-    $$ = new_constant(parser_memory, cst_list, new_cstlist(parser_memory, $3, $2));
+    $$ = new_constant(parser_memory, cst_list,
+                      new_cstlist(parser_memory, $3, $2));
   } |
-  '(' ')' { $$ = new_constant(parser_memory, cst_list, NULL); } ;
+  '(' ')' { $$ = new_constant(parser_memory, cst_list, NULL); } |
+  ',' constant_expr  { $$ = $2; } ;
 
 optional_constant_tail :
   /* empty */ { $$ = NULL; } |
@@ -702,22 +719,42 @@ optional_constant_list :
 
 constant_list :
   constant { $$ = new_cstlist(parser_memory, $1, NULL); } |
-  constant_list constant { $$ = new_cstlist(parser_memory, $2, $1); } |
-  constant ',' {
-    yyerror("there should be no commas between constant elements");
-    YYABORT;
+  constant_list constant { $$ = new_cstlist(parser_memory, $2, $1); } ;
+
+constant_expr :
+  variable {
+    $$ = new_constant(parser_memory, cst_expression,
+                      new_component(parser_memory, @1.first_line,
+                                    c_recall, $1));
+  } |
+  '(' expression ')' {
+    $$ = new_constant(parser_memory, cst_expression, $2);
   } ;
 
 table_entry_list :
   table_entry { $$ = new_cstlist(parser_memory, $1, NULL); } |
   table_entry_list table_entry {
-    str_and_len_t *sym = &$2->u.constpair->cst1->u.string;
-    str_and_len_t *conflict = cstlist_find_symbol($1, *sym);
-    if (conflict)
+    if ($2->vclass != cst_expression)
       {
-	compile_error("table entry '%s' conflicts with entry '%s'",
-		      sym->str, conflict->str);
-	YYABORT;
+        str_and_len_t *sym = &$2->u.constpair->cst1->u.string;
+        str_and_len_t *conflict = cstlist_find_symbol($1, *sym);
+        if (conflict)
+          {
+            strbuf_t sb0 = SBNULL, sb1 = SBNULL;
+            struct string *mstr = alloc_string_length(sym->str, sym->len);
+            GCPRO1(mstr);
+            struct oport *sport = make_strbuf_oport(&sb0);
+            output_value(sport, prt_write, false, mstr);
+            mstr = alloc_string_length(conflict->str, conflict->len);
+            sport = make_strbuf_oport(&sb1);
+            output_value(sport, prt_write, false, mstr);
+            UNGCPRO();
+            compile_error("table entry %s conflicts with entry %s",
+                          sb_str(&sb0), sb_str(&sb1));
+            sb_free(&sb0);
+            sb_free(&sb1);
+            YYABORT;
+          }
       }
     $$ = new_cstlist(parser_memory, $2, $1);
   } ;
@@ -726,6 +763,10 @@ table_entry :
   string_constant ASSIGN constant {
     $$ = new_constant(parser_memory, cst_symbol,
 		      new_cstpair(parser_memory, $1, $3));
+  } |
+  ',' constant_expr ASSIGN constant {
+    $$ = new_constant(parser_memory, cst_symbol,
+		      new_cstpair(parser_memory, $2, $4));
   } ;
 
 pattern :
@@ -737,7 +778,8 @@ pattern_atom :
   variable {
     $$ = new_pattern_symbol(parser_memory, $1, stype_any, @1.first_line);
   } |
-  unary_constant { $$ = new_pattern_constant(parser_memory, $1); } |
+  unary_constant { $$ = new_pattern_constant(parser_memory, $1,
+                                             @1.first_line); } |
   ',' pattern_atom_expr { $$ = $2; } ;
 
 pattern_atom_expr :
@@ -763,16 +805,20 @@ opt_pattern_list_tail :
 pattern_list :
   '(' pattern_sequence opt_pattern_list_tail ')' {
     $$ = new_pattern_compound(parser_memory, pat_list,
-			      new_pattern_list(parser_memory, $3, $2), false);
+			      new_pattern_list(parser_memory, $3, $2), false,
+                              @1.first_line);
   } |
-  '(' ')' { $$ = new_pattern_compound(parser_memory, pat_list, NULL, false); } ;
+  '(' ')' { $$ = new_pattern_compound(parser_memory, pat_list, NULL, false,
+                                      @1.first_line); } ;
 
 pattern_array :
   '[' opt_pattern_sequence ELLIPSIS ']' {
-    $$ = new_pattern_compound(parser_memory, pat_array, $2, true);
+    $$ = new_pattern_compound(parser_memory, pat_array, $2, true,
+                              @1.first_line);
   } |
   '[' opt_pattern_sequence ']' {
-    $$ = new_pattern_compound(parser_memory, pat_array, $2, false);
+    $$ = new_pattern_compound(parser_memory, pat_array, $2, false,
+                              @1.first_line);
   } ;
 
 variable :

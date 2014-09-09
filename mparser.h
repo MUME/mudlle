@@ -25,6 +25,5 @@
 #include "tree.h"
 
 mfile parse(block_t heap);
-void parser_init(void);
 
 #endif /* MPARSER_H */
