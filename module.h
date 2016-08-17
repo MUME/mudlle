@@ -24,6 +24,8 @@
 
 #include "types.h"
 
+#define MAX_MODULE_NAME_LENGHT 256
+
 enum module_status {
   module_unloaded, module_error, module_loading, module_loaded,
   module_protected
@@ -44,8 +46,9 @@ void module_set(const char *name, enum module_status status, int seclev);
    Effects: Sets module status after load attempt
 */
 
-int module_unload(const char *name);
-/* Effects: Removes all knowledge about module 'name' (eg prior to reloading it)
+bool module_unload(const char *name);
+/* Effects: Removes all knowledge about module 'name' (eg prior to
+     reloading it)
      module_status(name) will return module_unloaded if this operation is
      successful
      Sets to null all variables that belonged to name, and resets their status
@@ -53,7 +56,7 @@ int module_unload(const char *name);
    Returns: false if name was protected
 */
 
-int module_load(const char *name);
+enum module_status module_load(const char *name);
 /* Effects: Attempts to load module name by calling mudlle hook
      Error/warning messages are sent to muderr
      Sets erred to true in case of error
@@ -63,7 +66,7 @@ int module_load(const char *name);
    Returns: New module status
 */
 
-int module_require(const char *name);
+enum module_status module_require(const char *name);
 /* Effects: Does module_load(name) if module_status(name) == module_unloaded
      Other effects as in module_load
 */

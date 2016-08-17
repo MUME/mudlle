@@ -24,7 +24,7 @@
 
 #include <limits.h>
 
-#include "types.h"
+#include "env.h"
 
 /* Definition of generated code */
 
@@ -37,11 +37,11 @@
    arg1 means a byte argument.
    arg2 means a 2 byte argument (big-endian format). */
 
-typedef ubyte instruction;
+#define DEF_VCLASS_OP(prefix, name)				\
+  op_ ## prefix ## _ ## name = op_ ## prefix + vclass_ ## name
+#define VCLASS_OPS(prefix) op_ ## prefix, FOR_VCLASS(DEF_VCLASS_OP, prefix)
 
-typedef enum { local_var, closure_var, global_var } variable_class;
-
-enum {
+enum operator {
   /* Simple operations */
   op_return,			/* arg0 */
   op_constant1,			/* arg1 is offset in code's constants */
@@ -79,19 +79,17 @@ enum {
   op_branch_z2,			/* arg2 is signed offset from next instr */
 
   op_clear_local,		/* arg1 is # of local var to set to null */
-  /* variable operations, which come in local_var, closure_var,
-     global_var flavours, and take an arg1 (local, closure) or arg2
+  /* variable operations, which come in vclass_local, vclass_closure,
+     vclass_global flavours, and take an arg1 (local, closure) or arg2
      (global) indicating the offset in the corresponding variable
      list */
-  op_recall,
-  op_assign = op_recall + global_var + 1,
-				/* arg2 is # of global variable */
-  op_vref =  op_assign + global_var + 1,
+  VCLASS_OPS(recall),
+  VCLASS_OPS(assign),
+  VCLASS_OPS(vref),
 
-  op_closure_var = op_vref + global_var + 1,
-  /* Note: No global vars in closures ... */
+  VCLASS_OPS(closure_var),  /* n.b., closure_var have no globals */
 
-  op_define = op_closure_var + closure_var + 1,
+  op_define,
 
   /* Builtin operations (very common) */
   op_builtin_eq,
@@ -112,8 +110,21 @@ enum {
                                    integer) and make sure variable indicated by
                                    arg1 is of a type therein. */
 
-  op_typecheck			/* typecheck i: op_typecheck + i
+  op_typecheck,			/* typecheck i: op_typecheck + i
 				   arg1 is stack offset */
+
+#define DEF_TYPECHECK_OP(arg, name)				\
+  op_typecheck_ ## name = op_typecheck + type_ ## name,
+#define DEF_STYPECHECK_OP(arg, name)				\
+  op_typecheck_ ## name = op_typecheck + stype_ ## name,
+
+  FOR_PLAIN_TYPES(DEF_TYPECHECK_OP,)
+  FOR_SYNTHETIC_TYPES(DEF_STYPECHECK_OP,)
+
+#undef DEF_TYPECHECK_OP
+#undef DEF_STYPECHECK_OP
+
+  op_last = op_typecheck
 };
 
 /* Max size of unsigned arg1 */

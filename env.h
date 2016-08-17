@@ -22,18 +22,24 @@
 #ifndef ENV_H
 #define ENV_H
 
-#include "tree.h"
-#include "ins.h"
+#include "mudlle.h"
+#include "types.h"
 
-/* if you change this, make sure to fix the lexer too */
-#define GLOBAL_ENV_PREFIX ":"
+struct fncode;
+struct vlist;
 
-typedef struct _varlist
+#define FOR_VCLASS(op, arg) op(arg, local), op(arg, closure), op(arg, global)
+
+#define DEF_VCLASS(arg, name) vclass_ ## name
+enum variable_class { FOR_VCLASS(DEF_VCLASS, ) };
+#undef DEF_VCLASS
+
+struct variable_list
 {
-  struct _varlist *next;
-  variable_class vclass;
+  struct variable_list *next;
+  enum variable_class vclass;
   ulong offset;
-} *varlist;
+};
 
 void env_reset(void);
 /* Effects: Clears the environment stack
@@ -45,12 +51,12 @@ void env_start_loop(void);
 void env_end_loop(void);
 /* Effects: Signal end of a loop. */
 
-void env_push(vlist locals, fncode fn);
+void env_push(struct vlist *locals, struct fncode *fn);
 /* Effects: Starts a new environment (for a new function), with local
      variables 'locals' in function 'fn'.
 */
 
-void env_block_push(vlist locals, bool statics);
+void env_block_push(struct vlist *locals, bool statics);
 /* Effects: We have entered a local scope of the environment at the top
      of the stack. Add locals to the list of variables for this scope,
      and initialise them to null if necessary.
@@ -60,14 +66,14 @@ void env_block_pop(void);
 /* Effects: Pop a local scope
 */
 
-varlist env_pop(uword *nb_locals);
+struct variable_list *env_pop(uword *nb_locals);
 /* Effects: Pop an environement, returning the variables that it needs
      it it's closure as well as the number of local variables it uses.
 */
 
-variable_class env_lookup(const char *name, ulong *offset,
-			  bool do_read, bool do_write,
-                          bool *is_static);
+enum variable_class env_lookup(const char *name, ulong *offset,
+                               bool do_read, bool do_write,
+                               bool *is_static);
 /* Effects: Returns the class & offset of variable name for the current
      environment. Modifies the closures appropriately. Marks local variables
      as read/written according to do_read/do_write

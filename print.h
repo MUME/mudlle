@@ -26,14 +26,16 @@
 
 struct strbuf;
 
-enum prt_level { prt_display, prt_write, prt_examine };
+enum prt_level { prt_display, prt_write, prt_examine, prt_constant };
 
-void output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
+bool output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
                       value v, size_t maxlen);
 void output_value(struct oport *f, enum prt_level level, bool no_quote,
                   value v);
 void print_init(void);
 
 void describe_fn(struct strbuf *sb, value v);
+
+void sb_write_string(struct strbuf *sb, const char *str, size_t len);
 
 #endif

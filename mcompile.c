@@ -23,28 +23,32 @@
 #include <stdlib.h>
 
 #include "alloc.h"
+#include "calloc.h"
+#include "code.h"
 #include "global.h"
 #include "ins.h"
 #include "lexer.h"
 #include "mcompile.h"
 #include "module.h"
+#include "mvalues.h"
 #include "strbuf.h"
 #include "tree.h"
 #include "utils.h"
 
 
 /* A list of global variable indexes */
-typedef struct _glist {
-  struct _glist *next;
+struct glist {
+  struct glist *next;
   ulong n;
   bool used;
   int lineno;
-} *glist;
+};
 
-static glist new_glist(block_t heap, ulong n, int lineno, glist next)
+static struct glist *new_glist(struct alloc_block *heap, ulong n, int lineno,
+                               struct glist *next)
 {
-  glist newp = allocate(heap, sizeof *newp);
-  *newp = (struct _glist){
+  struct glist *newp = allocate(heap, sizeof *newp);
+  *newp = (struct glist){
     .next = next,
     .n = n,
     .used = false,
@@ -54,7 +58,7 @@ static glist new_glist(block_t heap, ulong n, int lineno, glist next)
   return newp;
 }
 
-static bool in_glist(ulong n, glist l, bool do_mark)
+static bool in_glist(ulong n, struct glist *l, bool do_mark)
 {
   for (; l; l = l->next)
     if (n == l->n)
@@ -67,27 +71,28 @@ static bool in_glist(ulong n, glist l, bool do_mark)
   return false;
 }
 
-static glist readable;
+static struct glist *readable;
 static bool all_readable;
-static glist writable;
+static struct glist *writable;
 static bool all_writable;
-static glist definable;
+static struct glist *definable;
 static struct string *this_module;
 
 /* A list of imported modules */
-typedef struct _mlist {
-  struct _mlist *next;
+struct mlist {
+  struct mlist *next;
   const char *name;
-  int status;
+  enum module_status status;
   bool used;
-} *mlist;
+};
 
-static mlist imported_modules;
+static struct mlist *imported_modules;
 
-static mlist new_mlist(block_t heap, const char *name, int status, mlist next)
+static struct mlist *new_mlist(struct alloc_block *heap, const char *name,
+                               enum module_status status, struct mlist *next)
 {
-  mlist newp = allocate(heap, sizeof *newp);
-  *newp = (struct _mlist){
+  struct mlist *newp = allocate(heap, sizeof *newp);
+  *newp = (struct mlist){
     .next   = next,
     .name   = name,
     .status = status,
@@ -97,12 +102,12 @@ static mlist new_mlist(block_t heap, const char *name, int status, mlist next)
   return newp;
 }
 
-static int imported(const char *name, int do_mark)
+static enum module_status imported(const char *name, int do_mark)
 /* Returns: status of name in imported_modules, module_unloaded if absent
 */
 {
-  for (mlist mods = imported_modules; mods; mods = mods->next)
-    if (stricmp(mods->name, name) == 0)
+  for (struct mlist *mods = imported_modules; mods; mods = mods->next)
+    if (strcasecmp(mods->name, name) == 0)
       {
 	if (do_mark)
 	  mods->used = 1;
@@ -112,9 +117,9 @@ static int imported(const char *name, int do_mark)
   return module_unloaded;
 }
 
-static mfile current_mfile;
+static struct mfile *current_mfile;
 
-int mstart(block_t heap, mfile f, int seclev)
+bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -129,13 +134,13 @@ int mstart(block_t heap, mfile f, int seclev)
 
   erred = false;
 
-  mlist lmodules = NULL;
+  struct mlist *lmodules = NULL;
 
   yylineno = 0;
   if (f->name)
     {
-      if (module_status(f->name) == module_loaded &&
-	  module_seclevel(f->name) > seclev)
+      if (module_status(f->name) == module_loaded
+          && module_seclevel(f->name) > seclev)
 	return false;
 
       if (!module_unload(f->name))
@@ -145,9 +150,9 @@ int mstart(block_t heap, mfile f, int seclev)
     }
 
   /* Load all modules */
-  for (vlist mods = f->imports; mods; mods = mods->next)
+  for (struct vlist *mods = f->requires; mods; mods = mods->next)
     {
-      int mstatus = module_require(mods->var);
+      enum module_status mstatus = module_require(mods->var);
 
       if (mstatus < module_loaded)
 	{
@@ -172,13 +177,13 @@ int mstart(block_t heap, mfile f, int seclev)
   imported_modules = lmodules;
 
   /* Change status of variables */
-  for (vlist defines = f->defines; defines; defines = defines->next)
+  for (struct vlist *defines = f->defines; defines; defines = defines->next)
     {
       yylineno = defines->lineno;
 
       ulong n = global_lookup(defines->var);
       struct string *omod;
-      int ostatus = module_vstatus(n, &omod);
+      enum vstatus ostatus = module_vstatus(n, &omod);
 
       if (ostatus == var_system_write)
         log_error("cannot define %s: cannot be written from mudlle",
@@ -195,7 +200,7 @@ int mstart(block_t heap, mfile f, int seclev)
       definable = new_glist(heap, n, defines->lineno, definable);
     }
 
-  for (vlist writes = f->writes; writes; writes = writes->next)
+  for (struct vlist *writes = f->writes; writes; writes = writes->next)
     {
       yylineno = writes->lineno;
 
@@ -231,7 +236,7 @@ int mstart(block_t heap, mfile f, int seclev)
       writable = new_glist(heap, n, f->lineno, writable);
     }
 
-  for (vlist reads = f->reads; reads; reads = reads->next)
+  for (struct vlist *reads = f->reads; reads; reads = reads->next)
     {
       yylineno = reads->lineno;
 
@@ -243,7 +248,7 @@ int mstart(block_t heap, mfile f, int seclev)
       readable = new_glist(heap, n, reads->lineno, readable);
     }
 
-  for (vlist statics = f->statics; statics; statics = statics->next)
+  for (struct vlist *statics = f->statics; statics; statics = statics->next)
     {
       yylineno = statics->lineno;
 
@@ -273,13 +278,13 @@ int mstart(block_t heap, mfile f, int seclev)
   return false;
 }
 
-void mstop(mfile f)
+void mstop(struct mfile *f)
 {
   assert(current_mfile == f);
   current_mfile = NULL;
 }
 
-void mrecall(ulong n, const char *name, fncode fn)
+void mrecall(ulong n, const char *name, struct fncode *fn)
 /* Effects: Generate code to recall variable n
 */
 {
@@ -312,10 +317,10 @@ void mrecall(ulong n, const char *name, fncode fn)
   else if (!all_readable)
     log_error("read of global %s", name);
 
-   ins2(op_recall + global_var, n, fn);
+   ins2(op_recall + vclass_global, n, fn);
 }
 
-void mexecute(ulong n, const char *name, int count, fncode fn)
+void mexecute(ulong n, const char *name, int count, struct fncode *fn)
 /* Effects: Generates code to call function in variable n, with count
      arguments
 */
@@ -354,7 +359,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
               else
                 {
                   /* Could merge, but can't be bothered... */
-                  ins2(op_recall + global_var, n, fn);
+                  ins2(op_recall + vclass_global, n, fn);
                   ins1(op_execute_primitive, count, fn);
                 }
               return;
@@ -363,7 +368,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
           if (TYPE(gvar, type_secure))
             {
               /* Could merge, but can't be bothered... */
-              ins2(op_recall + global_var, n, fn);
+              ins2(op_recall + vclass_global, n, fn);
               ins1(op_execute_secure, count, fn);
               return;
             }
@@ -371,7 +376,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
           if (TYPE(gvar, type_varargs))
             {
               /* Could merge, but can't be bothered... */
-              ins2(op_recall + global_var, n, fn);
+              ins2(op_recall + vclass_global, n, fn);
               ins1(op_execute_varargs, count, fn);
               return;
             }
@@ -390,7 +395,7 @@ void mexecute(ulong n, const char *name, int count, fncode fn)
   else
     {
       /* Could have an op_execute_global */
-      ins2(op_recall + global_var, n, fn);
+      ins2(op_recall + vclass_global, n, fn);
       ins1(op_execute, count, fn);
     }
 }
@@ -410,14 +415,14 @@ bool mwritable(ulong n, const char *name)
   return false;
 }
 
-void massign(ulong n, const char *name, fncode fn)
+void massign(ulong n, const char *name, struct fncode *fn)
 /* Effects: Generate code to assign to variable n
 */
 {
   assert(current_mfile != NULL);
 
   struct string *mod;
-  int status = module_vstatus(n, &mod);
+  enum vstatus status = module_vstatus(n, &mod);
 
   if (status == var_module)
     if (mod == this_module && fntoplevel(fn))
@@ -431,20 +436,20 @@ void massign(ulong n, const char *name, fncode fn)
     else
       log_error("write of global %s (module %s)", name, mod->str);
   else if (mwritable(n, name))
-    ins2(op_assign + global_var, n, fn);
+    ins2(op_assign + vclass_global, n, fn);
 }
 
-void mwarn_module(int seclev, block b)
+void mwarn_module(int seclev, struct block *b)
 {
   assert(current_mfile != NULL);
 
-  for (mlist ml = imported_modules; ml; ml = ml->next)
+  for (struct mlist *ml = imported_modules; ml; ml = ml->next)
     if (!ml->used)
       warning_line(b->filename, b->nicename, 0,
                    "symbols from required module %s were never used",
                    ml->name);
 
-  for (glist gl = readable; gl; gl = gl->next)
+  for (struct glist *gl = readable; gl; gl = gl->next)
     {
       if (!gl->used)
         warning_line(b->filename, b->nicename, gl->lineno,
@@ -454,7 +459,7 @@ void mwarn_module(int seclev, block b)
       if (module_vstatus(gl->n, &belongs) == var_module)
         {
           int mlev = module_seclevel(belongs->str);
-          strbuf_t sblev = SBNULL;
+          struct strbuf sblev = SBNULL;
           if (mlev < seclev)
             {
                 sb_printf(&sblev, " (lvl %d)", mlev);
@@ -467,13 +472,13 @@ void mwarn_module(int seclev, block b)
         }
     }
 
-  for (glist gl = writable; gl; gl = gl->next)
+  for (struct glist *gl = writable; gl; gl = gl->next)
     if (!gl->used)
       warning_line(b->filename, b->nicename, gl->lineno,
                    "writable global %s was never written",
                    GNAME(gl->n)->str);
 
-  for (glist gl = definable; gl; gl = gl->next)
+  for (struct glist *gl = definable; gl; gl = gl->next)
     if (!gl->used)
       warning_line(b->filename, b->nicename, gl->lineno,
                    "definable variable %s was never defined",

@@ -23,15 +23,16 @@
 #define ALLOC_H
 
 #include <stdlib.h>
-#include "valuelist.h"
+
+#include "types.h"
 
 #undef ALLOC_STATS
 
 #ifdef ALLOC_STATS
-struct vector *get_closure_alloc_stats(void);
+struct vector *get_alloc_stats(void);
+void record_allocation(enum mudlle_type type, long size);
 #endif
 
-void garbage_cleanup(void);
 void garbage_init(void);
 
 /* The GC block */
@@ -53,7 +54,10 @@ static inline void gccheck_debug(value x)
   if (!pointerp(x))
     return;
   struct obj *o = x;
-  assert(o->generation == ((o->generation & 1) ? minorgen : majorgen));
+  if (o->garbage_type == garbage_static_string)
+    assert(o->generation == 0);
+  else
+    assert(o->generation == ((o->generation & 1) ? minorgen : majorgen));
 }
 #define GCCHECK(x) gccheck_debug(x)
 #else  /* ! GCDEBUG_CHECK */
@@ -134,24 +138,6 @@ struct gcpro {
 #define UNGCPRO()    ((void)(gcpro = gcpros[0].next))
 #define UNGCPRO1(gc) ((void)(gcpro = (gc).next))
 
-extern struct gcpro_list *gcpro_list; /* values which need protection */
-
-struct gcpro_list
-{
-    struct gcpro_list *next;
-    valuelist *cl;
-};
-
-#define PUSH_LIST(var) do { var.next = gcpro_list; \
-			    gcpro_list = &var; } while(0)
-
-#define POP_LIST(var) (gcpro_list = var.next)
-
-#define GCPRO_LIST1(var) do { PUSH_LIST(gcpro_list1); \
-			      gcpro_list1.cl = &var; } while(0)
-
-#define UNGCPRO_LIST() POP_LIST(gcpro_list1)
-
 /* Protection for dynamically allocated variables, that may be freed */
 struct dynpro
 {
@@ -163,6 +149,10 @@ void dynpro(struct dynpro *what, value obj);
 void undynpro(struct dynpro *what);
 struct dynpro *protect(value v);
 value unprotect(struct dynpro *pro);
+
+/* dynpro() if staticp() */
+void maybe_dynpro(struct dynpro *what, value obj);
+void maybe_undynpro(struct dynpro *what);
 
 /* Protection of global variables */
 void _staticpro(void *pro, const char *desc, const char *file, int line);
@@ -203,17 +193,19 @@ struct vector *get_staticpro_data(void);
 #define INCREASE_B 10
 
 #define ASSERT_NOALLOC_START() ubyte *__old_posgen0 = posgen0
-#define ASSERT_NOALLOC_END()   assert(__old_posgen0 == posgen0)
+#define ASSERT_NOALLOC()       assert(__old_posgen0 == posgen0)
 
-struct grecord *allocate_record(mtype type, ulong entries);
+struct grecord *allocate_record(enum mudlle_type type, ulong entries);
 
 /* Do not call this function if you don't understand how the gc works !! */
-struct grecord *unsafe_allocate_record(mtype type, ulong entries);
+struct grecord *unsafe_allocate_record(enum mudlle_type type, ulong entries);
+#define UNSAFE_ALLOCATE_RECORD(type, entries) \
+  ((struct type *)unsafe_allocate_record(type_ ## type, entries))
 
 struct primitive *allocate_primitive(const struct primitive_ext *op);
 
-struct gstring *allocate_string(mtype type, ulong bytes);
-struct gtemp *allocate_temp(mtype type, void *ext);
+struct gstring *allocate_string(enum mudlle_type type, ulong bytes);
+struct gtemp *allocate_temp(enum mudlle_type type, void *ext);
 struct vector *allocate_locals(ulong n);
 /* Effect: Allocate a vector of local variables in an optimised fashion.
 */
@@ -225,6 +217,8 @@ value gc_allocate(long n);
      Do not use if you don't understand the gc ...
    Returns: Pointer to allocated area
 */
+
+void gc_free(struct obj *o);
 
 bool check_immutable(struct obj *obj);
 void detect_immutability(void);
@@ -265,31 +259,40 @@ void *gc_save(value x, unsigned long *size);
      Returns NULL if x is itself not saveable.
 */
 
-value gc_load(void *_load, unsigned long size);
-#ifdef GCDEBUG
-#define gc_load_debug gc_load
-#else
-value gc_load_debug(void *_load, unsigned long size);
-/* Effects: Reloads a value saved with gc_save. <load,size> delimits
-     the zone of memory containing gc_save's results.
-     See gc_save for details.
-   Returns: The loaded value
-*/
-#endif
+value gc_load(void *_load, unsigned long size,
+              enum mudlle_data_version version);
 
 #ifdef GCSTATS
+struct gcstats_gen {
+  struct {
+    ulong nb, rwsize, rosize;
+  } types[last_type];
+};
+#define GCSTATS_GEN_NULL (struct gcstats_gen){ .types[0].nb = 0 }
+
+struct gcstats_alloc {
+  struct {
+    ulong nb, size;
+  } types[last_type];
+};
+#define GCSTATS_ALLOC_NULL (struct gcstats_alloc){ .types[0].nb = 0 }
+
 struct gcstats
 {
   ulong size, usage_minor, usage_major;
   ulong minor_count, major_count;
-  ulong g0nb[last_type], g0sizes[last_type]; /* Data in generation 0 at last GC */
-  ulong g1nb[last_type], g1sizes[last_type]; /* Data in generation 1 at last GC */
-  ulong lnb[last_type], lsizes[last_type]; /* Amount allocated till GC */
-  ulong anb[last_type], asizes[last_type]; /* Amount allocated since GC */
+  struct gcstats_gen gen[2];
+  struct gcstats_alloc l, a;    /* before GC; since GC */
 };
 
 extern struct gcstats gcstats;
-#endif
+
+static inline void gcstats_add_alloc(enum mudlle_type type, ulong size)
+{
+  gcstats.a.types[type].nb++;
+  gcstats.a.types[type].size += size;
+}
+#endif  /* GCSTATS */
 
 void dump_memory(void);
 /* Effects: Dumps GC's memory to a file for use by the profiler.
@@ -301,16 +304,11 @@ void garbage_collect(long n);
    Modifies: the world
 */
 
-#ifdef AMIGA
-void push_registers(void);
-void pop_registers(void);
-extern struct vector *activation_stack;
-extern int registers_valid;		/* true if static area is being used */
-#endif
-
 #ifdef i386
 void patch_globals_stack(value oldglobals, value newglobals);
 #endif
+
+struct mcode *find_pc_mcode(ulong pc, ulong range_start, ulong range_end);
 
 long gc_reserve(long n); /* Make sure n bytes are available,
 			    return x >= 0 if x bytes are available,

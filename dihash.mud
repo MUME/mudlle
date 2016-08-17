@@ -20,8 +20,8 @@
  */
 
 library dihash
-requires sequences
-defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
+requires misc, sequences
+defines make_dihash, dihash_ref, dihash_get, dihash_set!, dihash_resize!,
   dihash_foreach, dihash_filter!, dihash_remove!, dihash_map!,
   dihash_entries, dihash_resize, dihash_list, dihash_size,
   dihash_map, ihash_to_dihash, dihash_vector, dihash?, dihash_empty!,
@@ -134,6 +134,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 	    [
 	      if (v == null)
 		exit null;
+              assert(vector?(v)); // tell compiler return type is vector
 	      if (v[vslot_key] == key)
 		exit<function> v;
 	      v = v[vslot_next];
@@ -157,15 +158,22 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       slot
     ];
 
-  dihash_ref = fn "`d `n -> `x. Returns dihash data for index `n or null" (vector hash, int key)
+  | internal_dihash_get |
+  internal_dihash_get = fn (hash, key, x)
     [
       | e |
       e = get_entry(hash, key, false);
       if (e)
         e[vslot_data]
       else
-        null
+        x
     ];
+
+  dihash_get = fn "`d `n `x0 -> `x1. Returns dihash data for index `n or `x0 if unset. Cf. `dihash_ref()." (vector hash, int key, x)
+    internal_dihash_get(hash, key, x);
+
+  dihash_ref = fn "`d `n -> `x. Returns dihash data for index `n or null. Cf. `dihash_get()." (vector hash, int key)
+    internal_dihash_get(hash, key, null);
 
   [
     | fns |
@@ -197,15 +205,6 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
       make_custom_ref(vector(hash, key, '[0]), fns);
   ];
 
-  dihash_foreach = fn "`c `d -> . Runs `c(`n, `x) for each entry in the dihash, with key `n and value `x." (function func, vector hash)
-    vforeach(fn (v) [
-      while (v != null)
-	[
-	  func(v[vslot_key], v[vslot_data]);
-	  v = v[vslot_next];
-	];
-    ], hash[div_data]);
-
   dihash_reduce = fn "`c `x0 `d -> `x1. Returns the reduction `c(`k, `e, `x) -> `x for each element `e with key `k in dihash `d" (function func, x, vector hash)
     [
       | i, data, len |
@@ -224,6 +223,15 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 	      v = v[vslot_next]
 	    ]
 	]
+    ];
+
+  dihash_foreach = fn "`c `d -> . Runs `c(`n, `x) for each entry in the dihash, with key `n and value `x." (function func, vector hash)
+    [
+      dihash_reduce(fn (key, value, f) [
+        f(key, value);
+        f
+      ], func, hash);
+      null
     ];
 
   dihash_filter! = fn "`c `d -> `d. Filters data in dihash `d with function `c(`n, `x)" (function func, vector hash)
@@ -257,33 +265,32 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
 
   dihash_remove! = fn "`d `n -> `b. Removes entry `n from dihash `d. Returns true if the entry was found" (vector hash, int key)
     [
-      | slot, vzero, v, size |
-      size = vlength(hash[div_data]);
-      if (size)
-	[
-	  slot = abs(key) % size;
-	  vzero = vector(hash[div_data][slot]);
-	  v = vzero;
+      | slot, vzero, v, size, hdata |
+      hdata = hash[div_data];
+      size = vlength(hdata);
+      if (size == 0)
+        exit<function> false;
 
-	  loop
-	    [
-	      if (v[0] == null)
-		exit false;
-	      if (v[0][vslot_key] == key)
-		[
-                  | next |
-                  next = v[0][vslot_next];
-                  v[0][vslot_next] = false;
-		  v[0] = next;
-		  hash[div_data][slot] = vzero[0];
-		  --hash[div_used];
-		  exit true
-		];
-	      v = v[0]
-	    ];
-	]
-      else
-	false
+      slot = abs(key) % size;
+      vzero = vector(hdata[slot]);
+      v = vzero;
+
+      loop
+        [
+          | e |
+          e = v[vslot_next];
+          if (e == null)
+            exit false;
+          if (e[vslot_key] == key)
+            [
+              v[vslot_next] = e[vslot_next];
+              e[vslot_next] = false;
+              hdata[slot] = vzero[vslot_next];
+              --hash[div_used];
+              exit true
+            ];
+          v = e
+        ];
     ];
 
   dihash_empty! = fn "`d -> `d. Remove all entries from dihash `d" (vector hash)
@@ -340,12 +347,7 @@ defines make_dihash, dihash_ref, dihash_set!, dihash_resize!,
     dihash_reduce(fn (k, e, keys) k . keys, null, hash);
 
   dihash_list = list fn "`d -> `l. Returns a list of (`key . `value) of the entries in dihash `d" (vector hash)
-    [
-      | res |
-      dihash_foreach(fn (key, value) res = (key . value) . res,
-		     hash);
-      res
-    ];
+    dihash_reduce(fn (k, e, x) (k . e) . x, null, hash);
 
   dihash_vector = fn "`d -> `v. Returns a vector of (`key . `value) of the entries in dihash `d" (vector hash)
     [

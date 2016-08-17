@@ -34,7 +34,4 @@ value code_symbol_set(struct symbol *s, value val);
 
 void symbol_init(void);
 
-runtime_errors safe_table_mset(struct table *table, struct string *s,
-                               value *x);
-
 #endif /* RUNTIME_SYMBOL_H */

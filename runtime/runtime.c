@@ -19,11 +19,16 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-/* needed for REG_xxx constants for signal contexts */
-#define _GNU_SOURCE
+#ifdef linux
+  /* needed for REG_xxx constants for signal contexts */
+  #define _GNU_SOURCE
+#endif
 
-#include <stdlib.h>
+#include <errno.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "../context.h"
 #include "../module.h"
@@ -38,31 +43,19 @@
 #include "io.h"
 #include "list.h"
 #include "mudlle-float.h"
+#include "mudlle-xml.h"
 #include "pattern.h"
 #include "runtime.h"
-#include "stringops.h"
+#include "mudlle-string.h"
 #include "support.h"
 #include "symbol.h"
 #include "vector.h"
-#include "xml.h"
 
-#ifdef AMIGA
-  #include <dos.h>
-#endif
-
-
-#include <stdio.h>
-#include <string.h>
 
 static ulong op_count;
 static struct string *system_module;
 
-void system_define(const char *name, value val)
-/* Modifies: environment
-   Requires: name not already exist in environment.
-   Effects: Adds name to environment, with value val for the variable,
-     as a 'define' of the system module.
-*/
+static void system_set(ulong idx, value val)
 {
   /* Technically this is not required, but you should think hard about whether
      adding a mutable or writable global is the right thing to do. */
@@ -73,17 +66,21 @@ void system_define(const char *name, value val)
       assert(immutablep(val));
     }
 
-  GCPRO1(val);
-  ulong aindex = global_lookup(name);
-  UNGCPRO();
+  assert(!GCONSTANT(idx));
 
-  assert(!GCONSTANT(aindex));
-
-  GVAR(aindex) = val;
-  module_vset(aindex, var_module, system_module);
+  GVAR(idx) = val;
+  module_vset(idx, var_module, system_module);
 }
 
-void system_write(const char *name, value val)
+void system_string_define(struct string *name, value val)
+{
+  GCPRO1(val);
+  ulong idx = mglobal_lookup(name);
+  UNGCPRO();
+  system_set(idx, val);
+}
+
+void system_write(struct string *name, value val)
 /* Modifies: environment
    Requires: name not already exist in environment.
    Effects: Adds name to environment, with value val for the variable,
@@ -91,7 +88,7 @@ void system_write(const char *name, value val)
 */
 {
   GCPRO1(val);
-  ulong aindex = global_lookup(name);
+  ulong aindex = mglobal_lookup(name);
   UNGCPRO();
 
   if (!module_vset(aindex, var_system_write, NULL))
@@ -99,9 +96,13 @@ void system_write(const char *name, value val)
   GVAR(aindex) = val;
 }
 
-struct vector *define_string_vector(const char *name, const char *const *vec,
-                                    int count)
+struct vector *define_mstring_vector(struct string *name,
+                                     const char *const *vec,
+                                     int count)
 {
+  if (name != NULL)
+    assert(name->o.garbage_type == garbage_static_string);
+
   if (count < 0)
     for (count = 0; vec[count]; ++count)
       ;
@@ -113,22 +114,25 @@ struct vector *define_string_vector(const char *name, const char *const *vec,
     SET_VECTOR(v, n, make_readonly(alloc_string(vec[n])));
   UNGCPRO();
   make_readonly(v);
+  if (!check_immutable(&v->o))
+    abort();
   if (name != NULL)
-    system_define(name, v);
+    system_string_define(name, v);
   return v;
 }
 
-void define_int_vector(const char *name, const int *vec, int count)
+void define_int_vector(struct string *name, const int *vec, int count)
 {
+  assert(name->o.garbage_type == garbage_static_string);
+
   struct vector *v = alloc_vector(count);
-
   GCPRO1(v);
-
   for (int n = 0; n < count; ++n)
     v->data[n] = makeint(vec[n]);
-
   UNGCPRO();
-  system_define(name, make_readonly(v));
+  if (!check_immutable(make_readonly(v)))
+    abort();
+  system_string_define(name, v);
 }
 
 #define tassert(what) do {                                      \
@@ -143,9 +147,6 @@ void define_int_vector(const char *name, const int *vec, int count)
 static void validate_typing(const struct primitive_ext *op)
 {
   static const char allowed[] = "fnzZsvluktryxo123456789SdDbB";
-
-  if (op->type == NULL)
-    return;
 
   for (const char *const *type = op->type; *type; ++type)
     {
@@ -208,6 +209,8 @@ void runtime_define(const struct primitive_ext *op)
   assert(op->nargs <= MAX_PRIMITIVE_ARGS);
   assert(!primitives.locked);
 
+  ulong idx = global_lookup(op->name);
+
   validate_typing(op);
 
   struct primitive *prim = allocate_primitive(op);
@@ -220,7 +223,7 @@ void runtime_define(const struct primitive_ext *op)
     }
   primitives.ops[primitives.used++] = op;
 
-  system_define(op->name, prim);
+  system_set(idx, prim);
 }
 
 static int cmp_ops(const void *_a, const void *_b)
@@ -261,9 +264,6 @@ void check_interrupt(void)
      (user caused SIGINT or SIGQUIT)
 */
 {
-#ifdef AMIGA
-  chkabort();
-#endif
   if (interrupted)
     {
       interrupted = false;
@@ -278,21 +278,20 @@ static void catchint(int sig)
 }
 #endif  /* MUDLLE_INTERRUPT */
 
-#if defined(i386) && !defined(NOCOMPILER)
+#if defined i386 && !defined NOCOMPILER
 
 #    undef USE_SYS_UCONTEXT
-#    if defined(__GLIBC__) && (defined(REG_EIP) || __GLIBC_MINOR__ >= 3)
+#    if defined __GLIBC__ && (defined REG_EIP || __GLIBC_MINOR__ >= 3)
 #        include <sys/ucontext.h>
 #        define USE_SYS_UCONTEXT
-#    elif defined(__MACH__)
+#    elif defined __MACH__
 #        include <sys/ucontext.h>
-#    elif defined(SA_SIGINFO)
+#    elif defined SA_SIGINFO
 #        include <asm/ucontext.h>
-#    elif !defined(__GLIBC__) || __GLIBC__ < 2 || \
-          (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
+#    elif __GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
 #        define sigcontext sigcontext_struct
 #        include <asm/sigcontext.h>
-#    elif (__GLIBC__ != 2 && __GLIBC_MINOR__ != 2)
+#    elif __GLIBC__ != 2 && __GLIBC_MINOR__ != 2
 #        include <sigcontext.h>
 #    endif
 
@@ -320,19 +319,22 @@ static struct sigaction oldbusact;
 #endif
 #endif
 
+void got_real_segv(int sig);
 void got_real_segv(int sig)
 {
-  /*
-   * reinstall the default handler, this will cause
-   * a real crash (instead of the annoying abort
-   * broken stack frame)
-   */
+  /* reinstall the default handler; this will cause a real crash */
 #ifdef SA_SIGINFO
   if (sig == SIGSEGV)
-    sigaction(sig, &oldsegact, NULL);
+    {
+      sigaction(sig, &oldsegact, NULL);
+      return;
+    }
 #ifdef __MACH__
   if (sig == SIGBUS)
-    sigaction(sig, &oldbusact, NULL);
+    {
+      sigaction(sig, &oldbusact, NULL);
+      return;
+    }
 #endif
   abort();
 #else
@@ -340,7 +342,7 @@ void got_real_segv(int sig)
 #endif
 }
 
-static inline void check_segv(int sig, reg_context_t *scp)
+static void check_segv(int sig, reg_context_t *scp)
 {
   const ubyte *eip = (const ubyte *)GETREG(scp, eip, EIP);
 
@@ -349,14 +351,17 @@ static inline void check_segv(int sig, reg_context_t *scp)
   if ((eip[0] == 0x80           /* cmpb $imm,object_type(reg) */
        && (eip[1] & 0xf8) == 0x78
        && eip[2] == 5)          /* offsetof(struct obj, type) */
+      || ((eip[0] == 0x81        /* cmpl $imm,object_size(reg) */
+           || eip[0] == 0x83)    /* cmpl $imm8,object_size(reg) */
+          && (eip[1] & 0xf8) == 0x38)
       || (eip[0] == 0x0f        /* movzbl object_type(%ecx),%eax */
           && eip[1] == 0xb6
           && (eip[2] & 0xc0) == 0x40
           && eip[3] == 5)       /* offsetof(struct obj, type) */
       || (eip[0] == 0x8b        /* mov (reg0),reg1 for size */
-          && (eip[1] & 0xf8) == 0)
+          && (eip[1] & 0xc0) == 0)
       || (eip[0] == 0x8b        /* mov car/cdr(reg0),reg1 */
-          && (eip[1] & 0xf8) == 0x40
+          && (eip[1] & 0xc0) == 0x40
           && (eip[2] == offsetof(struct list, car)
               || eip[2] == offsetof(struct list, cdr))))
     {
@@ -412,151 +417,10 @@ static void catchsegv(int sig, struct sigcontext scp)
 
 #endif  /* i386 && !NOCOMPILER */
 
-#ifdef sparc
-#include "builtins.h"
-#ifdef __SVR4
-#include <sys/ucontext.h>
-#endif
-
-#ifdef __SVR4
-static void cause_error(int nerror, ucontext_t *uap)
-{
-  /* Set up frame info after trap, call error handling */
-  ulong *frame = (ulong *)uap->uc_mcontext.gregs[REG_SP];
-  ulong pc = (ulong)uap->uc_mcontext.gregs[REG_PC];
-  ulong retpc = (ulong)uap->uc_mcontext.gregs[REG_O7];
-
-  flush_windows();
-#else
-static void cause_error(int nerror, struct sigcontext *scp)
-{
-  /* Set up frame info after trap, call error handling */
-  register ulong *fp asm("fp");
-  ulong *frame;
-#ifndef sparc
-  ulong pc = (ulong)scp->sc_pc;
-#else
-  ulong pc;
-#endif
-  ulong retpc;
-
-  flush_windows();
-  /* Surely there must be a better way to find these ? */
-  frame  = (ulong *)(((ulong *)fp[14])[14] + 0x8b0);
-  retpc = fp[15];
-#endif
-
-  /* we stick an appropriate pc in l1 spot */
-  if (pc > (ulong)gcblock && pc < (ulong)gcblock + gcblocksize)
-    frame[1] = pc; /* fault in compiled code */
-  else /* probably fault in builtin lib */
-    if (retpc > (ulong)gcblock && retpc < (ulong)gcblock + gcblocksize)
-      frame[1] = retpc;
-    else /* hmm - who knows what's up ? */
-      frame[1] = 0;
-
-  ccontext.frame_end = frame;
-  runtime_error((runtime_errors)nerror);
-}
-
-#ifdef __SVR4
-
-struct sigaction illact;
-struct sigaction segact;
-
-/* Catch runtime errors */
-void catchill(int sig, siginfo_t *sip, ucontext_t *uap)
-{
-  ulong trapins = *(ulong *)sip->si_addr;
-  int nerror;
-
-  /* Check if it was a trap for a runtime error
-     (numbers 16 to 16 + last_runtime_error - 1) */
-  if ((trapins & ~(255 | 15 << 25)) == (2 << 30 | 58 << 19 | 1 << 13) &&
-      (nerror = (int)(trapins & 255) - 16) >= 0 &&
-      nerror < last_runtime_error)
-    cause_error(nerror, uap);
-
-  abort(); /* Really an illegal instruction */
-}
-
-void catchsegv(int sig, siginfo_t *sip, ucontext_t *uap)
-{
-  ulong trapins = *(ulong *)uap->uc_mcontext.gregs[REG_PC];
-
-  /* Check if it was a type check (ie: lduh [x+4],g3) */
-  if ((trapins & ~(31 << 14)) == (3 << 30 | 3 << 25 | 2 << 19 | 1 << 13 | 4))
-    cause_error(error_bad_type, uap);
-  /* or a function check (ie: lduh [x+4],l0) */
-  else if ((trapins & ~(31 << 14)) == (3 << 30 | 16 << 25 | 2 << 19
-                                       | 1 << 13 | 4))
-    cause_error(error_bad_function, uap);
-
-  abort(); /* Really an illegal instruction */
-}
-#else
-/* Catch runtime errors */
-void catchill(int sig, int code, struct sigcontext *scp, char *addr)
-{
-  ulong trapins = *(ulong *)addr;
-  int nerror;
-
-  /* Check if it was a trap for a runtime error
-     (numbers 16 to 16 + last_runtime_error - 1) */
-  if ((trapins & ~(255 | 15 << 25)) == (2 << 30 | 58 << 19 | 1 << 13) &&
-      (nerror = (int)(trapins & 255) - 16) >= 0 &&
-      nerror < last_runtime_error)
-    {
-      /* Yes ... */
-      /* reset handler */
-      sigsetmask(0);
-      signal(SIGILL, catchill);
-      cause_error(nerror, scp);
-    }
-  abort(); /* Really an illegal instruction */
-}
-
-void catchsegv(int sig, int code, struct sigcontext *scp, char *addr)
-{
-#ifndef sparc
-  ulong trapins = *(ulong *)scp->sc_pc;
-#else
-  ulong trapins;
-#endif
-  int nerror;
-
-  /* Check if it was a type check (ie: lduh [x+4],g3) */
-  if ((trapins & ~(31 << 14)) == (3 << 30 | 3 << 25 | 2 << 19 | 1 << 13 | 4))
-    {
-      /* Yes ... */
-      /* reset handler */
-      sigsetmask(0);
-      signal(sig, catchsegv);
-      cause_error(error_bad_type, scp);
-    }
-  /* or a function check (ie: lduh [x+4],l0) */
-  else if ((trapins & ~(31 << 14)) == (3 << 30 | 16 << 25 | 2 << 19
-                                       | 1 << 13 | 4))
-    {
-      /* Yes ... */
-      /* reset handler */
-      sigsetmask(0);
-      signal(sig, catchsegv);
-      cause_error(error_bad_function, scp);
-    }
-  abort(); /* Really an illegal instruction */
-}
-#endif
-#endif
-
 void flag_check_failed(const struct primitive_ext *op, const char *name)
 {
   abort();
 }
-
-STATIC_STRING(static_obj_empty_string, "");
-struct string *const static_empty_string
-  = GET_STATIC_STRING(static_obj_empty_string);
 
 void runtime_init(void)
 {
@@ -565,62 +429,33 @@ void runtime_init(void)
   staticpro(&system_module);
 
 #ifdef MUDLLE_INTERRUPT
-#ifdef __SVR4
-  {
-    struct sigaction act;
-    act.sa_sigaction = (void *)catchint;
-    act.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
-    sigemptyset(&act.sa_mask);
-    sigaction(SIGINT, &act, NULL);
-#ifdef SIGQUIT
-    sigaction(SIGQUIT, &act, NULL);
-#endif
-  }
-#else
   signal(SIGINT, catchint);
 #ifdef SIGQUIT
   signal(SIGQUIT, catchint);
-#endif
-#endif
-#endif
-
-#ifdef sparc
-#ifdef __SVR4
-  illact.sa_sigaction = (void *)catchill;
-  illact.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
-  sigaction(SIGILL, &illact, NULL);
-  segact.sa_sigaction = (void *)catchsegv;
-  segact.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
-  sigaction(SIGSEGV, &segact, NULL);
-  sigaction(SIGBUS, &segact, NULL);
-#else
-  signal(SIGILL, catchill);
-  signal(SIGSEGV, catchsegv);
-  signal(SIGBUS, catchsegv);
 #endif
 #endif
 
 #if defined(i386) && !defined(NOCOMPILER)
 #ifdef SA_SIGINFO
   {
-    static char my_signal_stack[16 * 1024];
-    stack_t my_stack;
-    struct sigaction sact;
-    int noaltstack;
-
-    my_stack.ss_sp = my_signal_stack; /* we should point to the beginning */
-    my_stack.ss_flags = SS_ONSTACK;
-    my_stack.ss_size = sizeof my_signal_stack;
-    if ((noaltstack = sigaltstack(&my_stack, NULL) < 0))
+    static char my_signal_stack[MINSIGSTKSZ + 8 * 1024];
+    stack_t my_stack = {
+      .ss_sp    = my_signal_stack,
+      .ss_flags = 0,
+      .ss_size  = sizeof my_signal_stack,
+    };
+    bool noaltstack = sigaltstack(&my_stack, NULL) < 0;
+    if (noaltstack)
       {
-	;
+	perror("sigaltstack()");
       }
 
-    sact.sa_sigaction = catchsegv;
+    struct sigaction sact = {
+      .sa_sigaction = catchsegv,
+      .sa_flags     = (SA_SIGINFO | SA_RESTART | SA_NODEFER
+                       | (noaltstack ? 0 : SA_ONSTACK)),
+    };
     sigemptyset(&sact.sa_mask);
-    sact.sa_flags = SA_SIGINFO | SA_RESTART | SA_NODEFER;
-    if (!noaltstack)
-      sact.sa_flags |= SA_ONSTACK;
     sigaction(SIGSEGV, &sact, &oldsegact);
 #ifdef __MACH__
     sigaction(SIGBUS, &sact, &oldbusact);

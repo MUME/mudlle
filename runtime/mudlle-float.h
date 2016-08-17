@@ -22,22 +22,21 @@
 #ifndef RUNTIME_MUDLLE_FLOAT_H
 #define RUNTIME_MUDLLE_FLOAT_H
 
-#include "../mvalues.h"
-#include "runtime.h"
+#include "../error.h"
+
 #include "bigint.h"
 
 void float_init(void);
 
+enum runtime_error get_floatval(double *d, value v);
+
 static inline double floatval(value v)
 {
-  if (integerp(v))
-    return (double)intval(v);
-#ifdef USE_GMP
-  if (TYPE(v, type_bigint))
-    return bigint_to_double(v);
-#endif
-  TYPEIS(v, type_float);
-  return ((struct mudlle_float *)v)->d;
+  double d;
+  enum runtime_error e = get_floatval(&d, v);
+  if (e != error_none)
+    runtime_error(e);
+  return d;
 }
 
 static inline value makefloat(double d)

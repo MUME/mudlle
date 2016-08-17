@@ -24,10 +24,12 @@
 
 #include "../types.h"
 
+extern const struct primitive_ext *const negate_prim_ext;
+
 value code_plus(value a1, value a2);
 value string_plus(struct string *s1, struct string *s2);
 
-value code_minus(value a, value b);
+value code_subtract(value a, value b);
 value code_bitand(value a, value b);
 value code_bitor(value a, value b);
 

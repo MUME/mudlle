@@ -26,9 +26,6 @@
 #define AFTER_SKIP_FRAMES 16
 #define BEFORE_SKIP_FRAMES 32
 
-#include "runtime/runtime.h"
-#include "runtime/stringops.h"
-
 #include "builtins.h"
 #include "context.h"
 #include "alloc.h"
@@ -36,6 +33,12 @@
 #include "ins.h"
 #include "print.h"
 #include "utils.h"
+
+#include "runtime/arith.h"
+#include "runtime/basic.h"
+#include "runtime/mudlle-string.h"
+#include "runtime/runtime.h"
+#include "runtime/support.h"
 
 
 const char *const mudlle_errors[] = {
@@ -87,18 +90,19 @@ static void output_arg(value arg)
   output_value(muderr, prt_write, false, arg);
 }
 
-static int get_icode_line(struct call_stack *frame)
+static int get_icode_line(struct call_stack_mudlle *frame)
 {
-  struct icode *code = frame->u.mudlle.code;
-  int offset = (frame->u.mudlle.offset - 1 -
-                ((instruction *)(&code->constants[code->nb_constants]) -
-                 (instruction *)code));
+  struct icode *code = frame->code;
+  int offset = (frame->offset - 1
+		- ((ubyte *)(&code->constants[code->nb_constants])
+		   - (ubyte *)code));
   return get_code_line_number(code, offset);
 }
 
 static void print_bytecode_frame(struct call_stack *frame, bool onstack)
 {
-  struct icode *fcode = frame->u.mudlle.code;
+  struct call_stack_mudlle *mframe = (struct call_stack_mudlle *)frame;
+  struct icode *fcode = mframe->code;
   GCPRO1(fcode);
 
   if (fcode->code.nicename->str[0])
@@ -112,17 +116,16 @@ static void print_bytecode_frame(struct call_stack *frame, bool onstack)
 
       /* Warning: This is somewhat intimate with the
 	 implementation of the compiler */
-      for (int i = 0; i < frame->u.mudlle.nargs; i++)
+      for (int i = 0; i < mframe->nargs; i++)
 	{
 	  value v;
 
 	  if (onstack)
-	    v = stack_get(frame->u.mudlle.nargs - i - 1);
+	    v = stack_get(mframe->nargs - i - 1);
 	  else
 	    {
-	      struct variable *argi =
-		frame->u.mudlle.locals->data[frame->u.mudlle.nargs - i - 1];
-
+	      struct variable *argi
+                = mframe->locals->data[mframe->nargs - i - 1];
 	      v = argi->vvalue;
 	    }
 
@@ -132,7 +135,7 @@ static void print_bytecode_frame(struct call_stack *frame, bool onstack)
 
       pputc(')', muderr);
 
-      int lineno = get_icode_line(frame);
+      int lineno = get_icode_line((struct call_stack_mudlle *)frame);
 
       display_code_location(&fcode->code, lineno);
       pputc('\n', muderr);
@@ -141,31 +144,55 @@ static void print_bytecode_frame(struct call_stack *frame, bool onstack)
   UNGCPRO();
 }
 
+static void print_called_value(value called)
+{
+  if (is_any_primitive(called))
+    pputs(((struct primitive *)called)->op->name, muderr);
+  else if (TYPE(called, type_closure))
+    {
+      struct code *code = ((struct closure *)called)->code;
+      if (code->varname)
+        output_value(muderr, prt_display, false, code->varname);
+      else
+        pputs("<fn>", muderr);
+    }
+  else
+    output_arg(called);
+}
+
 struct c_info {
+  const struct primitive_ext *op;
   const char *name;
   int formal_args, actual_args;
   bool is_vararg, is_operator;
 };
 
-static struct c_info c_frame_info(const struct call_stack *frame)
+static void c_frame_info(struct c_info *dst, const struct call_stack *frame)
 {
+  struct call_stack_c_header *cframe = (struct call_stack_c_header *)frame;
   const struct primitive_ext *op;
-  switch (frame->type)
+  switch (cframe->s.type)
     {
     case call_string:
-      return (struct c_info){ .name = frame->u.c.u.name };
+      *dst = (struct c_info){ .name = cframe->u.name };
+      return;
     case call_c:
-      op = frame->u.c.u.prim->op;
+      op = cframe->u.prim->op;
       break;
     case call_primop:
-      op = frame->u.c.u.op;
+      op = cframe->u.op;
       break;
+    case call_invalid:
+      /* special handling in print_c_frame() */
+      *dst = (struct c_info){ .name = NULL };
+      return;
     default:
       abort();
     }
-  return (struct c_info){
-    .name = op->name,
-    .is_vararg = op->nargs == NVARARGS,
+  *dst = (struct c_info){
+    .op          = op,
+    .name        = op->name,
+    .is_vararg   = op->nargs == NVARARGS,
     .is_operator = op->flags & OP_OPERATOR,
     .formal_args = op->nargs
   };
@@ -180,26 +207,50 @@ static value get_c_stack_arg(const struct call_stack *frame,
 static value get_c_vararg_arg(const struct call_stack *frame,
                               const struct c_info *info, int arg)
 {
-  return ((struct vector *)frame->u.c.args[0])->data[arg];
+  struct call_stack_c *cframe = (struct call_stack_c *)frame;
+  return ((struct vector *)cframe->args[0])->data[arg];
 }
 
 static value get_c_arg(const struct call_stack *frame,
                        const struct c_info *info, int arg)
 {
-  return frame->u.c.args[arg];
+  struct call_stack_c *cframe = (struct call_stack_c *)frame;
+  return cframe->args[arg];
 }
 
-static void print_c_frame(const struct call_stack *frame, bool onstack)
+static void print_prim_suffix(const struct primitive_ext *op,
+                              const struct session_context *next_session)
 {
-  struct c_info info = c_frame_info(frame);
+}
+
+static bool print_global_name(value midx)
+{
+  if (!integerp(midx))
+    return false;
+  long gidx = intval(midx);
+  if (gidx <= 0 || gidx >= intval(environment->used))
+    return false;
+  pswrite(muderr, GNAME(gidx));
+  return true;
+}
+
+static void print_c_frame(const struct call_stack *frame, bool onstack,
+                          const struct primitive_ext *last_primop,
+                          const struct session_context *next_session)
+{
+  struct call_stack_c *cframe = (struct call_stack_c *)frame;
+  struct c_info info;
+  c_frame_info(&info, frame);
+  if (last_primop != NULL && info.op == last_primop)
+    return;
   value (*getarg)(const struct call_stack *, const struct c_info *info, int);
 
-  info.actual_args = frame->u.c.nargs;
+  info.actual_args = cframe->c.nargs;
   if (info.is_vararg)
     {
       assert(!onstack);
-      assert(info.actual_args == 1 && TYPE(frame->u.c.args[0], type_vector));
-      info.actual_args = vector_len((struct vector *)frame->u.c.args[0]);
+      assert(info.actual_args == 1 && TYPE(cframe->args[0], type_vector));
+      info.actual_args = vector_len((struct vector *)cframe->args[0]);
       getarg = get_c_vararg_arg;
     }
   else
@@ -207,30 +258,54 @@ static void print_c_frame(const struct call_stack *frame, bool onstack)
 
   if (info.actual_args == info.formal_args && info.is_operator)
     {
-      bool is_set = false, is_ref = false;
+      bool is_set = false;
       switch (info.actual_args)
         {
         case 1:
-          pputs(strcmp("negate", info.name) == 0 ? "-" : info.name, muderr);
+          if (info.op == global_read_ext)
+            {
+              if (!print_global_name(getarg(frame, &info, 0)))
+                goto not_op;
+              goto done;
+            }
+          pputs(info.op == negate_prim_ext
+                ? "-"
+                : (info.op == dereference_prim_ext
+                   ? "*"
+                   : info.name),
+                muderr);
           output_arg(getarg(frame, &info, 0));
           goto done;
         case 3:
-          is_set = strcmp(info.name, "set!") == 0;
+          is_set = info.op == setb_prim_ext;
           assert(is_set);
-        case 2:
-          is_ref = strcmp(info.name, "ref") == 0;
-          output_arg(getarg(frame, &info, 0));
-          if (is_ref || is_set)
-            pputc('[', muderr);
-          else
-            pprintf(muderr, " %s ", info.name);
-          output_arg(getarg(frame, &info, 1));
-          if (is_ref || is_set)
-            pputc(']', muderr);
-          if (is_set)
+          /* fallthrough */
+        case 2: ;
+          bool is_gset = info.op == global_write_ext;
+          bool is_ref = info.op == ref_prim_ext;
+          bool is_setref = info.op == set_refb_prim_ext;
+          if (!is_gset)
+            {
+              if (is_setref)
+                pputc('*', muderr);
+              output_arg(getarg(frame, &info, 0));
+            }
+          else if (!print_global_name(getarg(frame, &info, 0)))
+            goto not_op;
+          if (!is_setref && !is_gset)
+            {
+              if (is_ref || is_set)
+                pputc('[', muderr);
+              else
+                pprintf(muderr, " %s ", info.name);
+              output_arg(getarg(frame, &info, 1));
+              if (is_ref || is_set)
+                pputc(']', muderr);
+            }
+          if (is_set || is_setref || is_gset)
             {
               pputs(" = ", muderr);
-              output_arg(getarg(frame, &info, 2));
+              output_arg(getarg(frame, &info, is_set ? 2 : 1));
             }
           goto done;
         default:
@@ -238,7 +313,12 @@ static void print_c_frame(const struct call_stack *frame, bool onstack)
         }
     }
 
-  pprintf(muderr, "%s(", info.name);
+ not_op:
+  if (frame->type == call_invalid)
+    print_called_value(cframe->c.u.value);
+  else
+    pputs(info.name, muderr);
+  pputc('(', muderr);
   const char *prefix = "";
   for (int i = 0; i < info.actual_args; ++i)
     {
@@ -247,6 +327,8 @@ static void print_c_frame(const struct call_stack *frame, bool onstack)
       prefix = ", ";
     }
   pputc(')', muderr);
+  if (info.op != NULL)
+    print_prim_suffix(info.op, next_session);
  done:
   pputc('\n', muderr);
 }
@@ -302,18 +384,8 @@ static long find_line(struct mcode *mcode, ulong ofs)
     }
 }
 
-/* nargs < 0 means *args points to an argument vector */
-static void print_mcode(struct mcode *base, ulong ofs, value *args, int nargs,
-                        void *data)
+static void print_args(value *args, int nargs)
 {
-  long line = find_line(base, ofs);
-
-  GCPRO1(base);
-  if (base->code.varname)
-    output_value(muderr, prt_display, false, base->code.varname);
-  else
-    pputs("<fn>", muderr);
-
   bool vararg = nargs < 0;
   if (vararg)
     nargs = vector_len((struct vector *)*args);
@@ -329,126 +401,204 @@ static void print_mcode(struct mcode *base, ulong ofs, value *args, int nargs,
     }
 
   pputc(')', muderr);
+}
+
+/* nargs < 0 means *args points to an argument vector */
+static void print_mcode(struct mcode *base, ulong ofs, value *args, int nargs,
+                        void *data)
+{
+  long line = find_line(base, ofs);
+
+  GCPRO1(base);
+  if (base->code.varname)
+    output_value(muderr, prt_display, false, base->code.varname);
+  else
+    pputs("<fn>", muderr);
+
+  print_args(args, nargs);
+
+  pputs(" [c]", muderr);
   display_code_location(&base->code, line);
-  pputs(" [c]\n", muderr);
+  pputc('\n', muderr);
   UNGCPRO();
 }
 
-static void print_prim(const struct primitive_ext *op)
+static void print_prim(const struct primitive_ext *op,
+                       const struct session_context *next_session,
+                       value *args, int nargs)
 {
-  pprintf(muderr, "%s(<compiled>)\n", op->name);
+  pputs(op->name, muderr);
+  if (args == NULL)
+    pputs("(<compiled>)", muderr);
+  else
+    print_args(args, nargs);
+  print_prim_suffix(op, next_session);
+  pputc('\n', muderr);
+}
+
+static void print_any(value called, value *args, int nargs)
+{
+  print_called_value(called);
+  print_args(args, nargs);
+  pputc('\n', muderr);
 }
 
 #endif /* !NOCOMPILER */
-
-#ifdef sparc
-static void print_pc(ulong _pc)
-{
-  ulong *pc = (ulong *)_pc;
-
-  /* Check for moving code */
-  if ((ubyte *)pc >= gcblock && (ubyte *)pc < gcblock + gcblocksize)
-    {
-      /* We have found a code object.
-	 First find where it begins by locating its
-	 magic sequence */
-      while (pc[0] != 0xffffffff ||
-	     pc[-1] != 0xffffffff) pc--;
-
-      /* Print it */
-      print_mcode((struct mcode *)((char *)pc - 4 -
-				   offsetof(struct mcode, magic)));
-
-    }
-}
-
-#ifndef NOCOMPILER
-static struct ccontext *print_cc_frame(struct ccontext *cc)
-{
-  iterate_cc_frame(cc, print_mcode_frame);
-
-  ulong *frame = cc->frame_end, *start = cc->frame_start;
-  static struct ccontext next;
-
-  print_pc(frame[1]); /* first frame pc lives in l1... */
-
-  while (frame != start)
-    {
-      /*assert(frame < start);*/
-      /* Grr. Why doesn't assert() make a bloody core file ? */
-      if (frame >= start) abort();
-      print_pc(frame[15]); /* ret adr, i.e. caller's frame pc is in i7 */
-      frame = (ulong *)frame[14]; /* next frame in i6 */
-    }
-
-
-  /* Get link to next set of frames */
-  /* This will have been left in l3/l2 by mc_invoke, so: */
-  next.frame_start = (ulong *)frame[3];
-  next.frame_end = (ulong *)frame[2];
-  return &next;
-}
-#endif /* !NOCOMPILER */
-#endif /* sparc */
 
 #if defined(i386) && !defined(NOCOMPILER)
-static int find_mcode(ulong pcadr,
-                      void (*func)(struct mcode *, ulong ofs, value *args,
-                                   int nargs, void *data),
-                      const struct primitive_ext *last_primop,
-                      void (*primfunc)(const struct primitive_ext *),
-                      ulong *bp,
-                      int nargs,
-                      void *data)
+static void handle_primitive_frame(
+  ulong pcadr,
+  const struct primitive_ext *last_primop,
+  const struct session_context *next_session,
+  void (*primfunc)(
+    const struct primitive_ext *op,
+    const struct session_context *next_session,
+    value *args, int nargs),
+  void (*anyfunc)(value called, value *args, int nargs),
+  ulong *last_sp)
 {
-  ulong *pc = (ulong *)(pcadr & ~(CODE_ALIGNMENT - 1));
+  /* check for relative call to primitive */
+  value *cargs = NULL;
+  int cnargs = -1;
+  const ubyte *op = (const ubyte *)(pcadr - 5);
+  if (op[0] != 0xe8)
+    return;
 
-  /* Check for moving code */
-  if (!((ubyte *)pc >= gcblock && (ubyte *)pc < gcblock + gcblocksize))
-    return false;
-
-  /* We have found a code object.
-     First find where it begins by locating its
-     magic sequence */
-  while (pc[-1] != 0xffffffff || pc[-2] != 0xffffffff)
-    pc = (ulong *)((ulong)pc - CODE_ALIGNMENT);
-
-  ulong mcode_addr = (ulong)pc - offsetof(struct mcode, mcode);
-
-  struct mcode *mcode = (struct mcode *)mcode_addr;
-  /* n.b., return address may be to after the last instruction as it
-     could be a call to berror_xxx */
-  assert(pcadr >= (ulong)pc && pcadr <= (ulong)pc + mcode->code_length);
-
-  /* Print it */
-  if (primfunc)
+  ulong primadr = pcadr + *(long *)(op + 1);
+  const struct primitive_ext *prim = NULL;
+  if (primadr == (ulong)bcall_secure)
     {
-      /* check for relative call to primitive */
-      const ubyte *op = (const ubyte *)(pcadr - 5);
-      if (op[0] == 0xe8)
+      /* push args...
+       * mov $prim,%edx
+       * mov $nargs,%eax  or  xor %eax,%eax
+       * mov $seclev,%cx
+       * call bcall_secure */
+
+      bool is_xor = *(const unsigned short *)(op - 6) == 0xc031;
+
+      if (!is_xor && op[-9] != 0xb8) /* mov $imm,%eax */
         {
-          ulong primadr = pcadr + *(long *)(op + 1);
-          const struct primitive_ext *prim;
-          if (primadr == (ulong)bcall_secure
-              /* mov $imm,%edx */
-              && op[-10] == (0xb8 | 2))
+          abort();
+        }
+
+      int argc_bytes = is_xor ? 2 : 5;
+
+      /* mov $imm,%edx */
+      if (op[-9 - argc_bytes] != (0xb8 | 2))
+        {
+          abort();
+        }
+
+      struct primitive *p = *(struct primitive *const *)(op - 8 - argc_bytes);
+      prim = p->op;
+
+      /* last_sp: [..0] mudlle args, [-1] mudlle pc, [-2] bp,
+         [-3..] cargs */
+      cnargs = is_xor ? 0 : *(const int *)(op - 8);
+      cargs = (value *)last_sp;
+    }
+  else if (primadr == (ulong)bcall)
+    {
+      /* push args...
+       * mov callee,%edx
+       * mov $nargs,%eax   or   xor %eax,%eax
+       * call bcall */
+
+      if (last_sp[-3] == (ulong)bcall_primitive_tail)
+        {
+          /* last_sp: [..0] mudlle args, [-1] mudlle pc, [-2] bp,
+             [-3] bcall_primitive_tail, [-4] callee,
+             [-5] argcount */
+          primadr = last_sp[-4];
+          cnargs = last_sp[-5];
+          cargs = (value *)last_sp;
+        }
+      else if (last_sp[-3] == (ulong)bcall_error)
+        {
+          /* last_sp: [..0] mudlle args, [-1] mudlle pc, [-2] bp,
+             [-3] bcall_error, [-4] callee,
+             [-5] argcount */
+          value called = (value)last_sp[-4];
+          cnargs = last_sp[-5];
+          cargs = (value *)last_sp;
+          if (!is_any_primitive(called))
             {
-              struct primitive *p = *(struct primitive **)(op - 9);
-              prim = p->op;
+              anyfunc(called, cargs, cnargs);
+              return;
             }
-          else
-            {
-              if (primadr == (ulong)bapply_varargs
-                  /* mov $imm,%ecx */
-                  && op[-5] == (0xb8 | 1))
-                primadr = *(ulong *)(op - 4);
-              prim = lookup_primitive(primadr);
-            }
-          if (prim && prim != last_primop)
-            primfunc(prim);
+          prim = ((struct primitive *)called)->op;
         }
     }
+  else if (primadr == (ulong)bapply_varargs)
+    {
+      /* mov argvector,%eax
+       * mov callee,%edx
+       * mov seclev,%cx
+       * call bapply_varargs */
 
+      /* last_sp: [-1] mudlle pc, [-2] bp, [-3] argvector,
+         [-4] callee */
+      cnargs = -1;
+      cargs = (value *)(last_sp - 3);
+      primadr = last_sp[-4];
+    }
+  else if (primadr == (ulong)bcall_varargs)
+    {
+      /* push args
+       * mov callee,%edx
+       * mov argcount,%eax
+       * mov seclev,%cx
+       * call bapply_varargs */
+
+      /* note that argcount is > 1; argcount = 0 ends up as
+         bapply_varargs */
+
+      /* last_sp: [..0] args, [-1] mudlle pc, [-2] bp,
+         [-3] argcount, [-4] argvector */
+
+      cnargs = last_sp[-3];
+      cargs = (value *)last_sp;
+
+      /* mov $imm,%edx */
+      if (op[-14] != (0xb8 | 2))
+        {
+          abort();
+        }
+      primadr = *(ulong *)(op - 13);
+    }
+
+  if (prim == NULL)
+    prim = lookup_primitive(primadr);
+
+  if (prim && prim != last_primop)
+    primfunc(prim, next_session, cargs, cnargs);
+}
+
+static void handle_mcode_frame(
+  ulong pcadr,
+  void (*func)(struct mcode *, ulong ofs, value *args,
+               int nargs, void *data),
+  const struct primitive_ext *last_primop,
+  const struct session_context *next_session,
+  void (*primfunc)(
+    const struct primitive_ext *op,
+    const struct session_context *next_session,
+    value *args, int nargs),
+  void (*anyfunc)(value called, value *args, int nargs),
+  ulong *last_sp, ulong *bp,
+  int nargs,
+  void *data)
+{
+  struct mcode *mcode = find_pc_mcode(pcadr, (ulong)gcblock,
+                                      (ulong)gcblock + gcblocksize);
+  if (mcode == NULL)
+    return;
+
+  if (primfunc)
+    handle_primitive_frame(pcadr, last_primop, next_session, primfunc,
+                           anyfunc, last_sp);
+
+  /* args..., pc, *bp  */
   value *args = (value *)bp + 2;
   if (nargs >= 0)
     ;
@@ -461,9 +611,7 @@ static int find_mcode(ulong pcadr,
   else
     nargs = vector_len(mcode->code.arg_types);
 
-  func(mcode, pcadr - (ulong)pc, args, nargs, data);
-
-  return true;
+  func(mcode, pcadr - (ulong)&mcode->mcode[0], args, nargs, data);
 }
 
 static struct ccontext *iterate_cc_frame(
@@ -471,7 +619,11 @@ static struct ccontext *iterate_cc_frame(
   void (*func)(struct mcode *mcode, ulong ofs, value *args, int nargs,
                void *data),
   const struct primitive_ext *last_primop,
-  void (*primfunc)(const struct primitive_ext *),
+  const struct session_context *next_session,
+  void (*primfunc)(const struct primitive_ext *op,
+                   const struct session_context *next_session,
+                   value *args, int nargs),
+  void (*anyfunc)(value called, value *args, int nargs),
   int nargs,
   void *data)
 {
@@ -481,7 +633,8 @@ static struct ccontext *iterate_cc_frame(
   ccontext_frame(cc, &bp, &sp);
 
   /* The return address is at sp[-1] */
-  find_mcode(sp[-1], func, last_primop, primfunc, bp, nargs, data);
+  handle_mcode_frame(sp[-1], func, last_primop, next_session, primfunc,
+                     anyfunc, sp, bp, nargs, data);
 
   int count = 0;
   while (bp < cc->frame_start)
@@ -520,7 +673,8 @@ static struct ccontext *iterate_cc_frame(
        * sp[0] -> bp[-2] is mudlle values
        */
       /* Not using closure because plan on removing it in some cases */
-      find_mcode(bp[1], func, NULL, NULL, (ulong *)(bp[0]), -1, data);
+      handle_mcode_frame(bp[1], func, NULL, NULL, NULL, NULL, NULL,
+                         (ulong *)(bp[0]), -1, data);
       assert(bp[0] > (ulong)bp);
       bp = (ulong *)bp[0];
     }
@@ -535,10 +689,11 @@ static struct ccontext *iterate_cc_frame(
 static struct ccontext *print_cc_frame(
   struct ccontext *cc,
   const struct primitive_ext *last_primop,
+  const struct session_context *next_session,
   int nargs)
 {
-  return iterate_cc_frame(cc, print_mcode, last_primop, print_prim, nargs,
-                          NULL);
+  return iterate_cc_frame(cc, print_mcode, last_primop, next_session,
+                          print_prim, print_any, nargs, NULL);
 }
 #endif /* i386 && !NOCOMPILER */
 
@@ -550,26 +705,25 @@ static struct ccontext *print_cc_frame(struct ccontext *cc)
 }
 #endif
 
-static void print_call_trace(runtime_errors error, bool onstack,
+static void print_call_trace(enum runtime_error error, bool onstack,
                              int c_onstack_nargs)
 {
+  struct session_context *session = session_context, *next_session = NULL;
   struct catch_context *catch_ctxt = catch_context;
   int count = 0;
 #ifndef NOCOMPILER
   struct ccontext *cc = &ccontext;
 #endif
 
+  const struct primitive_ext *last_primop = NULL;
   if (error == error_none)
-    ;
+    last_primop = warning_prim_ext;
   else if (error < last_runtime_error && error >= 0)
     pprintf(muderr, "%s\n", mudlle_errors[error]);
   else
     pprintf(muderr, "error %d\n", error);
   pputs("Call trace is:\n", muderr);
 
-#ifndef NOCOMPILER
-  const struct primitive_ext *last_primop = NULL;
-#endif
   for (struct call_stack *scan = call_stack; scan; scan = scan->next)
     {
       /* not sure if 'while' is necessary here... */
@@ -601,19 +755,16 @@ static void print_call_trace(runtime_errors error, bool onstack,
 	    }
 	}
 
-#ifndef NOCOMPILER
       const struct primitive_ext *this_primop = NULL;
-#endif
       switch (scan->type)
 	{
         case call_primop:
-#ifndef NOCOMPILER
-          this_primop = scan->u.c.u.op;
-#endif
+          this_primop = ((struct call_stack_c_header *)scan)->u.op;
           /* fallthrough */
         case call_string:
 	case call_c:
-	  print_c_frame(scan, onstack);
+        case call_invalid:
+	  print_c_frame(scan, onstack, last_primop, next_session);
 	  break;
 	case call_bytecode:
 	  print_bytecode_frame(scan, onstack);
@@ -622,24 +773,19 @@ static void print_call_trace(runtime_errors error, bool onstack,
 #ifdef NOCOMPILER
 	  abort();
 #else
-	  cc = print_cc_frame(cc, last_primop, c_onstack_nargs);
+	  cc = print_cc_frame(cc, last_primop, next_session, c_onstack_nargs);
 	  break;
 #endif
+        case call_session:
+          next_session = session;
+          session = ((struct session_context *)scan)->parent;
+          break;
 	}
-#ifndef NOCOMPILER
       last_primop = this_primop;
-#endif
       /* Only the first frame can be on the stack */
       onstack = false;
       c_onstack_nargs = -1;
     }
-}
-
-#ifndef NOCOMPILER
-static void count_stack_depth(struct mcode *mcode, ulong ofs, value *args,
-                              int nargs, void *data)
-{
-  ++*(int *)data;
 }
 
 struct get_cc_stack_trace_data {
@@ -647,6 +793,13 @@ struct get_cc_stack_trace_data {
   int idx;
   bool lines;
 };
+
+#ifndef NOCOMPILER
+static void count_stack_depth(struct mcode *mcode, ulong ofs, value *args,
+                              int nargs, void *data)
+{
+  ++*(int *)data;
+}
 
 static void get_cc_stack_trace(struct mcode *mcode, ulong ofs, value *args,
                                int nargs, void *data)
@@ -668,19 +821,25 @@ struct vector *get_mudlle_call_trace(bool lines)
   int depth = 0;
 
   for (struct call_stack *scan = call_stack; scan; scan = scan->next)
+    {
 #ifndef NOCOMPILER
-    if (scan->type == call_compiled)
-      cc = iterate_cc_frame(cc, count_stack_depth, NULL, NULL, -1, &depth);
-    else
+      if (scan->type == call_compiled)
+        {
+          cc = iterate_cc_frame(cc, count_stack_depth, NULL, NULL, NULL, NULL,
+                                -1, &depth);
+          continue;
+        }
 #endif
+      if (scan->type == call_session)
+        continue;
       ++depth;
+    }
 
   struct get_cc_stack_trace_data sdata = {
     .vec   = alloc_vector(depth),
     .idx   = 0,
     .lines = lines
   };
-
   GCPRO1(sdata.vec);
 
 #ifndef NOCOMPILER
@@ -693,19 +852,20 @@ struct vector *get_mudlle_call_trace(bool lines)
       switch (scan->type)
 	{
         case call_string:
-          v = alloc_string(scan->u.c.u.name);
+          v = alloc_string(((struct call_stack_c_header *)scan)->u.name);
 	  goto ok;
         case call_primop:
-          v = alloc_string(scan->u.c.u.op->name);
+          v = alloc_string(((struct call_stack_c_header *)scan)->u.op->name);
 	  goto ok;
 	case call_c:
-	  v = scan->u.c.u.prim;
+	  v = ((struct call_stack_c_header *)scan)->u.prim;
 	  goto ok;
 	case call_bytecode:
           {
-            v = scan->u.mudlle.fn;
+            struct call_stack_mudlle *mscan = (struct call_stack_mudlle *)scan;
+            v = mscan->fn;
             if (lines)
-              v = alloc_list(v, makeint(get_icode_line(scan)));
+              v = alloc_list(v, makeint(get_icode_line(mscan)));
             sdata.vec->data[sdata.idx++] = v;
             continue;
           }
@@ -713,10 +873,15 @@ struct vector *get_mudlle_call_trace(bool lines)
 #ifdef NOCOMPILER
 	  abort();
 #else
-	  cc = iterate_cc_frame(cc, get_cc_stack_trace, NULL, NULL, -1,
-                                &sdata);
+	  cc = iterate_cc_frame(cc, get_cc_stack_trace, NULL, NULL, NULL, NULL,
+                                -1, &sdata);
           continue;
 #endif
+        case call_session:
+          continue;
+        case call_invalid:
+          /* can only happen during error handling */
+          abort();
 	}
       abort();
     ok:
@@ -735,7 +900,10 @@ struct vector *get_mudlle_call_trace(bool lines)
    muderr set to the appropriate value */
 static void for_all_muderr(void (*f)(value e, void *data), void *data)
 {
-  bool send_to_muderr = (catch_context->call_trace_mode != call_trace_off
+  if (catch_context->call_trace_mode == call_trace_off)
+    return;
+
+  bool send_to_muderr = (catch_context->call_trace_mode != call_trace_no_err
                          && muderr);
   if (send_to_muderr)
     {
@@ -759,7 +927,7 @@ static void for_all_muderr(void (*f)(value e, void *data), void *data)
       elem = l->car;
       assert(TYPE(elem, type_pair));
 
-      if (TYPE(elem->car, type_outputport))
+      if (TYPE(elem->car, type_oport))
         muderr = elem->car;
       else
         {
@@ -789,24 +957,24 @@ static void for_all_muderr(void (*f)(value e, void *data), void *data)
 }
 
 struct basic_error_info {
-  runtime_errors error;
+  enum runtime_error error;
   bool onstack;
   int c_onstack_nargs;
   const char *warning;
 };
 
+
 static void basic_error_print(value e, void *data)
 {
   const struct basic_error_info *info = data;
 
+
   if (info->warning)
     pprintf(muderr, "warning: %s\n", info->warning);
   print_call_trace(info->error, info->onstack, info->c_onstack_nargs);
-  if (TYPE(e, type_character))
-    pputc('\n', muderr);
 }
 
-static void basic_error(runtime_errors error, bool onstack,
+static void basic_error(enum runtime_error error, bool onstack,
                         int c_onstack_nargs, const char *msg)
 {
   struct basic_error_info info = {
@@ -826,10 +994,10 @@ void runtime_warning(const char *msg)
   basic_error(error_none, false, -1, msg);
 }
 
-void runtime_error(runtime_errors error)
+void runtime_error(enum runtime_error error)
 /* Effects: Runtime error 'error' has occured. Dump the call_stack to
      mudout & throw back to the exception handler with SIGNAL_ERROR
-     and the error code in exception_value.
+     and the error code in exception_error.
    Note: Never returns
 */
 {
@@ -837,56 +1005,85 @@ void runtime_error(runtime_errors error)
   check_interrupt();
 #endif
   basic_error(error, false, -1, NULL);
-  mthrow(SIGNAL_ERROR, makeint(error));
+  mthrow(SIGNAL_ERROR, error);
 }
 
-void compiled_early_runtime_error(runtime_errors error, int nargs)
+void compiled_early_runtime_error(enum runtime_error error, int nargs)
 {
   basic_error(error, true, nargs, NULL);
-  mthrow(SIGNAL_ERROR, makeint(error));
+  mthrow(SIGNAL_ERROR, error);
 }
 
-void interpreted_early_runtime_error(runtime_errors error)
+void interpreted_early_runtime_error(enum runtime_error error)
 /* Effects: Runtime error 'error' has occured in a primitive operation.
      Dump the call_stack (plus the primitive operation call) to
      mudout & throw back to the exception handler with SIGNAL_ERROR
-     and the error code in exception_value.
+     and the error code in exception_error.
      Call this function instead of runtime_error if the arguments of the
      function at the top of call_stack are still on the stack.
    Note: Never returns
 */
 {
   basic_error(error, true, -1, NULL);
-  mthrow(SIGNAL_ERROR, makeint(error));
+  mthrow(SIGNAL_ERROR, error);
 }
 
-void primitive_runtime_error(runtime_errors error,
+static void internal_primitive_runtime_error(enum runtime_error error,
+                                             const char *msg,
+                                             const struct primitive_ext *op,
+                                             int nargs, va_list va)
+{
+  assert(nargs <= MAX_PRIMITIVE_ARGS);
+
+  struct call_stack *ostack = call_stack;
+
+  /* prevent duplicate entries */
+  if (call_stack && call_stack->type == call_c
+      && ((struct call_stack_c_header *)call_stack)->u.prim->op == op)
+    goto done;
+
+  struct {
+    struct call_stack_c_header c;
+    value args[MAX_PRIMITIVE_ARGS];
+  } me;
+  me.c = (struct call_stack_c_header){
+    .s = {
+      .next = call_stack,
+      .type = call_primop,
+    },
+    .u.op = op,
+    .nargs = nargs
+  };
+  for (int i = 0; i < nargs; ++i)
+    me.args[i] = va_arg(va, value);
+
+  call_stack = &me.c.s;
+
+ done:
+  if (error != error_none)
+    runtime_error(error);
+
+  runtime_warning(msg);
+  call_stack = ostack;
+}
+
+void primitive_runtime_error(enum runtime_error error,
                              const struct primitive_ext *op,
                              int nargs, ...)
 {
-  /* prevent duplicate entries */
-  if (call_stack && call_stack->type == call_c
-      && call_stack->u.c.u.prim->op == op)
-    runtime_error(error);
-
-  struct call_stack me = {
-    .next = call_stack,
-    .type = call_primop,
-    .u.c = {
-      .u.op = op,
-      .nargs = nargs
-    }
-  };
   va_list va;
   va_start(va, nargs);
-  for (int i = 0; i < nargs; ++i)
-    me.u.c.args[i] = va_arg(va, value);
-  va_end(va);
-
-  call_stack = &me;
-  runtime_error(error);
+  internal_primitive_runtime_error(error, NULL, op, nargs, va);
+  /* not reached */
+  abort();
 }
 
-void error_init(void)
+void primitive_runtime_warning(const char *msg,
+                               const struct primitive_ext *op,
+                               int nargs, ...)
 {
+  va_list va;
+  va_start(va, nargs);
+  internal_primitive_runtime_error(error_none, msg, op, nargs, va);
+  va_end(va);
 }

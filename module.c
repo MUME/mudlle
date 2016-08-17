@@ -20,11 +20,13 @@
  */
 
 #include <string.h>
-#include "table.h"
-#include "global.h"
+
 #include "alloc.h"
-#include "module.h"
 #include "call.h"
+#include "global.h"
+#include "module.h"
+#include "table.h"
+#include "mvalues.h"
 
 /* Module states automaton:
 
@@ -57,18 +59,16 @@ enum module_status module_status(const char *name)
      module_error: attempt to load module led to error
 */
 {
-  struct symbol *sym;
-
-  if (!table_lookup(module_data, name, &sym))
+  struct symbol *sym = table_lookup(module_data, name);
+  if (sym == NULL)
     return module_unloaded;
   return intval(((struct vector *)sym->data)->data[vmodule_status]);
 }
 
 int module_seclevel(const char *name)
 {
-  struct symbol *sym;
-
-  if (!table_lookup(module_data, name, &sym))
+  struct symbol *sym = table_lookup(module_data, name);
+  if (sym == NULL)
     return -1;
 
   return intval(((struct vector *)sym->data)->data[vmodule_seclev]);
@@ -78,25 +78,27 @@ void module_set(const char *name, enum module_status status, int seclev)
 /* Effects: Sets module status
 */
 {
-  struct symbol *sym;
-  struct vector *v;
-
-  if (table_lookup(module_data, name, &sym))
+  struct symbol *sym = table_lookup(module_data, name);
+  if (sym)
     {
-      ((struct vector *)sym->data)->data[vmodule_status] = makeint(status);
-      ((struct vector *)sym->data)->data[vmodule_seclev] = makeint(seclev);
+      struct vector *v = sym->data;
+      v->data[vmodule_status] = makeint(status);
+      v->data[vmodule_seclev] = makeint(seclev);
       return;
     }
 
-  v = alloc_vector(vmodule_size);
+  assert(strlen(name) <= MAX_MODULE_NAME_LENGHT);
+
+  struct vector *v = alloc_vector(vmodule_size);
   v->data[vmodule_status] = makeint(status);
   v->data[vmodule_seclev] = makeint(seclev);
 
   table_set(module_data, name, v);
 }
 
-int module_unload(const char *name)
-/* Effects: Removes all knowledge about module 'name' (eg prior to reloading it)
+bool module_unload(const char *name)
+/* Effects: Removes all knowledge about module 'name' (eg prior to
+     reloading it)
      module_status(name) will return module_unloaded if this operation is
      successful
      Sets to null all variables that belonged to name, and resets their status
@@ -104,20 +106,20 @@ int module_unload(const char *name)
    Returns: false if name was protected or loading
 */
 {
-  int status = module_status(name);
+  enum module_status status = module_status(name);
 
   if (status != module_unloaded)
     {
-      ulong gsize = intval(environment->used), i;
+      if (status == module_loading || status == module_protected)
+        return false;
 
-      if (status == module_loading || status == module_protected) return false;
-
-      for (i = 0; i < gsize; i++)
+      ulong gsize = intval(environment->used);
+      for (ulong i = 0; i < gsize; i++)
 	{
 	  struct string *v = mvars->data[i];
 
 	  /* Unset module vars */
-	  if (pointerp(v) && stricmp(name, v->str) == 0)
+	  if (pointerp(v) && strcasecmp(name, v->str) == 0)
 	    {
 	      mvars->data[i] = makeint(var_normal);
 	      GVAR(i) = NULL;
@@ -131,7 +133,7 @@ int module_unload(const char *name)
   return true;
 }
 
-int module_load(const char *name)
+enum module_status module_load(const char *name)
 /* Effects: Attempts to load module name by calling mudlle hook
      Error/warning messages are sent to muderr
      Sets erred to true in case of error
@@ -150,12 +152,12 @@ int module_load(const char *name)
   return module_status(name);
 }
 
-int module_require(const char *name)
+enum module_status module_require(const char *name)
 /* Effects: Does module_load(name) if module_status(name) == module_unloaded
      Other effects as in module_load
 */
 {
-  int status = module_status(name);
+  enum module_status status = module_status(name);
   if (status == module_unloaded)
     status = module_load(name);
 

@@ -24,41 +24,48 @@
 #include <string.h>
 
 #include "runtime.h"
+#include "support.h"
 
 #include "../alloc.h"
 #include "../builtins.h"
+#include "../calloc.h"
 #include "../context.h"
 #include "../global.h"
 #include "../lexer.h"
 #include "../module.h"
 #include "../mparser.h"
+#include "../tree.h"
 #include "../utils.h"
 
 #if defined(i386) && !defined(NOCOMPILER)
 static int cc_length = 0;	/* statistics */
 #endif
 
-TYPEDOP(mudlle_parse, 0, "`s -> `v. Parses mudlle expression `s and"
-        " returns a parse tree, or false if unsuccessful",
-        1, (struct string *code), OP_LEAF | OP_NOESCAPE,
-        "s.[vz]")
+TYPEDOP(mudlle_parse, 0, "`s0 `s1 -> `v. Parses mudlle expression `s0 and"
+        " returns a parse tree, or false if unsuccessful.\n`s1 is the"
+        " filename; can be null for \"<string>\".",
+        2, (struct string *code, struct string *name),
+        OP_LEAF | OP_NOESCAPE,
+        "s[su].[vz]")
 {
   TYPEIS(code, type_string);
+  if (name)
+    TYPEIS(name, type_string);
 
   ASSERT_NOALLOC_START();
   const char *const lines[] = { code->str, NULL };
   struct reader_state rstate;
   save_reader_state(&rstate);
-  read_from_strings(lines, NULL, NULL);
-  block_t memory = new_block();
-  mfile f = parse(memory);
-  ASSERT_NOALLOC_END();
+  struct alloc_block *memory = new_block();
+  const char *cname = name ? heap_allocate_string(memory, name->str) : NULL;
+  read_from_strings(lines, cname, cname, false);
+  struct mfile *f;
+  ASSERT_NOALLOC();
+  bool ok = parse(memory, &f);
+  /* parse error prints to mudout which may cause allocation */
+  if (ok) ASSERT_NOALLOC();
 
-  value parsed;
-  if (f)
-    parsed = mudlle_parse(memory, f);
-  else
-    parsed = makebool(false);
+  value parsed = ok ? mudlle_parse(memory, f) : makebool(false);
 
   restore_reader_state(&rstate);
   free_block(memory);
@@ -74,6 +81,8 @@ UNSAFETOP(mudlle_parse_file, 0,
               struct string *nicename),
           OP_LEAF | OP_NOESCAPE, "sss.[vz]")
 {
+  ASSERT_NOALLOC_START();
+
   TYPEIS(filename, type_string);
   TYPEIS(name, type_string);
   TYPEIS(nicename, type_string);
@@ -81,24 +90,27 @@ UNSAFETOP(mudlle_parse_file, 0,
   if (f == NULL) return makebool(false);
 
   int c = fgetc(f);
-  if (c == '*' || c == EOF) {
-    /* empty or commented-out file */
-    fclose(f);
-    return makebool(false);
-  }
+  if (c == '*' || c == EOF)
+    {
+      /* empty or commented-out file */
+      fclose(f);
+      return makebool(false);
+    }
 
   rewind(f);
 
-  char *fname, *nname;
-  LOCALSTR(nname, nicename);
-  LOCALSTR(fname, name);
   struct reader_state rstate;
   save_reader_state(&rstate);
-  read_from_file(f, fname, nname);
+  struct alloc_block *memory = new_block();
+  read_from_file(f, heap_allocate_string(memory, name->str),
+                 heap_allocate_string(memory, nicename->str));
 
-  block_t memory = new_block();
-  mfile mf = parse(memory);
-  value parsed = mf ? mudlle_parse(memory, mf) : makebool(false);
+  struct mfile *mf;
+  ASSERT_NOALLOC();
+  bool ok = parse(memory, &mf);
+  /* parse error prints to mudout which may cause allocation */
+  if (ok) ASSERT_NOALLOC();
+  value parsed = ok ? mudlle_parse(memory, mf) : makebool(false);
 
   restore_reader_state(&rstate);
   free_block(memory);
@@ -110,157 +122,81 @@ UNSAFETOP(mudlle_parse_file, 0,
 /* The machine language builtin ops */
 
 #ifndef NOCOMPILER
-static const struct builtin_table {
+static const struct builtin {
   const char *name;
-  void (*address)(void);
+  void *address;
+  bool absolute;
 } builtins[] = {
-#ifdef AMIGA
-  {"bsubtract", bsubtract},
-  {"bor", bor},
-  {"band", band},
-  {"bleq", bleq},
-  {"blne", blne},
-  {"bllt", bllt},
-  {"blle", blle},
-  {"blgt", blgt},
-  {"blge", blge},
-  {"bbitor", bbitor},
-  {"bbitxor", bbitxor},
-  {"bbitand", bbitand},
-  {"bshift_left", bshift_left},
-  {"bshift_right", bshift_right},
-  {"badd", badd},
-  {"bmultiply", bmultiply},
-  {"bdivide", bdivide},
-  {"bremainder", bremainder},
-  {"bnegate", bnegate},
-  {"bnot", bnot},
-  {"bbitnot", bbitnot},
-  {"bref", bref},
-  {"bcar", bcar},
-  {"bcdr", bcdr},
-  {"bwglobal", bwglobal},
-  {"bbadargs", bbadargs},
-  {"bcompare", bcompare},
-  {"bcall", bcall},
-  {"balloc", balloc},
-  {"balloc_readonly", balloc_readonly},
-  {"bcons", bcons},
-  {"berror", berror},
-  {"bvarargs", bvarargs},
-#endif /* AMIGA */
-#ifdef sparc
-  {"bsubtract", bsubtract},
-  {"bor", bor},
-  {"band", band},
-  {"bleq", bleq},
-  {"blne", blne},
-  {"bllt", bllt},
-  {"blle", blle},
-  {"blgt", blgt},
-  {"blge", blge},
-  {"bbitor", bbitor},
-  {"bbitxor", bbitxor},
-  {"bbitand", bbitand},
-  {"bshift_left", bshift_left},
-  {"bshift_right", bshift_right},
-  {"badd", badd},
-  {"bmultiply", bmultiply},
-  {"bdivide", bdivide},
-  {"bremainder", bremainder},
-  {"bnegate", bnegate},
-  {"bnot", bnot},
-  {"bbitnot", bbitnot},
-  {"bref", bref},
-  {"bcar", bcar},
-  {"bcdr", bcdr},
-  {"bwglobal", bwglobal},
-  {"bcleargc", bcleargc},
-  {"bvarargs", bvarargs},
-  {"bcompare", bcompare},
-  {"bcall", bcall},
-  {"balloc_variable", balloc_variable},
-  {"balloc_cons", balloc_cons},
-  {"balloc_closure", balloc_closure},
-  {"bcall_primitive", bcall_primitive},
-  {"bcall_primitive_leaf", bcall_primitive_leaf},
-  {"bcall_primitive_leaf_noalloc", bcall_primitive_leaf_noalloc},
-  {"bcall_secure", bcall_secure},
-  {"bcall_varargs", bcall_varargs}
-#endif /* sparc */
 #ifdef i386
-  {"xcount", (void (*)())&xcount},
-  {"maxseclevel", (void (*)())&maxseclevel},
-  {"seclevel", (void (*)())&internal_seclevel}, /* currently unused */
-  {"ccontext", (void (*)())&ccontext},
-  {"env_values", (void (*)())&env_values},
-  {"max_loop_count", (void (*)())makeint(MAX_FAST_CALLS)},
-
-#define FIRST_RELBUILTIN 6
-#define FIRST_RELBUILTIN_FN bshift_left
-
-  {"bshift_left", bshift_left},
-  {"bshift_right", bshift_right},
-  {"badd", badd},
-  {"bmultiply", bmultiply},
-  {"bdivide", bdivide},
-  {"bremainder", bremainder},
-  {"bref", bref},
-  {"bset", bset},
-  {"btypeof", btypeof},
-
-  {"brglobal", brglobal},
-  {"bwglobal", bwglobal},
-
-  {"bcleargc", bcleargc},
-  {"bcleargc0", bcleargc0},
-  {"bcleargc1", bcleargc1},
-  {"bcleargc2", bcleargc2},
-  {"bvarargs", bvarargs},
-
-  {"bcall", bcall},
-  {"bcall_secure", bcall_secure},
-  {"bcall_varargs", bcall_varargs},
-  {"bapply_varargs", bapply_varargs},
-
-  {"balloc_variable", balloc_variable},
-  {"balloc_cons", balloc_cons},
-  {"balloc_vector", balloc_vector},
-  {"balloc_closure", balloc_closure},
-
-  {"berror_bad_function", berror_bad_function},
-  {"berror_stack_underflow", berror_stack_underflow},
-  {"berror_bad_type", berror_bad_type},
-  {"berror_divide_by_zero", berror_divide_by_zero},
-  {"berror_bad_index", berror_bad_index},
-  {"berror_bad_value", berror_bad_value},
-  {"berror_variable_read_only", berror_variable_read_only},
-  {"berror_loop", berror_loop},
-  {"berror_recurse", berror_recurse},
-  {"berror_wrong_parameters", berror_wrong_parameters},
+  {"badd",                          badd},
+  {"balloc_closure",                balloc_closure},
+  {"balloc_cons",                   balloc_cons},
+  {"balloc_variable",               balloc_variable},
+  {"balloc_vector",                 balloc_vector},
+  {"bapply_varargs",                bapply_varargs},
+  {"bcall",                         bcall},
+  {"bcall_secure",                  bcall_secure},
+  {"bcall_varargs",                 bcall_varargs},
+  {"bcleargc",                      bcleargc},
+  {"bcleargc0",                     bcleargc0},
+  {"bcleargc1",                     bcleargc1},
+  {"bcleargc2",                     bcleargc2},
+  {"bcleargc3",                     bcleargc3},
+  {"bcleargc4",                     bcleargc4},
+  {"bconcat",                       bconcat},
+  {"bdivide",                       bdivide},
   {"bearly_error_wrong_parameters", bearly_error_wrong_parameters},
-  {"berror_security_violation", berror_security_violation},
-  {"berror_value_read_only", berror_value_read_only},
-  {"berror_user_interrupt", berror_user_interrupt},
-  {"berror_no_match", berror_no_match},
-  {"berror_compile", berror_compile},
-  {"berror_abort", berror_abort}
-#endif /* i386 */
+  {"berror_abort",                  berror_abort},
+  {"berror_bad_function",           berror_bad_function},
+  {"berror_bad_index",              berror_bad_index},
+  {"berror_bad_type",               berror_bad_type},
+  {"berror_bad_value",              berror_bad_value},
+  {"berror_compile",                berror_compile},
+  {"berror_divide_by_zero",         berror_divide_by_zero},
+  {"berror_loop",                   berror_loop},
+  {"berror_no_match",               berror_no_match},
+  {"berror_recurse",                berror_recurse},
+  {"berror_security_violation",     berror_security_violation},
+  {"berror_stack_underflow",        berror_stack_underflow},
+  {"berror_user_interrupt",         berror_user_interrupt},
+  {"berror_value_read_only",        berror_value_read_only},
+  {"berror_variable_read_only",     berror_variable_read_only},
+  {"berror_wrong_parameters",       berror_wrong_parameters},
+  {"bmultiply",                     bmultiply},
+  {"bref",                          bref},
+  {"bremainder",                    bremainder},
+  {"brestore_caller",               brestore_caller},
+  {"brglobal",                      brglobal},
+  {"bsave_caller",                  bsave_caller},
+  {"bsave_caller_noalloc",          bsave_caller_noalloc},
+  {"bset",                          bset},
+  {"bshift_left",                   bshift_left},
+  {"bshift_right",                  bshift_right},
+  {"btypeof",                       btypeof},
+  {"bvarargs",                      bvarargs},
+  {"bwglobal",                      bwglobal},
+  {"env_values",                    &env_values, true},
+  {"max_loop_count",                makeint(MAX_LOOP_COUNT), true},
+  {"maxseclevel",                   &maxseclevel, true},
+  {"xcount",                        &xcount, true },
+#else  /* ! i386 */
+  #error Unsupported architecture
+#endif
   };
 #endif /* ! NOCOMPILER */
 
 #ifndef NOCOMPILER
-static ulong builtin_find(struct string *name, int *k)
+static int cmp_builtin(const void *k, const void *b)
 {
-  char *n = name->str;
-  for (int i = sizeof builtins / sizeof builtins[0]; --i >= 0; )
-    if (strcmp(n, builtins[i].name) == 0)
-      {
-	if (k) *k = i;
-	return (ulong)builtins[i].address;
-      }
+  const char *key = k;
+  const struct builtin *builtin = b;
+  return strcmp(key, builtin->name);
+}
 
-  return 0;
+static const struct builtin *builtin_find(struct string *name)
+{
+  return bsearch(name->str, builtins, VLENGTH(builtins), sizeof builtins[0],
+                 cmp_builtin);
 }
 #endif /* ! NOCOMPILER */
 
@@ -276,27 +212,7 @@ static ulong primitive_find(struct string *name)
 
   return (ulong)p->op->op;
 }
-#endif /* ! NOCOMPILER */
 
-#ifdef sparc
-static void set_cst(ulong *sethi, ulong val)
-/* Effects: Sets value defined by a sethi/or pair to val.
-     sethi points to the sethi instruction of the pair, the or can be found
-     by a linear scan from there
-   Modifies: sethi
-*/
-{
-  ulong *or, ortemplate;
-
-  /* Find the or that goes with the sethi */
-  ortemplate = (2 << 30 | 2 << 19) | (*sethi & ~((1 << 25) - 1));
-  or = sethi;
-  while ((*++or & ~((1 << 19) - 1)) != ortemplate) ;
-
-  *sethi = (*sethi & ~((1 << 22) - 1)) | (val >> 10);
-  *or = (*or & ~((1 << 13) - 1)) | (val & ((1 << 10) - 1));
-}
-#endif
 #ifdef i386
 static inline void set_cst(ubyte *x, ulong n)
 {
@@ -304,7 +220,6 @@ static inline void set_cst(ubyte *x, ulong n)
 }
 #endif
 
-#ifndef NOCOMPILER
 static int check_primitives(struct list *scan)
 {
   int count = 0;
@@ -327,15 +242,12 @@ static int check_primitives(struct list *scan)
 
   return count;
 }
-#endif /* ! NOCOMPILER */
 
 static inline value assert_immutable(value v)
 {
   assert(immutablep(v));
   return v;
 }
-
-#define OPT_TYPEIS(v, t) do { if (v) TYPEIS(v, t); } while (0)
 
 static char *add_uword(char *dst, long v)
 {
@@ -349,6 +261,8 @@ static char *add_long(char *dst, long v)
   memcpy(dst, &v, sizeof v);
   return dst + sizeof v;
 }
+
+#endif /* ! NOCOMPILER */
 
 VARTOP(link, 0,
        "`s1 `n1 `s2 `s3 `s4 `n2 `l1 `l2 `l3 `l4 `l5 `l6"
@@ -366,6 +280,10 @@ VARTOP(link, 0,
        "seclevs `l6=list of offsets",
        0, "snsssnllllllnnssns.o")
 {
+#ifdef NOCOMPILER
+  runtime_error(error_bad_value);
+#else  /* !NOCOMPILER */
+
   enum {
     lv_mcode,
     lv_seclev,
@@ -390,13 +308,6 @@ VARTOP(link, 0,
 
   assert(strlen(op_link.type[0]) == lv_arguments + 2);
 
-  assert(builtins[FIRST_RELBUILTIN].address
-         == &FIRST_RELBUILTIN_FN);
-
-#ifdef NOCOMPILER
-  runtime_error(error_bad_value);
-#else  /* !NOCOMPILER */
-
 
   if (nargs != lv_arguments) runtime_error(error_wrong_parameters);
 
@@ -418,11 +329,13 @@ VARTOP(link, 0,
       add_const = add_uword;
     }
 
+#define OPT_TYPEIS(v, t) do { if (v) TYPEIS(v, t); } while (0)
   OPT_TYPEIS(args->data[lv_help],      type_string);
   OPT_TYPEIS(args->data[lv_varname],   type_string);
   OPT_TYPEIS(args->data[lv_filename],  type_string);
   OPT_TYPEIS(args->data[lv_nicename],  type_string);
   OPT_TYPEIS(args->data[lv_arg_types], type_vector);
+#undef OPT_TYPEIS
   int seclev           = GETINT(args->data[lv_seclev]);
   int alineno          = GETINT(args->data[lv_lineno]);
   ulong return_typeset = GETINT(args->data[lv_return_typeset]);
@@ -476,10 +389,8 @@ VARTOP(link, 0,
           {
             struct list *gtype = lglobal->car;
             gname = gtype->car;
-            long t = GETINT(gtype->cdr);
             /* 0 means global index, 1 means gidx * 2 + 1 */
-            if (t < 0 || t > 1)
-              runtime_error(error_bad_value);
+            (void)GETRANGE(gtype->cdr, 0, 1);
           }
         else
           gname = lglobal->car;
@@ -493,196 +404,7 @@ VARTOP(link, 0,
   check_primitives(args->data[lv_primitives]);
   ulong nrel = check_primitives(args->data[lv_rel_primitives]);
 
-#ifdef AMIGA
-  size = offsetof(struct mcode, mcode) + clen + ncsts * sizeof (uword);
-  newp = gc_allocate(size);
-  UNGCPRO();
-  mcode = args->data[lv_mcode];
-  help = args->data[lv_help];
-  varname = args->data[lv_varname];
-  afilename = args->data[lv_filename];
-  csts = args->data[lv_consts];
-  abuiltins = args->data[lv_builtins];
-  globals = args->data[lv_globals];
-  anicename = args->data[lv_nicename];
-
-  newp->o.size = size;
-  newp->o.garbage_type = garbage_mcode;
-  newp->o.type = type_mcode;
-  newp->o.flags = 0;
-  newp->nb_constants = ncsts;
-  newp->seclevel = seclev;
-  newp->help = help;
-  newp->varname = varname;
-  newp->filename = afilename;
-  newp->lineno = alineno;
-  newp->code_length = clen;
-  memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
-
-  memcpy(newp->mcode, mcode->str, clen);
-
-  /* Copy constants and their offsets */
-  scan_csts = csts;
-  cst_offsets = (uword *)((ubyte *)&newp->mcode
-                          + MUDLLE_ALIGN(clen, sizeof (uword)));
-  while (scan_csts != NULL)
-    {
-      struct list *cst;
-      uword offset;
-
-      cst = scan_csts->car;
-      offset = intval(cst->cdr);
-      *(value *)(newp->mcode + offset) = cst->car;
-      *cst_offsets++ = offset;
-
-      scan_csts = scan_csts->cdr;
-    }
-
-  /* Set builtin addresses */
-  scan_builtins = abuiltins;
-  while (scan_builtins != NULL)
-    {
-      struct list *builtin;
-      uword offset;
-      ulong baddress;
-
-      builtin = scan_builtins->car;
-      offset = intval(builtin->cdr);
-      if (!(baddress = builtin_find(builtin->car, NULL)))
-	runtime_error(error_bad_value);
-      *(ulong *)(newp->mcode + offset) = baddress;
-
-      scan_builtins = scan_builtins->cdr;
-    }
-
-  /* Set global offsets */
-  scan_globals = globals;
-  while (scan_globals != NULL)
-    {
-      struct list *global;
-      uword offset;
-      ulong goffset;
-      struct vector *genv;
-
-      global = scan_globals->car;
-      offset = intval(global->cdr);
-      goffset = mglobal_lookup(global->car);
-      genv = env_values;
-      *(uword *)(newp->mcode + offset) =
-	(ubyte *)&genv->data[goffset] - (ubyte *)genv;
-
-      scan_globals = scan_globals->cdr;
-    }
-
-  /* Primitives not implemented on Amiga */
-
-#endif
-
-#ifdef sparc
-  size = offsetof(struct mcode, mcode) + clen + ncsts * sizeof (uword);
-  /* allocate extra space to ensure that gen1 will have space for this object
-     even with the aligned forwarding */
-  newp = gc_allocate(size + CODE_ALIGNMENT);
-  UNGCPRO();
-  /* No more GC from here on !!! */
-
-  mcode = args->data[lv_mcode];
-  help = args->data[lv_help];
-  varname = args->data[lv_varname];
-  afilename = args->data[lv_filename];
-  csts = args->data[lv_consts];
-  abuiltins = args->data[lv_builtins];
-  globals = args->data[lv_globals];
-  primitives = args->data[lv_primitives];
-  anicename = args->data[lv_nicename];
-
-  newp->o.size = size;
-  newp->o.garbage_type = garbage_mcode;
-  newp->o.type = type_mcode;
-  newp->o.flags = 0;
-  newp->nb_constants = ncsts;
-  newp->seclevel = seclev;
-  newp->help = help;
-
-  newp->filename = afilename;
-  newp->lineno = alineno;
-  newp->code_length = clen;
-  newp->myself = (ubyte *)newp;
-  memcpy(newp->magic, "\xff\xff\xff\xff\xff\xff\xff\xff", 8);
-
-  memcpy(newp->mcode, mcode->str, clen);
-
-  /* Copy constants and their offsets */
-  scan_csts = csts;
-  cst_offsets = (uword *)((ubyte *)newp->mcode + clen);
-  while (scan_csts != NULL)
-    {
-      struct list *cst;
-      uword offset;
-
-      cst = scan_csts->car;
-      offset = intval(cst->cdr);
-      set_cst(newp->mcode + offset, (ulong)cst->car);
-      *cst_offsets++ = offset;
-
-      scan_csts = scan_csts->cdr;
-    }
-
-  /* Set builtin addresses */
-  scan_builtins = abuiltins;
-  while (scan_builtins != NULL)
-    {
-      struct list *builtin;
-      ulong baddress, *callins;
-
-      builtin = scan_builtins->car;
-      if (!(baddress = builtin_find(builtin->car, NULL)))
-	runtime_error(error_bad_value);
-
-      callins = newp->mcode + intval(builtin->cdr);
-      *callins = 1 << 30 | (baddress - (ulong)callins) >> 2;
-
-      scan_builtins = scan_builtins->cdr;
-    }
-
-  /* Set primitive addresses */
-  scan_primitives = primitives;
-  while (scan_primitives != NULL)
-    {
-      struct list *primitive;
-      ulong paddress, offset;
-
-      primitive = scan_primitives->car;
-      offset = intval(primitive->cdr);
-      paddress = primitive_find(primitive->car);
-      set_cst(newp->mcode + offset, paddress);
-
-      scan_primitives = scan_primitives->cdr;
-    }
-
-  /* Set global offsets */
-  scan_globals = globals;
-  while (scan_globals != NULL)
-    {
-      struct list *globl;
-      ulong goffset, offset;
-      struct vector *genv;
-
-      globl = scan_globals->car;
-      offset = intval(globl->cdr);
-      goffset = mglobal_lookup(globl->car);
-
-      /* Compute byte offset from environment base */
-      genv = env_values;
-      goffset = (ubyte *)&genv->data[goffset] - (ubyte *)genv;
-      set_cst(newp->mcode + offset, goffset);
-
-      scan_globals = scan_globals->cdr;
-    }
-
-#endif
-
-#if defined(i386)
+#ifdef i386
   for (struct list *seclevs = args->data[lv_seclevs];
        seclevs;
        seclevs = seclevs->cdr)
@@ -701,11 +423,11 @@ VARTOP(link, 0,
     {
       struct list *builtin = scan_builtins->car;
 
-      int k;
-      if (!builtin_find(builtin->car, &k))
+      const struct builtin *b = builtin_find(builtin->car);
+      if (b == NULL)
 	runtime_error(error_bad_value);
 
-      if (k >= FIRST_RELBUILTIN)
+      if (!b->absolute)
 	nrel++;
     }
 
@@ -771,15 +493,17 @@ VARTOP(link, 0,
   switch ((ulong)-clen % cst_size)
     {
     case 0: break;
-    case 1: newp->mcode[clen] = 0x90; break;
+    case 1:                         /* nop */
+      newp->mcode[clen]     = 0x90;
+      break;
     case 2:
-      newp->mcode[clen] = 0x66; /* 66 nop */
+      newp->mcode[clen]     = 0x66; /* xchg %ax,%ax */
       newp->mcode[clen + 1] = 0x90;
       break;
     case 3:
-      newp->mcode[clen] = 0x0f;
+      newp->mcode[clen]     = 0x0f; /* nopl (%eax) */
       newp->mcode[clen + 1] = 0x1f;
-      newp->mcode[clen + 2] = 0x0ff;
+      newp->mcode[clen + 2] = 0x00;
       break;
     default: abort();
     }
@@ -848,17 +572,16 @@ VARTOP(link, 0,
     {
       assert(TYPE(scan_builtins, type_pair));
       struct list *builtin = scan_builtins->car;
-      int k;
-      ulong baddress = builtin_find(builtin->car, &k);
-      assert(baddress);
+      const struct builtin *b = builtin_find(builtin->car);
       long offset = intval(builtin->cdr);
       ubyte *callins = newp->mcode + offset;
 
-      if (k < FIRST_RELBUILTIN)
-	set_cst(callins, baddress);
+      if (b->absolute)
+	set_cst(callins, (ulong)b->address);
       else
 	{
-	  set_cst(callins, baddress - (ulong)callins - sizeof (ulong));
+	  set_cst(callins,
+                  (ulong)b->address - (ulong)callins - sizeof (ulong));
 	  /* need to remember offset (for relocation) */
           cst_offsets = add_const(cst_offsets, offset);
 	}
@@ -925,12 +648,13 @@ VARTOP(link, 0,
       set_cst(newp->mcode + offset, goffset);
     }
 
+#else  /* ! i386 */
+  #error Unsupported architecture
 #endif
 
 #ifdef GCSTATS
-  gcstats.anb[type_mcode]++;
-  gcstats.asizes[type_mcode] += MUDLLE_ALIGN(size + CODE_ALIGNMENT,
-                                             sizeof (value));
+  gcstats_add_alloc(type_mcode, MUDLLE_ALIGN(size + CODE_ALIGNMENT,
+                                             sizeof (value)));
 #endif
 
   newp->code.o.flags |= OBJ_IMMUTABLE;
@@ -945,7 +669,6 @@ UNSAFETOP(make_closure, 0, "`mcode -> `f. Makes a function with no closure"
           OP_LEAF | OP_NOESCAPE, "o.f")
 {
   TYPEIS(mcode, type_mcode);
-
   return alloc_closure0(&mcode->code);
 }
 
@@ -1118,7 +841,7 @@ UNSAFETOP(closure_code, 0,
   return fn->code;
 }
 
-UNSAFETOP(global_table, 0, " -> `t. Returns global symbol table",
+UNSAFETOP(global_table, 0, "-> `t. Returns global symbol table",
           0, (void),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
 {
@@ -1130,9 +853,7 @@ TYPEDOP(global_name, 0, "`n -> `s. Returns the name of global `n"
         1, (value midx),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.s")
 {
-  long idx = GETINT(midx);
-  if (idx < 0 || idx >= intval(environment->used))
-    runtime_error(error_bad_value);
+  long idx = GETRANGE(midx, 0, intval(environment->used) - 1);
   return GNAME(idx);
 }
 
@@ -1142,7 +863,9 @@ SECTOP(global_lookup, 0, "`s -> `n. Returns index of global variable `s."
        OP_LEAF | OP_NOESCAPE, "s.n")
 {
   TYPEIS(name, type_string);
-
+  size_t nlen = string_len(name);
+  if (nlen < 1 || nlen > MAX_VARIABLE_LENGTH)
+    runtime_error(error_bad_value);
   return makeint(mglobal_lookup(name));
 }
 
@@ -1151,15 +874,12 @@ SECTOP(global_value, 0, "`n -> `x. Returns value of global variable `n"
        1, (value midx), SECLEVEL_GLOBALS,
        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.x")
 {
-  long idx = GETINT(midx);
-  if (idx < 0 || idx >= intval(environment->used))
-    runtime_error(error_bad_value);
-
+  long idx = GETRANGE(midx, 0, intval(environment->used) - 1);
   return GVAR(idx);
 }
 
 TYPEDOP(global_names, 0,
-        " -> `n. Returns the number of globals used. See also `global_name()"
+        "-> `n. Returns the number of globals used. See also `global_name()"
         " and `global_value()",
 	0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
@@ -1172,19 +892,35 @@ UNSAFETOP(global_set, "global_set!",
           2, (value midx, value x),
           OP_LEAF | OP_NOALLOC, "nx.2")
 {
-  long idx = GETINT(midx);
-  if (idx < 0 || idx >= intval(environment->used) || GCONSTANT(idx))
-    runtime_error(error_bad_value);
+  long idx = GETRANGE(midx, 0, intval(environment->used) - 1);
+  if (GCONSTANT(idx))
+    runtime_error(error_variable_read_only);
 
   GVAR(idx) = x;
   return x;
 }
 
-void global_runtime_error(runtime_errors error, bool is_write, ulong goffset)
+TYPEDOP(global_read, 0, "", 1, (value midx), OP_OPERATOR, "n.x")
+{
+  /* only used to print error messages */
+  undefined();
+}
+
+TYPEDOP(global_write, 0, "", 2, (value midx, value x), OP_OPERATOR, "nx.2")
+{
+  /* only used to print error messages */
+  undefined();
+}
+
+const struct primitive_ext *const global_read_ext = &op_global_read;
+const struct primitive_ext *const global_write_ext = &op_global_write;
+
+void global_runtime_error(enum runtime_error error, bool is_write,
+                          ulong goffset, value val)
 {
   primitive_runtime_error(error,
-                          is_write ? &op_global_set : &op_global_lookup,
-                          1, GNAME(goffset));
+                          is_write ? &op_global_write : &op_global_read,
+                          is_write ? 2 : 1, makeint(goffset), val);
 }
 
 TYPEDOP(module_status, 0, "`s -> `n. Returns status of module (library) `s,"
@@ -1217,13 +953,11 @@ UNSAFETOP(module_set, "module_set!",
           OP_LEAF | OP_NOESCAPE, "snn.")
 {
   char *tname;
+  ALLOCA_STRING(tname, name, MAX_MODULE_NAME_LENGHT);
+  if (tname == NULL)
+    runtime_error(error_bad_value);
 
-  TYPEIS(name, type_string);
-  LOCALSTR(tname, name);
-  ISINT(status);
-  ISINT(seclev);
-
-  module_set(tname, intval(status), intval(seclev));
+  module_set(tname, GETINT(status), GETINT(seclev));
 
   undefined();
 }
@@ -1242,10 +976,11 @@ TYPEDOP(module_require, 0,
 	1, (struct string *name),
 	0, "s.n")
 {
-  char *tname;
-
   TYPEIS(name, type_string);
-  LOCALSTR(tname, name);
+  char *tname;
+  ALLOCA_STRING(tname, name, MAX_MODULE_NAME_LENGHT);
+  if (tname == NULL)
+    runtime_error(error_bad_value);
 
   return makeint(module_require(tname));
 }
@@ -1254,18 +989,16 @@ TYPEDOP(module_vstatus, 0,
         "`n0 -> `s/`n1. Return status of global variable `n0; either the"
         " name of the defining library, or one of:\n"
         "  `var_normal          \tnormal variable\n"
-        "  `var_module          \tdefined by a module (library)\n"
         "  `var_write           \twritten by mudlle\n"
         "  `var_system_write    \tanyone can read, but mudlle cannot write\n"
         "  `var_system_mutable  \tanyone may read or write",
 	1, (value goffset),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.S")
 {
-  long n = GETINT(goffset); n = intval(goffset);
-  if (n < 0 || n >= intval(environment->used)) runtime_error(error_bad_value);
+  long idx = GETRANGE(goffset, 0, intval(environment->used) - 1);
 
   struct string *mod;
-  enum vstatus status = module_vstatus(n, &mod);
+  enum vstatus status = module_vstatus(idx, &mod);
   if (status == var_module)
     {
       assert(TYPE(mod, type_string));
@@ -1282,11 +1015,9 @@ UNSAFETOP(module_vset, "module_vset!",
           2, (value goffset, value status),
           OP_LEAF | OP_NOALLOC, "n[ns].n")
 {
-  long n;
   struct string *mod;
 
-  ISINT(goffset); n = intval(goffset);
-  if (n < 0 || n >= intval(environment->used)) runtime_error(error_bad_value);
+  long idx = GETRANGE(goffset, 0, intval(environment->used) - 1);
 
   if (integerp(status))
     {
@@ -1301,10 +1032,12 @@ UNSAFETOP(module_vset, "module_vset!",
       TYPEIS(mod, type_string);
       status = makeint(var_module);
     }
-  return makebool(module_vset(n, intval(status), mod));
+  return makebool(module_vset(idx, intval(status), mod));
 }
 
-UNSAFETOP(module_table, 0, " -> `t. Returns the module status table",
+UNSAFETOP(module_table, 0, "-> `t. Returns the table of module status for"
+          " each named mudlle library. Each entry is a vector(`status,"
+          " `seclev) where `status is as returned by `module_status().",
           0, (void),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
 {
@@ -1361,13 +1094,6 @@ void support_init(void)
   system_define("mc:m_module",  makeint(f_module));
   system_define("mc:m_library", makeint(f_library));
 
-  /* C options information */
-#ifdef GCDEBUG
-  system_define("OPTION_GCDEBUG", makebool(true));
-#else
-  system_define("OPTION_GCDEBUG", makebool(false));
-#endif
-
 #ifdef i386
   system_define("x86:function_offset",
                 makeint(offsetinobj(struct mcode, mcode)));
@@ -1390,8 +1116,4 @@ void support_init(void)
                 makeint(offsetof(struct ccontext, callee)));
 #endif /* ! NOCOMPILER */
 #endif /* i386 */
-
-#ifndef NOCOMPILER
-  system_define("mc:max_fast_calls", makeint(MAX_FAST_CALLS));
-#endif
 }

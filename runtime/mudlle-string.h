@@ -19,8 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifndef RUNTIME_STRINGOPS_H
-#define RUNTIME_STRINGOPS_H
+#ifndef RUNTIME_MUDLLE_STRING_H
+#define RUNTIME_MUDLLE_STRING_H
 
 #include "../types.h"
 
@@ -30,10 +30,16 @@ value string_append(struct string *s1, struct string *s2,
 value code_string_ref(struct string *str, value i);
 value code_string_set(struct string *str, value i, value c);
 
+int mudlle_string_isearch(struct string *haystack, struct string *needle);
+
+value concat_strings(struct string **strings, int count);
+
 void string_init(void);
 
 const unsigned char *get_iso88591_pcre_table(void);
 
 bool is_regexp(value _re);
 
-#endif /* RUNTIME_STRINGOPS_H */
+extern struct string *const static_empty_string;
+
+#endif /* RUNTIME_MUDLLE_STRING_H */

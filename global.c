@@ -59,7 +59,9 @@ static ulong global_add(struct string *name, value val)
 {
   GCCHECK(val);
 
-  assert(name->o.flags & OBJ_READONLY);
+  size_t nlen = string_len(name);
+  assert(nlen >= 1 && nlen <= MAX_VARIABLE_LENGTH);
+  assert(obj_readonlyp(&name->o));
 
   struct vector *old_values = env_values;
   GCPRO2(name, old_values);
@@ -70,7 +72,7 @@ static ulong global_add(struct string *name, value val)
     {
       struct vector *vec = alloc_vector(new_size);
 
-      memcpy(vec->data, mvars->data, mvars->o.size - sizeof(struct obj));
+      memcpy(vec->data, mvars->data, mvars->o.size - sizeof (struct obj));
       mvars = vec;
 
       vec = alloc_vector(new_size);
@@ -111,8 +113,8 @@ ulong global_lookup(const char *name)
 
 bool global_exists(const char *name, ulong *ofs)
 {
-  struct symbol *pos;
-  if (!table_lookup(global, name, &pos))
+  struct symbol *pos = table_lookup(global, name);
+  if (pos == NULL)
     return false;
   *ofs = intval(pos->data);
   return true;
@@ -125,25 +127,17 @@ ulong mglobal_lookup(struct string *name)
    Modifies: environment
 */
 {
-  struct symbol *pos;
-  if (table_lookup(global, name->str, &pos))
+  struct symbol *pos = table_mlookup(global, name);
+  if (pos)
     return intval(pos->data);
 
   struct string *tname;
-  if (name->o.flags & OBJ_READONLY)
+  if (obj_readonlyp(&name->o))
     tname = name;
   else
     tname = make_readonly(mudlle_string_copy(name));
 
   return global_add(tname, NULL);
-}
-
-struct list *global_list(void)
-/* Returns: List of symbols representing all the global variables.
-     The value cell of each symbol contains the variables number
-*/
-{
-  return table_list(global);
 }
 
 /* We can't rely on seclevel being set (not all code is calling secures),
@@ -157,22 +151,24 @@ static inline int seclevel_for_globals(void)
   return intval(maxseclevel);
 }
 
-void check_global_write(ulong goffset)
+void check_global_write(ulong goffset, value val)
 {
+  /* called from mudlle; must not allocate if it returns */
   assert(goffset < vector_len(global_names));
 
   if (GMUTABLE(goffset))
     return;
 
   if (GCONSTANT(goffset))
-    global_runtime_error(error_variable_read_only, true, goffset);
+    global_runtime_error(error_variable_read_only, true, goffset, val);
 
   if (seclevel_for_globals() < SECLEVEL_GLOBALS)
-    global_runtime_error(error_security_violation, true, goffset);
+    global_runtime_error(error_security_violation, true, goffset, val);
 }
 
 void check_global_read(ulong goffset)
 {
+  /* called from mudlle; must not allocate if it returns */
   if (seclevel_for_globals() >= SECLEVEL_GLOBALS)
     return;
 
@@ -189,5 +185,5 @@ void check_global_read(ulong goffset)
   enum vstatus status = module_vstatus(goffset, &module_name);
   if (status != var_system_mutable && status != var_system_write
       && status != var_module)
-    global_runtime_error(error_security_violation, false, goffset);
+    global_runtime_error(error_security_violation, false, goffset, NULL);
 }

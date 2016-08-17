@@ -23,33 +23,34 @@ library misc // Miscellaneous useful functions
 requires system, sequences
 defines abbrev?, assert, assert_message, assoc, assq, bcomplement,
   bcomplement!,  bcopy, bforeach, bitset_to_list, breduce,
+  bits_foreach, bits_filter, bits_reduce, bits_exists,
   caaar, caadr, caar, cadar, caddr, cadr, cdaar, cdadr, cdar, cddar,
   cdddr, cddr,
+  less_than, greater_than,
   concat_words, difference, fail, fail_message, find_word?,
   intersection, last_element, last_pair, list_first_n!, list_index,
-  list_to_vector, lprotect, lqsort, mappend, mapstr, member, memq, nth,
+  list_to_vector, lprotect, lqsort, mappend, member, memq, nth,
   nth_element, nth_element_cond, nth_pair, random_element, repeat,
   set_eq?, set_in?, skip_white, sorted_table_list, sorted_table_vector,
-  string_head?, string_index, string_ljustify, string_ljustify_cut,
-  string_rindex, string_rjustify, string_rjustify_cut, string_tail, table_copy,
+  string_head?, string_ljustify, string_ljustify_cut,
+  string_rindex, string_rjustify, string_rjustify_cut, string_tail,
   union, unquote, vector_exists_index, vector_index, vector_rindex,
-  vector_to_list, vequal?, vqsort!, vqsort_slice!, call_cc
+  vector_to_list, vequal?, vinsertion_qsort_slice!, vqsort!, vqsort_slice!,
+  call_cc
 [
+
+less_than = fn "`n0 `n1 -> `b. Returns true if `n0 is less than `n1." (int a, int b) a < b;
+
+greater_than = fn "`n0 `n1 -> `b. Returns true if `n0 is greater than `n1." (int a, int b) a > b;
 
 repeat = fn "`n `f -> . Execute `f() `n times" (int n, function f)
   while (n-- > 0) f();
 
 lprotect = fn "`l -> `l. Protects list `l" (list l)
   [
-    | t |
-
-    t = l;
-    while (l != null)
-      [
-	protect(l);
-	l = cdr(l);
-      ];
-    t
+    for (|t| t = l; t != null && !immutable?(t); t = cdr(protect(t)) )
+      null;
+    l
   ];
 
 caar = fn "`x0 -> `x1. Returns car(car(`x0))" (pair x) car(car(x));
@@ -167,14 +168,6 @@ vector_exists_index = fn "`f `v -> `n. Returns the index of first element `x of 
       else ++i
   ];
 
-string_index = fn "`s `n1 -> `n2. Finds index of char `n1 in `s, or -1 if none" (string str, int n)
-  [
-    n &= 255;
-    for (|l, i| [ l = string_length(str); i = 0 ]; i < l; ++i)
-      if (str[i] == n) exit<function> i;
-    -1
-  ];
-
 string_rindex = fn "`s `n1 -> `n2. Finds last index of char `n1 in `s, or -1 if none" (string str, int n)
   [
     n &= 255;
@@ -214,71 +207,111 @@ lqsort = fn "`f `l1 -> `l2. Sort `l1 according to `f. `f(`x1, `x2) should return
 	]
     ];
 
-vqsort_slice! = fn "`f `n0 `n1 `v0 -> `v1. Sort `v0 from index `n0, with length `n1, according to `f. `f(`x1, `x2) should return true if `x1 goes before `x2" (function f, int start, int length, vector v)
-  [
-    | subsort |
+[
+  | insertion_sort! |
+  insertion_sort! = fn (function f, vector v, int start, int end)
+    [
+      for (|i| i = start + 1; i < end; ++i)
+        [
+          | j, e, ej |
+          e = v[i];
+          j = i;
+          while (j > start && !f(ej = v[j - 1], e))
+            v[j--] = ej;
+          v[j] = e
+        ];
+      v
+    ];
 
-    subsort = fn (low, high)
-      if (low < high) // work remains
-	[
-	  | pivot, free, pos_low, pos_high, x |
+  vinsertion_qsort_slice! = fn "`f `v `n0 `n1 -> `v. Insertion sort the `n1 elements of vector `v starting at index `n0.\n`f(`x0, `x1) -> `b should return true if `x0 sorts before `x1." (function f, vector v, int start, int len)
+    [
+      if (start < 0)
+        start += vlength(v);
+      | end |
+      end = start + len;
+      assert(start >= 0 && start <= end && end <= vlength(v));
+      insertion_sort!(f, v, start, end);
+    ];
 
-	  pivot = v[high];
-	  free = high;
-	  pos_low = low;
-	  pos_high = high - 1;
-	  <separate> loop // scan up from low
-	    [
-	      x = v[pos_low];
-	      ++pos_low;
-	      if (!f(x, pivot)) // x must move above pivot
-		[
-		  v[free] = x;
-		  // where x was is now free
-		  free = pos_low - 1;
+  | subsort, insertion_sort_cutoff |
 
-		  // scan down from high
-		  loop
-		    [
-		      if (pos_low > pos_high) exit<separate> 0;
-		      x = v[pos_high];
-		      --pos_high;
-		      if (f(x, pivot)) // x must move below pivot
-			[
-			  v[free] = x;
-			  // where x was is now free
-			  free = pos_high + 1;
-			  exit 0
-			]
-		    ]
-		];
-	      if (pos_low > pos_high) exit<separate> 0;
-	    ];
-	  v[free] = pivot;
-	  subsort(low, free - 1);
-	  subsort(free + 1, high);
-	];
+  insertion_sort_cutoff = 10; // from a few manual tests
 
-    if (start < 0)
-      start += vlength(v);
+  subsort = fn (function f, vector v, int low, int high)
+    loop
+      [
+        if (low + insertion_sort_cutoff >= high)
+          // insertion sort the rest
+          exit null;
 
-    subsort(start, start + length - 1);
-    v
-  ];
+        | pivpos, pivot, free, pos_low, pos_high, x |
+        pivpos = random(low, high);
+        pivot = v[pivpos];
+        v[pivpos] = v[high];
+        free = high;
+        pos_low = low;
+        pos_high = high - 1;
+        <separate> loop // scan up from low
+          [
+            x = v[pos_low];
+            ++pos_low;
+            if (!f(x, pivot)) // x must move above pivot
+              [
+                v[free] = x;
+                // where x was is now free
+                free = pos_low - 1;
 
-vqsort! = vector fn "`f `v -> `v. Sort `v according to `f. `f(`x1, `x2) should return true if `x1 goes before `x2" (function f, vector v)
-  vqsort_slice!(f, 0, vlength(v), v);
+                // scan down from high
+                loop
+                  [
+                    if (pos_low > pos_high) exit<separate> 0;
+                    x = v[pos_high];
+                    --pos_high;
+                    if (f(x, pivot)) // x must move below pivot
+                      [
+                        v[free] = x;
+                        // where x was is now free
+                        free = pos_high + 1;
+                        exit 0
+                      ]
+                  ]
+              ];
+            if (pos_low > pos_high) exit<separate> 0;
+          ];
+        v[free] = pivot;
 
-mapstr = fn "`c `s -> `l. Executes `c(`n) on every character `n in `s and makes list of results" (function f, string s)
-  [
-    | len, results |
-    len = string_length(s); results = null;
+        // pick the shortest half for recursion; iterate with the longer
+        if (high - free < free - low)
+          [
+            subsort(f, v, low, free - 1);
+            low = free + 1
+          ]
+        else
+          [
+            subsort(f, v, free + 1, high);
+            high = free - 1
+          ];
+      ];
 
-    while (len > 0)
-      results = f(s[--len]) . results;
+  vqsort_slice! = fn "`f `n0 `n1 `v -> `v. Sort the `n1 items in `v starting with index `n0 according to `f(`x0, `x1) -> `b which should return true if `x0 sorts before `x1.\nCf. `vqsort!()." (function f, int start, int length, vector v)
+    [
+      if (start < 0)
+        start += vlength(v);
+      | end |
+      end = start + length;
+      assert(start >= 0 && start <= end && end <= vlength(v));
+      subsort(f, v, start, end - 1);
+      insertion_sort!(f, v, start, end)
+    ];
 
-    results
-  ];
+  vqsort! = fn "`f `v -> `v. Sort `v according to `f(`x0, `x1) -> `b which should return true if `x0 sorts before `x1.\nCf. `vqsort_slice!()." (function f, vector v)
+    [
+      | len |
+      len = vlength(v);
+      subsort(f, v, 0, len - 1);
+      insertion_sort!(f, v, 0, len)
+    ];
+];
 
 mappend = fn "`f `l1 -> `l2. Like `lmap, but (destructively) appends the results of `f(`x) for each element `x in `l1 together" (function f, list l)
   [
@@ -368,64 +401,60 @@ sorted_table_vector = fn "`table -> `v. Returns a vector of the elements of `tab
 sorted_table_list = fn "`table -> `l. Returns a list of the elements of `table, sorted by name" (table table)
   vector_to_list(sorted_table_vector(table));
 
-table_copy = fn "`table1 -> `table2. Makes a copy of `table1" (table table)
-  [
-    | res |
-    table_reduce(fn (sym, res) [
-      table_set!(res, symbol_name(sym), symbol_get(sym));
-      res
-    ], res = make_table(), table);
-    res                         // tell compiler we're returning a table
-  ];
-
 /// Ancalagon's stuff
 
 /// LIST FUNCTIONS
 
-nth_pair = fn "`n `l -> `x. Returns nth pair of `l" (int n, list lst) [
-   while (pair? (lst) && (n > 1)) [
-      lst = cdr (lst);
-      --n;
-   ];
-   if (n == 1) lst else null;
-];
+nth_pair = fn "`n `l -> `x. Return pair number `n in `l (1-based), or the last `cdr if there are not enough elements." (int n, list lst)
+  [
+    while (pair?(lst) && n > 1)
+      [
+        lst = cdr(lst);
+        --n;
+      ];
+    if (n == 1) lst else null;
+  ];
 
-nth_element = fn "`n `l -> `x. Returns element `n of a list or null" (int n, list lst) [
-   |nth|
-   nth = nth_pair (n, lst);
-   if (pair? (nth)) car (nth) else null;
-];
+nth_element = fn "`n `l -> `x. Returns element `n (1-based) of a list or null" (int n, list lst)
+  [
+    | nth |
+    nth = nth_pair(n, lst);
+    if (pair?(nth)) car(nth) else null;
+  ];
 
-random_element = fn
-   "`l -> `x. Returns a random element in list `l or null" (list lst) [
-   |items|
-   items = llength (lst);
-   if (items >= 1) nth_element (random (1, items), lst)
-   else null;
-];
+random_element = fn "`l -> `x. Returns a random element in list `l or null" (list lst)
+  if (lst == null)
+    null
+  else
+    nth_element(random(1, llength(lst)), lst);
 
-last_pair = fn "`l0 -> `l1. Returns the last pair of list `l0, or null." (list lst) [
-   |tail|
-   while (pair? (lst)) [
-      tail = lst;
-      lst = cdr (lst);
-   ];
-   tail;
-];
+last_pair = fn "`l0 -> `l1. Returns the last pair of list `l0, or null." (list lst)
+  [
+    | tail |
+    while (pair?(lst))
+      [
+        tail = lst;
+        lst = cdr(lst);
+      ];
+    tail;
+  ];
 
-last_element = fn "`l -> `x. Returns the last element of list `l or null" (list lst) [
-   |res|
-   res = last_pair (lst);
-   if (pair? (res)) car (res) else null;
-];
+last_element = fn "`l -> `x. Returns the last element of list `l or null" (list lst)
+  [
+    | res |
+    res = last_pair(lst);
+    if (pair?(res)) car(res) else null;
+  ];
 
-list_first_n! = fn "`n `l -> `l. Returns first `n elements of `l"
-   (int n, list lst) [
-   |nth|
-   nth = nth_pair (n, lst);
-   if (pair? (nth)) set_cdr! (nth, null);
-   lst;
-];
+list_first_n! = fn "`n `l -> `l. Returns first `n elements of `l, or the whole list of `n is larger than the number of elements." (int n, list lst)
+  [
+    if (n == 0) exit<function> null;
+    | nth |
+    nth = nth_pair(n, lst);
+    if (pair?(nth))
+      set_cdr!(nth, null);
+    lst
+  ];
 
 nth_element_cond = fn "`n `l `f -> `x|`b. Returns `n'th `x in `l for which `f(`x) true, or false" (int n, list lst, function func)
   [
@@ -433,7 +462,7 @@ nth_element_cond = fn "`n `l `f -> `x|`b. Returns `n'th `x in `l for which `f(`x
       [
         if (func(car(lst)))
           --n;
-        lst = cdr (lst);
+        lst = cdr(lst);
       ];
     while (pair?(lst) && !func(car(lst)))
       lst = cdr(lst);
@@ -443,16 +472,16 @@ nth_element_cond = fn "`n `l `f -> `x|`b. Returns `n'th `x in `l for which `f(`x
       false;
   ];
 
-list_index = fn "`x `l -> `n. Returns the index of `x or false"
-   (x, list lst) [
+list_index = fn "`x `l -> `n. Returns the index of `x in `l (1-based), or false" (x, list lst) [
    |count|
    count = 1;
-   while (pair? (lst) && (car (lst) != x)) [
-      ++count;
-      lst = cdr (lst);
-   ];
-   if (!pair? (lst)) count = 0;
-   count;
+   while (pair?(lst))
+     [
+       if (car(lst) == x) exit<function> count;
+       ++count;
+       lst = cdr(lst);
+     ];
+   false
 ];
 
 /// STRING FUNCTIONS
@@ -653,6 +682,70 @@ bforeach = fn "`f `bitset -> . Does `f(`i) for each bit set in `bitset" (functio
 	n += 8;
 	++i;
       ];
+  ];
+
+bits_foreach = fn "`c `n -> . Calls `c(`i) for each bit `i set in `n" (function f, int n)
+  [
+    | base |
+    base = 0;
+    loop
+      [
+        if (n == 0) exit null;
+        if (n & 1)   f(base + 0);
+        if (n & 2)   f(base + 1);
+        if (n & 4)   f(base + 2);
+        if (n & 8)   f(base + 3);
+        if (n & 16)  f(base + 4);
+        if (n & 32)  f(base + 5);
+        if (n & 64)  f(base + 6);
+        if (n & 128) f(base + 7);
+        n = (n >> 8) & (MAXINT >> 7); // mask to handle negatives
+        base += 8;
+      ];
+  ];
+
+bits_filter = fn "`c `n0 -> `n1. Filters the bits `i in `n0 by `c(`i)" (function f, int n)
+  [
+    | i, bit |
+    i = 0;
+    bit = 1;
+    while (i < 31 && n)
+      [
+        if ((n & bit) && !f(i))
+          n &= ~bit;
+        ++i;
+        bit <<= 1;
+      ];
+    n
+  ];
+
+bits_reduce = fn "`c `x0 `n -> . Reduce `n by `x = `c(`i, `x) for each bit `i set in `n, and initial value `x0" (function f, x, int n)
+  [
+    | base |
+    base = 0;
+    loop
+      [
+        if (n == 0) exit null;
+        if (n & 1)   x = f(base + 0, x);
+        if (n & 2)   x = f(base + 1, x);
+        if (n & 4)   x = f(base + 2, x);
+        if (n & 8)   x = f(base + 3, x);
+        if (n & 16)  x = f(base + 4, x);
+        if (n & 32)  x = f(base + 5, x);
+        if (n & 64)  x = f(base + 6, x);
+        if (n & 128) x = f(base + 7, x);
+        n = (n >> 8) & (MAXINT >> 7); // mask to handle negatives
+        base += 8;
+      ];
+    x
+  ];
+
+bits_exists = fn "`c `n0 -> `n1. Returns the first set bit `i in `n0 for which `c(`i), or -1 if none" (function f, int n)
+  [
+    for (|i| i = 0; n; [ n = (n >> 1) & maxint; ++i ])
+      if ((n & 1) && f(i))
+        exit<function> i;
+    -1
   ];
 
 call_cc = fn "`f0 -> `x0. Call `f0(`f1), where `f1(`x1) can be used to return `x1 from the call to `call_cc." (function f)

@@ -25,12 +25,18 @@
 #include "../error.h"
 #include "../types.h"
 
+extern const struct primitive_ext *const dereference_prim_ext;
+extern const struct primitive_ext *const ref_prim_ext;
+extern const struct primitive_ext *const set_refb_prim_ext;
+extern const struct primitive_ext *const setb_prim_ext;
+extern const struct primitive_ext *const warning_prim_ext;
+
 void basic_init(void);
 value code_ref(value x1, value x2);
-value code_set(value x1, value x2, value x3);
+value code_setb(value x1, value x2, value x3);
 
-void ref_runtime_error(runtime_errors error, value x1, value x2) NORETURN;
-void set_runtime_error(runtime_errors error, value x1, value x2, value x3)
+void ref_runtime_error(enum runtime_error error, value x1, value x2) NORETURN;
+void set_runtime_error(enum runtime_error error, value x1, value x2, value x3)
   NORETURN;
 
 #endif /* RUNTIME_BASIC_H */

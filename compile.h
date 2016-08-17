@@ -23,17 +23,27 @@
 #define COMPILE_H
 
 #include <stdbool.h>
-#include "tree.h"
 
-extern component component_undefined, component_true, component_false;
+#include "types.h"
 
-value make_constant(constant c);
+struct constant;
+struct mfile;
+
+extern struct component *component_undefined;
+extern struct component *component_true, *component_false;
+
+value make_constant(const struct constant *c);
+value make_shared_string_constant(const struct constant *c,
+                                  struct table *cache);
 struct string *make_filename(const char *fname);
 bool interpret(value *result, int seclev, int reload);
-struct closure *compile_code(mfile f, int seclev);
+struct closure *compile_code(struct mfile *f, int seclev);
 
 void compile_init(void);
 
-extern mfile this_mfile;
+extern struct mfile *this_mfile;
+
+bool load_file(const char *fullname, const char *filename,
+               const char *nicename, int seclev, bool reload);
 
 #endif

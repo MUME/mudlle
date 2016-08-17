@@ -22,50 +22,61 @@
 #ifndef INS_H
 #define INS_H
 
-typedef struct _label *label;
-typedef struct _fncode *fncode;
-
-#include "calloc.h"
 #include "code.h"
+#include "mudlle.h"
+#include "types.h"
 
-fncode new_fncode(bool toplevel);
+struct label;
+
+union instruction {
+#ifdef __GNUC__
+  enum operator op : 8 __attribute__((packed));
+#else
+  ubyte op;
+#endif
+  ubyte u;
+  sbyte s;
+};
+CASSERT(instruction, sizeof (union instruction) == 1);
+
+struct fncode *new_fncode(bool toplevel);
 /* Returns: A new function code structure (in which code for functions
      may be generated and in which constants may be stored).
    Warning: calls to new_fncode/delete_fncode must be matched in a stack-like
      discipline (new_fncode calls PUSH_LIST, delete_fncode POP_LIST)
 */
 
-void delete_fncode(fncode fn);
-/* Effects: deletes fncode 'fn'
+void delete_fncode(struct fncode *fn);
+/* Effects: deletes fn
  */
 
-block_t fnmemory(fncode fn);
+struct alloc_block *fnmemory(struct fncode *fn);
 /* Returns: memory block for fn
  */
 
-bool fntoplevel(fncode fn);
+bool fntoplevel(struct fncode *fn);
 /* Returns: true if 'fn' is the toplevel function
  */
 
-void ins0(instruction ins, fncode fn);
+void ins0(enum operator op, struct fncode *fn);
 /* Effects: Adds instruction ins to code of 'fn'.
    Modifies: fn
 */
 
-void ins1(instruction ins, int arg1, fncode fn);
+void ins1(enum operator op, ubyte arg1, struct fncode *fn);
 /* Effects: Adds instruction ins to code of 'fn'.
      The instruction has one argument, arg1.
    Modifies: fn
 */
 
-void ins2(instruction ins, int arg2, fncode fn);
+void ins2(enum operator op, uword arg2, struct fncode *fn);
 /* Effects: Adds instruction ins to code of 'fn'.
      The instruction has a two byte argument (arg2), stored in big-endian
      format.
    Modifies: fn
 */
 
-void branch(instruction branch, label to, fncode fn);
+void branch(enum operator branch, struct label *to, struct fncode *fn);
 /* Effects: Adds a branch instruction to lavel 'to' to instruction
      list 'next'.
      A 1 byte offset is added at this stage.
@@ -73,25 +84,25 @@ void branch(instruction branch, label to, fncode fn);
    Modifies: fn
 */
 
-void adjust_depth(int by, fncode fn);
+void adjust_depth(int by, struct fncode *fn);
 /* Effects: Adjusts the current static stack depth of fn by the given
      amount. This is necessary for structures such as 'if' (which have
      code to compute 2 values, but which leave one on the stack).
    Modifies: fn
 */
 
-uword add_constant(value cst, fncode fn);
+uword add_constant(value cst, struct fncode *fn);
 /* Effects: Adds a constant to code of 'fn'.
    Returns: The index where this constant is stored.
    Modifies: fn
 */
 
-void ins_constant(value cst, fncode fn);
+void ins_constant(value cst, struct fncode *fn);
 /* Effects: Adds code to push cst onto the stack in 'fn'
    Modifies: fn
 */
 
-void peephole(fncode fn);
+void peephole(struct fncode *fn);
 /* Effects: Does some peephole optimisation on instructions of 'fn'
      Currently this only includes branch size optimisation (1 vs 2 bytes)
      and removal of unconditional branches to the next instruction.
@@ -99,7 +110,7 @@ void peephole(fncode fn);
    Returns: Optimised instruction list
 */
 
-struct icode *generate_fncode(fncode fn,
+struct icode *generate_fncode(struct fncode *fn,
                               struct string *help,
                               struct string *varname,
                               struct string *afilename,
@@ -115,36 +126,36 @@ struct icode *generate_fncode(fncode fn,
      in reverse temporal order)
 */
 
-label new_label(fncode fn);
+struct label *new_label(struct fncode *fn);
 /* Returns: A new label which points to nothing. Use label() to make it
      point at a particular instruction.
 */
 
-void set_label(label lab, fncode fn);
+void set_label(struct label *lab, struct fncode *fn);
 /* Effects: lab will point at the next instruction generated with ins0,
      ins1, ins2 or branch.
    Modifies: lab, fn
 */
 
-void start_block(const char *name, fncode fn);
+void start_block(const char *name, struct fncode *fn);
 /* Effects: Starts a block called name (may be NULL), which can be
      exited with exit_block()
    Modifies: fn
 */
 
-void end_block(fncode fn);
+void end_block(struct fncode *fn);
 /* Effects: End of named block. Generate exit label
    Modifies: fn
 */
 
-int exit_block(const char *name, fncode fn);
+int exit_block(const char *name, struct fncode *fn);
 /* Effects: Generates code to exit from specified named block
      (pop stack, jump to block exit label)
    Returns: false if the named block doesn't exist
    Modifies: fn
 */
 
-void set_lineno(int line, fncode fn);
+void set_lineno(int line, struct fncode *fn);
 /* Effects: Sets line number for upcoming instructions
    Modifies: fn
 */

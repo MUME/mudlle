@@ -96,8 +96,7 @@ x86:i_arg2 = 2;
 //   x86:lglobal_constant: global name
 //   x86:lprimitive: primitive name
 //   x86:lspecial: name (ref to C vars)
-//   x86:lseclev: seclevel of the function or mudlle maxseclevel
-//     if arg is true)
+//   x86:lseclev: seclevel-related; arg is one of x86:xl_xxx
 // accepted on input, but converted: lvar: variable
 // arguments to x86:limm are integers or pairs:
 //   x . 0 for 2*x and x . 1 for 2*x+1
@@ -119,9 +118,9 @@ x86:lprimitive = 9;
 x86:lspecial = 10;
 x86:lclosure = 12;
 x86:lseclev = 13;
- x86:sl_c = 0;
- x86:sl_mudlle = 1;
- x86:sl_maxlev = 2;
+ x86:sl_c = 0;                  // function_seclevel() as C int
+ x86:sl_mudlle = 1;             // function_seclevel() as mudlle int
+ x86:sl_maxlev = 2;             // function's maxseclevel cap
 
 x86:nregs = 8;
 

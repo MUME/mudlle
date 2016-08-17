@@ -30,10 +30,12 @@
 
 #include "alloc.h"
 #include "charset.h"
+#include "error.h"
 #include "ports.h"
+#include "strbuf.h"
 #include "utils.h"
 
-#include "runtime/runtime.h"
+#include "runtime/mudlle-string.h"
 
 
 /* The various types of input & output ports */
@@ -74,6 +76,7 @@ static struct string_oport_block *free_blocks;
 static struct string_oport *get_string_port(struct oport *p)
 {
   assert(is_string_port(p));
+  assert(!readonlyp(p));
   return (struct string_oport *)p;
 }
 
@@ -93,36 +96,30 @@ static ulong port_length(struct string_oport *p)
 
 static struct string_oport_block *new_string_block(void)
 {
-  struct string_oport_block *newp;
-
   if (free_blocks)
     {
-      newp = free_blocks;
+      struct string_oport_block *newp = free_blocks;
+      assert(!readonlyp(newp));
       GCCHECK(newp);
       free_blocks = free_blocks->next;
-    }
-  else
-    {
-      struct string *s;
-
-      s = (struct string *)allocate_string(type_internal, STRING_BLOCK_SIZE);
-      GCPRO1(s);
-      newp = (struct string_oport_block *)allocate_record(type_internal, 2);
-      UNGCPRO();
-      newp->data = s;
-      GCCHECK(newp);
+      newp->next = NULL;
+      return newp;
     }
 
-  newp->next = NULL;
-
+  struct string_oport_block *newp;
+  newp = (struct string_oport_block *)allocate_record(
+    type_internal, grecord_fields(*newp));
+  GCPRO1(newp);
+  struct string *s = (struct string *)allocate_string(
+    type_internal, STRING_BLOCK_SIZE);
+  UNGCPRO();
+  newp->data = s;
   return newp;
 }
 
 void empty_string_oport(struct oport *_p)
 {
   struct string_oport *p = get_string_port(_p);
-
-  assert(is_string_port(_p));
 
   assert(p->first);
   assert(p->current);
@@ -144,7 +141,10 @@ static void free_string_oport(struct oport *_p)
   p->p.methods = NULL;
 
   for (struct string_oport_block *b = p->first; b; b = b->next)
-    GCCHECK(b);
+    {
+      GCCHECK(b);
+      assert(!readonlyp(b));
+    }
 
   /* Free data (add blocks to free block list) */
   p->current->next = free_blocks;
@@ -172,6 +172,7 @@ static void string_flush(struct oport *_p)
 static void string_putnc(struct oport *_p, int c, size_t n)
 {
   struct string_oport *p = (struct string_oport *)_p;
+  assert(!readonlyp(p));
   struct string_oport_block *current = p->current;
   long pos = intval(p->pos);
 
@@ -199,6 +200,7 @@ static void string_putnc(struct oport *_p, int c, size_t n)
 static void string_write(struct oport *_p, const char *data, size_t nchars)
 {
   struct string_oport *p = (struct string_oport *)_p;
+  assert(!readonlyp(p));
   struct string_oport_block *current = p->current;
   long pos = intval(p->pos);
   GCPRO2(p, current);
@@ -223,6 +225,7 @@ static void string_swrite(struct oport *_p, struct string *s, size_t from,
                           size_t nchars)
 {
   struct string_oport *p = (struct string_oport *)_p;
+  assert(!readonlyp(p));
   struct string_oport_block *current = p->current;
   int fit;
   long pos = intval(p->pos);
@@ -244,8 +247,7 @@ static void string_swrite(struct oport *_p, struct string *s, size_t from,
   p->pos = makeint(pos + nchars);
 }
 
-static void
-string_stat(struct oport *oport, struct oport_stat *buf)
+static void string_stat(struct oport *oport, struct oport_stat *buf)
 {
   struct string_oport *p = get_string_port(oport);
   *buf = (struct oport_stat){
@@ -272,14 +274,16 @@ static struct string_oport *new_string_port(void)
       --string_oport_cache_used;
       return p;
     }
-  return (struct string_oport *)allocate_record(type_outputport, 4);
+  return (struct string_oport *)allocate_record(
+    type_oport, grecord_fields(struct string_oport));
 }
 
-static struct gtemp *mstring_port_methods;
+static struct gtemp *mstring_port_methods, *msink_port_methods;
 static struct gtemp *mfile_port_methods, *mline_port_methods;
 
 static struct string_oport *init_string_oport(struct string_oport *p)
 {
+  assert(!readonlyp(p));
   GCPRO1(p);
   p->p.methods = mstring_port_methods;
   struct string_oport_block *blk = new_string_block();
@@ -302,21 +306,25 @@ struct line_oport {
   value line_handler_data;
 };
 
-static void port_copy(char *s, struct string_oport *p);
-
 static void line_port_send(struct line_oport *p)
 {
-  const line_oport_methods_t *methods = p->line_methods->external;
-
-  size_t len = string_port_length((struct oport *)p);
+  size_t len = string_port_length(&p->soport.p);
   if (len == 0)
     return;
-  char *line = malloc(len + 1);
-  port_copy(line, &p->soport);
-  methods->write(line, len, p->line_handler_data);
-  free(line);
-  empty_string_oport((struct oport *)p);
+  struct string_oport_block *current = p->soport.first;
+  const struct line_oport_methods *methods = p->line_methods->external;
+  GCPRO1(p);
+  if (current->next == NULL)
+    methods->swrite(current->data, intval(p->soport.pos),
+                    p->line_handler_data);
+  else
+    {
+      struct string *s = port_string(&p->soport.p, (size_t)-1);
+      methods->swrite(s, string_len(s), p->line_handler_data);
+    }
+  UNGCPRO();
   p->prev_char = makeint(EOF);
+  empty_string_oport(&p->soport.p);
 }
 
 static void line_port_putnc(struct oport *_p, int c, size_t n)
@@ -368,13 +376,13 @@ static void line_port_write(struct oport *_p, const char *data, size_t nchars)
       void *nl = memchr(data, '\n', nchars);
       if (nl == NULL)
         {
-          string_write((struct oport *)p, data, nchars);
+          string_write(&p->soport.p, data, nchars);
           p->prev_char = makeint(data[nchars - 1]);
           break;
         }
 
       size_t n = (const char *)nl - data + 1;
-      string_write((struct oport *)p, data, n);
+      string_write(&p->soport.p, data, n);
       if (n > 1 && data[n - 2] == '\r')
         line_port_send(p);
       else
@@ -406,7 +414,7 @@ static void line_port_flush(struct oport *_p)
 static void line_port_stat(struct oport *_p, struct oport_stat *buf)
 {
   struct line_oport *p = (struct line_oport *)_p;
-  const line_oport_methods_t *methods = p->line_methods->external;
+  const struct line_oport_methods *methods = p->line_methods->external;
   methods->stat(buf, p->line_handler_data);
   size_t slen = string_port_length(_p);
   if (slen > buf->size)
@@ -425,15 +433,18 @@ static const struct oport_methods line_port_methods = {
   .stat   = line_port_stat,
 };
 
-value make_line_oport(const line_oport_methods_t *methods, value data)
+value make_line_oport(const struct line_oport_methods *methods, value data)
 {
-  struct line_oport *p
-    = (struct line_oport *)allocate_record(type_outputport, 7);
-
-  p = (struct line_oport *)init_string_oport(&p->soport);
-  p->soport.p.methods = mline_port_methods;
-  p->prev_char = makeint(EOF);
-  p->line_handler_data = data;
+  struct line_oport *p;
+  {
+    GCPRO1(data);
+    p = (struct line_oport *)allocate_record(type_oport, grecord_fields(*p));
+    p = (struct line_oport *)init_string_oport(&p->soport);
+    p->soport.p.methods = mline_port_methods;
+    p->prev_char = makeint(EOF);
+    p->line_handler_data = data;
+    UNGCPRO();
+  }
 
   GCPRO1(p);
   struct gtemp *mh = allocate_temp(type_internal, (void *)methods);
@@ -505,6 +516,64 @@ static void file_stat(struct oport *_p, struct oport_stat *buf)
   };
 }
 
+struct sink_oport {
+  struct oport p;
+  size_t count;
+};
+
+static void sink_close(struct oport *_p)
+{
+}
+
+static void sink_putnc(struct oport *_p, int c, size_t n)
+{
+  struct sink_oport *p = (struct sink_oport *)_p;
+  p->count += n;
+}
+
+static void sink_write(struct oport *_p, const char *data, size_t nchars)
+{
+  struct sink_oport *p = (struct sink_oport *)_p;
+  p->count += nchars;
+}
+
+static void sink_swrite(struct oport *_p, struct string *s, size_t from,
+                        size_t nchars)
+{
+  struct sink_oport *p = (struct sink_oport *)_p;
+  p->count += nchars;
+}
+
+static void sink_flush(struct oport *_p)
+{
+}
+
+static void sink_stat(struct oport *_p, struct oport_stat *buf)
+{
+  struct sink_oport *p = (struct sink_oport *)_p;
+  *buf = (struct oport_stat){
+    .type = oport_type_sink,
+    .size = p->count,
+  };
+}
+
+static const struct oport_methods sink_port_methods = {
+  .close  = sink_close,
+  .putnc  = sink_putnc,
+  .write  = sink_write,
+  .swrite = sink_swrite,
+  .flush  = sink_flush,
+  .stat   = sink_stat,
+};
+
+value make_sink_oport(void)
+{
+  struct sink_oport *p = (struct sink_oport *)allocate_record(
+    type_oport, grecord_fields(*p));
+  p->p.methods = msink_port_methods;
+  return p;
+}
+
 static const struct oport_methods file_port_methods = {
   .close  = output_file_close,
   .putnc  = file_putnc,
@@ -516,15 +585,14 @@ static const struct oport_methods file_port_methods = {
 
 value make_file_oport(FILE *f)
 {
-  struct file_oport *p = (struct file_oport *)allocate_record(type_outputport,
-                                                              2);
-  struct gtemp *mf;
+  struct file_oport *p = (struct file_oport *)allocate_record(
+    type_oport, grecord_fields(*p));
 
-  GCPRO1(p);
   p->p.methods = mfile_port_methods;
-  mf = allocate_temp(type_internal, f);
-  p->file = mf;
+  GCPRO1(p);
+  struct gtemp *mf = allocate_temp(type_internal, f);
   UNGCPRO();
+  p->file = mf;
 
   return p;
 }
@@ -540,19 +608,26 @@ bool port_is_empty(struct oport *_p)
   return !current->next && intval(p->pos) == 0;
 }
 
-static void port_copy(char *s, struct string_oport *p)
+static void port_copy(char *s, struct string_oport *p, size_t maxlen)
 {
-  struct string_oport_block *current = p->first;
-  long pos = intval(p->pos);
-
-  while (current->next)
+  for (struct string_oport_block *current = p->first;
+       maxlen > 0 && current;
+       current = current->next)
     {
-      memcpy(s, current->data->str, STRING_BLOCK_SIZE);
-      s += STRING_BLOCK_SIZE;
-      current = current->next;
+      bool last = current->next == NULL;
+      size_t n = last ? intval(p->pos) : STRING_BLOCK_SIZE;
+      if (n > maxlen)
+        n = maxlen;
+      memcpy(s, current->data->str, n);
+      s += n;
+      maxlen -= n;
     }
-  memcpy(s, current->data->str, pos);
-  s[pos] = '\0';
+  *s = 0;
+}
+
+void string_port_copy(char *s, struct oport *p, size_t maxlen)
+{
+  port_copy(s, get_string_port(p), maxlen);
 }
 
 size_t string_port_length(struct oport *p)
@@ -560,20 +635,25 @@ size_t string_port_length(struct oport *p)
   return port_length(get_string_port(p));
 }
 
-struct string *port_string(struct oport *_p)
+struct string *port_string(struct oport *_p, size_t maxlen)
 {
   struct string_oport *p = get_string_port(_p);
   struct string *result;
 
-  ulong l = port_length(p);
+  size_t l = port_length(p);
+  if (l > maxlen)
+    l = maxlen;
   if (l == 0)
     return static_empty_string;
+
+  if (l > MAX_STRING_SIZE)
+    runtime_error(error_bad_value);
 
   GCPRO1(p);
   result = alloc_empty_string(l);
   UNGCPRO();
 
-  port_copy(result->str, p);
+  port_copy(result->str, p, l);
 
   return result;
 }
@@ -585,7 +665,7 @@ char *port_cstring(struct oport *_p)
   size_t size = port_length(p);
 
   s = xmalloc(size + 1);
-  port_copy(s, p);
+  port_copy(s, p, size);
 
   s2 = s;
   while ((s2 = memchr(s2, 0, size - (s2 - s))))
@@ -594,24 +674,30 @@ char *port_cstring(struct oport *_p)
   return s;
 }
 
-void port_for_blocks(struct oport *_p,
-                     bool (*f)(void *data, const char *buf, size_t len),
+bool port_for_blocks(struct oport *_p,
+                     bool (*f)(void *data, struct string *str, size_t len),
                      void *data)
 {
   struct string_oport *p = get_string_port(_p);
   struct string_oport_block *current = p->first;
   long pos = intval(p->pos);
 
+  bool result = true;
+
   GCPRO1(current);
   while (current->next)
     {
-      if (!f(data, current->data->str, STRING_BLOCK_SIZE))
-        goto done;
+      if (!f(data, current->data, STRING_BLOCK_SIZE))
+        {
+          result = false;
+          goto done;
+        }
       current = current->next;
     }
-  f(data, current->data->str, pos);
+  f(data, current->data, pos);
  done:
   UNGCPRO();
+  return result;
 }
 
 void port_append(struct oport *p1, struct oport *_p2)
@@ -684,7 +770,9 @@ void port_append_escape(struct oport *p1, struct oport *_p2, int esc)
         {
           const char *pesc = memchr(current->data->str + start, esc,
                                     size - start);
-          size_t l = pesc ? pesc - (current->data->str + start) + 1 : size - start;
+          size_t l = (pesc
+                      ? pesc - (current->data->str + start) + 1
+                      : size - start);
           pswrite_substring(p1, current->data, start, l);
           if (pesc == NULL)
             break;
@@ -718,45 +806,63 @@ ssize_t string_port_search(struct oport *p, int c)
 /* C I/O routines for use with the ports */
 /* ------------------------------------- */
 
-static const char basechars[] = "0123456789abcdef";
+static const char basechars[16] = "0123456789abcdef";
 
-char *int2str(char *str, int base, ulong n, bool is_signed)
-/* Requires: base be 2, 8, 10 or 16. str be at least INTSTRSIZE characters long.
-   Effects: Prints the ASCII representation of n in base base to the
-     string str.
-     If is_signed is true, n is actually a long
-   Returns: A pointer to the start of the result.
-*/
+static char *internal_inttostr(char str[static INTSTRSIZE], int base, ulong n,
+                               bool is_signed, bool wide)
 {
-  /* ints are 32 bits, the longest number will thus be
-     32 digits (in binary) + 1(sign) characters long */
   char *pos = str + INTSTRSIZE - 1;
   *--pos = '\0';
 
-  bool minus;
+  int i = wide ? 3 : -1;
+  bool minus = false;
   if (is_signed && (long)n < 0)
     {
       minus = true;
       if ((long)n <= -16)
 	{
 	  /* this is to take care of LONG_MIN */
-	  *--pos = basechars[abs((long)n % base)];
-	  n = (long)n / base;
+          ldiv_t q = ldiv((long)n, base);
+	  *--pos = basechars[-q.rem];
+	  n = q.quot;
+	  --i;
 	}
       n = -(long)n;
     }
-  else minus = false;
 
-  do {
-    *--pos = basechars[n % base];
-    n /= base;
-  } while (n > 0);
-  if (minus) *--pos = '-';
+  do
+    {
+      if (i == 0)
+        {
+          *--pos = ',';
+          i = 2;
+        }
+      else
+        --i;
+      *--pos = basechars[n % base];
+      n /= base;
+    }
+  while (n > 0);
+  if (minus)
+    *--pos = '-';
 
   return pos;
 }
 
-char *int2str_wide(char *str, ulong n, bool is_signed)
+char *inttostr(char str[static INTSTRSIZE], int base, ulong n,
+               bool is_signed)
+/* Requires: base be 2, 8, 10 or 16. str be at least INTSTRSIZE
+     characters long.
+   Effects: Prints the ASCII representation of n in base base to the
+     string str.
+     If is_signed is true, n is actually a long
+   Returns: A pointer to the start of the result.
+*/
+{
+  return internal_inttostr(str, base, n, is_signed, false);
+}
+
+char *inttostr_wide(char str[static INTSTRSIZE], ulong n, bool is_signed)
 /* Requires: str be at least INTSTRSIZE characters long.
    Effects: Prints the ASCII representation of n in base 10 with
      1000-separation by commas
@@ -764,38 +870,7 @@ char *int2str_wide(char *str, ulong n, bool is_signed)
    Returns: A pointer to the start of the result.
 */
 {
-  char *pos = str + INTSTRSIZE - 1;
-  *--pos = '\0';
-
-  int i = 3;
-  bool minus;
-  if (is_signed && (long)n < 0)
-    {
-      minus = true;
-      if (n <= -16)
-	{
-	  /* this is to take care of LONG_MIN */
-	  *--pos = basechars[n % 10];
-	  n /= 10;
-	  --i;
-	}
-      n = -(long)n;
-    }
-  else minus = false;
-
-  do {
-    if (!i)
-      {
-	*--pos = ',';
-	i = 3;
-      }
-    *--pos = basechars[n % 10];
-    n /= 10;
-    --i;
-  } while (n > 0);
-  if (minus) *--pos = '-';
-
-  return pos;
+  return internal_inttostr(str, 10, n, is_signed, true);
 }
 
 void vpprintf(struct oport *p, const char *fmt, va_list args)
@@ -806,6 +881,8 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
   char buf[INTSTRSIZE], padchar;
 
   GCPRO1(p);
+
+  struct strbuf sbfloat = SBNULL;
 
   while ((percent = strchr(fmt, '%')))
     {
@@ -888,25 +965,28 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	case 'u':
         process_unsigned:
           is_signed = false;
-          widefmt = false;
-	case 'd': case 'i': {
-          ulong ul;
-          if (longfmt)
-            if (is_signed)
-              ul = va_arg(args, long);
+          if (base != 10)
+            widefmt = false;
+          /* fallthrough */
+	case 'd':
+          {
+            ulong ul;
+            if (longfmt)
+              if (is_signed)
+                ul = va_arg(args, long);
+              else
+                ul = va_arg(args, unsigned long);
+            else if (is_signed)
+              ul = va_arg(args, int);
             else
-              ul = va_arg(args, unsigned long);
-          else if (is_signed)
-            ul = va_arg(args, int);
-          else
-            ul = va_arg(args, unsigned);
+              ul = va_arg(args, unsigned);
 
-          if (widefmt)
-            add = int2str_wide(buf, ul, is_signed);
-          else
-            add = int2str(buf, base, ul, is_signed);
-	  break;
-        }
+            if (widefmt)
+              add = inttostr_wide(buf, ul, is_signed);
+            else
+              add = inttostr(buf, base, ul, is_signed);
+            break;
+          }
 	case 'S':
 	  cap = true;
 	case 's':
@@ -925,19 +1005,12 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
           addlen = 1;
           goto have_addlen;
 	case 'f':
-	  if (fprec >= 0)
-	    {
-	      char *abuf = alloca(fprec + 16);
-	      sprintf(abuf, "%.*f", fprec, va_arg(args, double));
-	      add = abuf;
-	    }
-	  else
-	    {
-	      sprintf(buf, "%f", va_arg(args, double));
-	      add = buf;
-	    }
+          sb_empty(&sbfloat);
+          sb_printf(&sbfloat, "%.*f", fprec >= 0 ? fprec : 6,
+                    va_arg(args, double));
+          add = sb_str(&sbfloat);
 	  break;
-	default: assert(0);
+	default: abort();
 	}
       addlen = strlen(add);
     have_addlen:
@@ -966,6 +1039,8 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
   pputs(fmt, p);
 
   UNGCPRO();
+
+  sb_free(&sbfloat);
 }
 
 void pprintf(struct oport *p, const char *fmt, ...)
@@ -991,7 +1066,7 @@ struct string *msprintf(const char *fmt, ...)
 
   UNGCPRO();
 
-  struct string *result = port_string(port);
+  struct string *result = port_string(port, (size_t)-1);
   opclose(port);
 
   return result;
@@ -1014,6 +1089,10 @@ void ports_init(void)
   mfile_port_methods = allocate_temp(type_internal,
                                      (void *)&file_port_methods);
   staticpro(&mfile_port_methods);
+
+  msink_port_methods = allocate_temp(type_internal,
+                                     (void *)&sink_port_methods);
+  staticpro(&msink_port_methods);
 
   mline_port_methods = allocate_temp(type_internal,
                                      (void *)&line_port_methods);

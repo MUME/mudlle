@@ -29,4 +29,6 @@ value code_vector_set(struct vector *vec, value i, value c);
 
 void vector_init(void);
 
+extern struct vector *empty_vector;
+
 #endif /* RUNTIME_VECTOR_H */

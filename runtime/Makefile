@@ -23,8 +23,9 @@
 .SUFFIXES:
 
 OBJS:=arith.o basic.o bigint.o bitset.o bool.o debug.o files.o	\
-        io.o list.o mudlle-float.o mudllecst.o pattern.o		\
-        runtime.o string.o support.o symbol.o vector.o xml.o
+        io.o list.o mudlle-float.o mudlle-string.o mudlle-xml.o	\
+        mudllecst.o pattern.o runtime.o support.o symbol.o		\
+        vector.o
 
 $(OBJS): CFLAGS+=$(PRIMITIVE_CFLAGS)
 
@@ -34,7 +35,7 @@ CSTFILES = files.h io.h ../error.h ../module.h ../types.h
 
 ifneq ($(USE_XML),)
 CPPFLAGS += -isystem /usr/include/libxml2
-CSTFILES += xml.h
+CSTFILES += mudlle-xml.h
 endif
 
 all: librun.a
@@ -52,11 +53,19 @@ librun.a: $(OBJS)
 	-ranlib librun.a
 
 mudllecst.c: consts.pl $(CSTFILES) Makefile
-	perl $< $(CSTFILES) > $@
+	$(PERL) $< -o $@ -- $(CSTFILES)
 
+ifeq (,$(USE_CPP_STEP))
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
+else
+%.o: %-mpp.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 
+.PRECIOUS: %-mpp.c
+%-mpp.c: %.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | indent > $@
+endif
 
 .PHONY: dep depend
 dep depend: .depend

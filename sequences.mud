@@ -42,7 +42,8 @@ defines
   lfilter!, dfilter!, table_filter!,
   lfind?, dfind?, sfind?, vfind?,
   vfill!, sfill!,
-  vfori, sfori
+  vfori, sfori,
+  subvector
 [
 // copy, reverse, reverse!, append, append!, map, map!, foreach
 // exists?, forall?, reduce, delete, delete!, filter, filter!, find?
@@ -184,23 +185,20 @@ vreverse = fn "`v1 -> `v2. Returns vector with all elements reversed" (vector v1
 // reverse!:
 
 lreverse! = fn "`l1 -> `l2. Reverses list `l1, destructively" (list l1)
-  if (l1 == null) null
-  else
-    [
-      | prev, next |
-
-      prev = l1;
-      l1 = cdr(l1);
-      set_cdr!(prev, null);
-      while (l1 != null)
-	[
-	  next = cdr(l1);
-	  set_cdr!(l1, prev);
-	  prev = l1;
-	  l1 = next
-	];
-      prev
-    ];
+  [
+    | prev |
+    prev = null;
+    loop
+      [
+        if (l1 == null)
+          exit prev;
+        | next |
+        next = cdr(l1);
+        set_cdr!(l1, prev);
+        prev = l1;
+        l1 = next;
+      ];
+  ];
 
 dreverse! = {vector,null} fn "`d1 -> `d2. Reverses dlist `d1, destructively" ({null,vector} d1)
   if (d1 == null) null
@@ -431,8 +429,10 @@ smap! = fn "`f `s -> `s. Applies `f to every element of `s (from 1st to last) an
 
 table_map! = fn "`f `t -> `t. Sets each table entry of `t to `f(`sym)" (function f, table t)
   [
-    table_foreach (fn (sym) t[symbol_name(sym)] = f(sym),
-		   t);
+    table_reduce(fn (sym, f) [
+      symbol_set!(sym, f(sym));
+      f
+    ], f, t);
     t
   ];
 
@@ -850,6 +850,19 @@ vfori = fn "`c `v -> . Calls `c(`i) for all indices `i in the vector `v" (functi
 sfori = fn "`c `s -> . Calls `c(`i) for all indices `i in the string `s" (function f, string s)
   for (|i, l| [ i = 0; l = slength(s) ]; i < l; ++i)
     f(i);
+
+subvector = vector fn "`v0 `n0 `n1 -> `v1. Returns a copy of `n1 elements from vector `v0, starting at index `n0" (vector v, int start, int len)
+  [
+    | r |
+    if (start < 0)
+      start += vlength(v);
+    if (start < 0 || start > vlength(v))
+      error(error_bad_value);
+    r = make_vector(len);
+    while (len-- > 0)
+      r[len] = v[start + len];
+    r
+  ];
 
 vfill! = vector_fill!;
 

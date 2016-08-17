@@ -30,9 +30,6 @@
    variables). Null is represented by NULL. Integers have the lowest bit set.
    Anything else is a pointer to an object (struct obj *). */
 
-#define pointerp(obj) ((obj) && ((long)(obj) & 1) == 0)
-#define integerp(obj) (((long)(obj) & 1) == 1)
-
 static inline bool is_function(value v)
 {
   if (!pointerp(v))
@@ -50,41 +47,70 @@ static inline bool is_any_primitive(value p)
 /* Make & unmake integers */
 #define intval(obj)  ((long)(obj) >> 1)
 #define uintval(obj) ((unsigned long)(obj) >> 1)
-#define makeint(i)   ((value)(((i) << 1) + 1))
+/* add 0UL to integer-promote to unsigned long */
+#define makeint(i)   ((value)((((i) + 0UL) << 1) | 1))
 
-#define MAX_MUDLLE_OBJECT_SIZE (16 * 1024 * 1024)
-#define MAX_VECTOR_SIZE ((MAX_MUDLLE_OBJECT_SIZE - sizeof (struct vector)) \
-                         / sizeof (value))
-#define MAX_STRING_SIZE (MAX_MUDLLE_OBJECT_SIZE - sizeof (struct string) - 1)
+enum {
+  MAX_MUDLLE_OBJECT_SIZE = 16 * 1024 * 1024,
+  MAX_VECTOR_SIZE = ((MAX_MUDLLE_OBJECT_SIZE - sizeof (struct vector))
+                     / sizeof (value)),
+  MAX_STRING_SIZE = (MAX_MUDLLE_OBJECT_SIZE - sizeof (struct string) - 1),
+  MAX_TABLE_ENTRIES  = ((MAX_MUDLLE_OBJECT_SIZE / sizeof (value) / 2)
+                        * 3 / 4 - 1)
+};
 
 #define TAGGED_INT_BITS (CHAR_BIT * sizeof (long) - 1)
 #define MAX_TAGGED_INT  (LONG_MAX >> 1)
 #define MIN_TAGGED_INT  (-MAX_TAGGED_INT - 1)
 
-#define OBJ_READONLY 1		/* Used for some values */
-#define OBJ_IMMUTABLE 2		/* Contains only pointers to other immutable
-				   objects.
-				   Its pointers are never modified after
-				   allocation + initialisation (and all
-				   initialisation must be done before any other
-				   allocation) */
-#define OBJ_FLAG_0 4            /* Temporarily used to flag recursions  */
-#define OBJ_FLAG_1 8            /* Temporarily used to flag recursions  */
+enum {
+  OBJ_READONLY = 1,       /* Used for some values */
+  OBJ_IMMUTABLE = 2,      /* Contains only pointers to other immutable objects.
+                             Its pointers are never modified after allocation/
+                             initialisation. All initialisation must be
+                             done before any other allocation. */
+  OBJ_FLAG_0 = 4,         /* Temporarily used to flag recursions  */
+  OBJ_FLAG_1 = 8          /* Temporarily used to flag recursions  */
+};
+
+static inline bool obj_readonlyp(struct obj *obj)
+{
+  return obj->flags & OBJ_READONLY;
+}
 
 /* True if x is immutable */
 #define immutablep(x) \
   (!pointerp((x)) || (((struct obj *)(x))->flags & OBJ_IMMUTABLE) != 0)
 
 /* True if x is readonly */
-#define readonlyp(x) \
-  (!pointerp((x)) || (((struct obj *)(x))->flags & OBJ_READONLY) != 0)
+#define readonlyp(x) (!pointerp((x)) || obj_readonlyp((struct obj *)(x)))
 
 static inline value make_readonly(value v)
 {
+  /* must not try to modify static strings, so check readonlyp() */
   if (!readonlyp(v))
-    ((struct obj *)v)->flags |= OBJ_READONLY;
+    {
+      struct obj *o = v;
+      assert(o->type != type_oport);
+      o->flags |= OBJ_READONLY;
+    }
   return v;
 }
+
+#define STATIC_STRING(name, value)                      \
+static ulong static_data_ ## name;                      \
+static const struct static_string name = {              \
+  .static_data = &static_data_ ## name,                 \
+  .mobj = {                                             \
+    .size = sizeof (struct string) + sizeof value,      \
+    .garbage_type = garbage_static_string,              \
+    .type = type_string,                                \
+    .flags = OBJ_IMMUTABLE | OBJ_READONLY               \
+  },                                                    \
+  .str = value                                          \
+}
+
+#define GET_STATIC_STRING(name) ((struct string *)&(name).mobj)
 
 /* How each class of object is structured */
 
@@ -98,12 +124,6 @@ struct grecord
 {
   struct obj o;
   struct obj *data[];		/* Pointers to other objects */
-};
-
-struct gforwarded
-{
-  /* the struct obj is replaced by: */
-  struct obj *newp;
 };
 
 /* A pointer to a temporary external data structure.
@@ -152,7 +172,7 @@ struct icode
 struct mcode /* machine-language code object */
 {
   struct code code;
-  ulong code_length;		/* Length of machine code in words */
+  ulong code_length;		/* Length of machine code in bytes */
   struct string *linenos;
   uword nb_constants;
   uword nb_rel;
@@ -160,9 +180,9 @@ struct mcode /* machine-language code object */
   ubyte closure_flags;          /* CLF_xxx flags */
   ubyte dummy;
   struct mcode *myself;		/* Self address, for relocation */
-  ubyte magic[8];		/* A magic pattern that doesn't occur in code.
-				   Offset must be multiple of 4 */
-  ubyte mcode[/*code_length*/];
+  ubyte magic[8];               /* Magic pattern that doesn't occur in code */
+
+  ubyte mcode[/*code_length*/];  /* Aligned on CODE_ALIGNMENT */
   /* Following the machine code:
        - nb_constants offsets of contants in mcode
        - nb_rel relative addresses of C functions in mcode
@@ -173,73 +193,6 @@ struct mcode /* machine-language code object */
 CASSERT(mdispatch, (offsetof(struct mcode, mcode)
                     == offsetof(struct icode, magic_dispatch)));
 #endif  /* i386 && !NOCOMPILER */
-
-#ifdef sparc
-struct code
-{
-  struct obj o;
-  uword nb_constants;
-  uword nb_locals;
-  uword stkdepth;
-  ubyte filler[2];
-  ulong call_count;		/* Profiling */
-  ulong instruction_count;
-  struct string *varname;
-  struct string *filename;
-  struct string *help;
-  struct string *lineno_data;
-  ubyte magic_dispatch[16];	/* Machine code jump to interpreter.
-				   This is at the same offset as mcode
-				   in struct mcode */
-  struct obj *constants[/*nb_constants*/];
-  /* instructions follow the constants array */
-};
-
-struct mcode /* machine-language code object */
-{
-  struct obj o;
-  uword nb_constants;
-  uword code_length;		/* Length of machine code in words */
-  struct string *filename;
-  struct string *varname;
-  struct string *help;
-  void *filler;
-  ubyte *myself;		/* Self address, for relocation */
-  ubyte magic[8];		/* magic pattern that doesn't occur in code */
-  ulong mcode[];                /* really of size code_length */
-  /* the constant's offsets follow the machine code (they are word
-     offsets, not byte offsets) */
-};
-#endif  /* sparc */
-
-#ifdef AMIGA
-struct code
-{
-  struct obj o;
-  uword nb_constants;
-  uword nb_locals;
-  uword stkdepth;
-  ulong call_count;		/* Profiling */
-  ulong instruction_count;
-  struct code_info info;
-  ubyte magic_dispatch[6];	/* Machine code jump to interpreter.
-				   This is at the same offset as mcode
-				   in struct mcode */
-  struct obj *constants[/*nb_constants*/];
-  /* instructions follow the constants array */
-};
-
-struct mcode /* machine-language code object */
-{
-  struct obj o;
-  uword nb_constants;
-  uword code_length;		/* Length of machine code in bytes */
-  struct code_info info;
-  ubyte magic[8];		/* magic pattern that doesn't occur in code */
-  ulong mcode[];                /* really of size code_length */
-  /* the constant's offsets follow the machine code */
-};
-#endif  /* AMIGA */
 
 #ifdef NOCOMPILER
 struct icode

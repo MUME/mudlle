@@ -25,8 +25,6 @@
 #include <string.h>
 #include <limits.h>
 
-#include "../mvalues.h"
-
 #include "mudlle-float.h"
 #include "runtime.h"
 
@@ -48,45 +46,81 @@ INLINE MYBOOL is_bb_rule(lprec *lp, int bb_rule) { return 0; }
 #endif
 
 
-#if defined sparc && !defined linux
-#include <ieeefp.h>
-
-static int isinf(double x)
+enum runtime_error get_floatval(double *d, value v)
 {
-  int class = fpclass(x);
-  return class == FP_NINF || class == FP_PINF;
-}
+  if (integerp(v))
+    {
+      *d = intval(v);
+      return error_none;
+    }
+#ifdef USE_GMP
+  if (TYPE(v, type_bigint))
+    {
+      *d = bigint_to_double(v);
+      return error_none;
+    }
 #endif
+  if (!TYPE(v, type_float))
+    return error_bad_type;
+  *d = ((struct mudlle_float *)v)->d;
+  return error_none;
+}
 
-#define FUNFUNC(name)                                           \
+static double floatval_op(value v, const struct primitive_ext *op)
+{
+  double d;
+  enum runtime_error e = get_floatval(&d, v);
+  if (e == error_none)
+    return d;
+  primitive_runtime_error(e, op, 1, v);
+}
+
+static void floatval_op2(double *d1, double *d2, value v1, value v2,
+                         const struct primitive_ext *op)
+{
+  enum runtime_error e = get_floatval(d1, v1);
+  if (e == error_none)
+    e = get_floatval(d2, v2);
+  if (e == error_none)
+    return;
+  primitive_runtime_error(e, op, 2, v1, v2);
+}
+
+#define FUNOP(name, doc)                                        \
 TYPEDOP(f ## name, 0,                                           \
-        "`f1 -> `f2. Returns " #name "(`f1)", 1,                \
+        "`f1 -> `f2. Returns " doc ".", 1,                      \
         (value f), OP_LEAF | OP_NOESCAPE | OP_CONST, "D.d")     \
 {                                                               \
-  return makefloat(name(floatval(f)));                          \
+  return makefloat(name(floatval_op(f, &op_ ## f ## name)));    \
 }
 
-#define FBINFUNC(name, fname)                                   \
+#define FUNFUNC(name, doc) FUNOP(name, #name "(`f1), " doc)
+
+#define FBINFUNC(name, fname, doc)                              \
 TYPEDOP(f ## name, 0,                                           \
-        "`f1 `f2 -> `f3. Returns " #name "(`f1, `f2)", 2,       \
+        "`f1 `f2 -> `f3. Returns " doc ".", 2,                  \
         (value f1, value f2),                                   \
         OP_LEAF | OP_NOESCAPE | OP_CONST,                       \
         "DD.d")                                                 \
 {                                                               \
-  return makefloat(fname(floatval(f1), floatval(f2)));          \
+  double d1, d2;                                                \
+  floatval_op2(&d1, &d2, f1, f2, &op_ ## f ## name);            \
+  return makefloat(fname(d1, d2));                              \
 }                                                               \
 
-#define FBINOP(name, op)                                \
-TYPEDOP(f ## name, 0,                                   \
-        "`f1 `f2 -> `f3. Returns `f1 " #op " `f2", 2,   \
-        (value f1, value f2),                           \
-        OP_LEAF | OP_NOESCAPE | OP_CONST,               \
-        "DD.d")                                         \
-{                                                       \
-  return makefloat(floatval(f1) op floatval(f2));       \
+#define FBINOP(name, op)                                        \
+TYPEDOP(f ## name, 0,                                           \
+        "`f1 `f2 -> `f3. Returns `f1 " #op " `f2", 2,           \
+        (value f1, value f2),                                   \
+        OP_LEAF | OP_NOESCAPE | OP_CONST,                       \
+        "DD.d")                                                 \
+{                                                               \
+  double d1, d2;                                                \
+  floatval_op2(&d1, &d2, f1, f2, &op_ ## f ## name);            \
+  return makefloat(d1 op d2);                                   \
 }
 
-TYPEDOP(isfloatp, "float?", "`x -> `b. Returns TRUE if `x is a float",
+TYPEDOP(isfloatp, "float?", "`x -> `b. Returns true if `x is a float",
         1, (value x),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
@@ -94,84 +128,83 @@ TYPEDOP(isfloatp, "float?", "`x -> `b. Returns TRUE if `x is a float",
 }
 
 TYPEDOP(isffinitep, "ffinite?",
-        "`f -> `b. Returns TRUE if `f is neither infinite nor"
+        "`f -> `b. Returns true if `f is neither infinite nor"
 	" Not a Number (NaN).",
         1, (value x), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  return makebool(isfinite(floatval(x)));
+  return makebool(isfinite(floatval_op(x, &op_isffinitep)));
 }
 
 TYPEDOP(isfnanp, "fnan?",
-        "`f -> `b. Returns TRUE if `f is Not a Number (NaN).", 1, (value x),
+        "`f -> `b. Returns true if `f is Not a Number (NaN).", 1, (value x),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  return makebool(isnan(floatval(x)));
+  return makebool(isnan(floatval_op(x, &op_isfnanp)));
 }
 
-TYPEDOP(isfinfp, "finf?", "`f -> `n. Returns -1 if `f is negative infinity"
-        " (-Inf) or 1 for positive infinity (Inf), or 0 otherwise",
+TYPEDOP(isfinfp, "finf?", "`f -> `n. Returns -1 if `f is negative infinity,"
+        " 1 for positive infinity (Inf), or 0 otherwise.",
         1, (value x),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  double d = floatval(x);
+  double d = floatval_op(x, &op_isfinfp);
   if (!isinf(d))
     return makeint(0);
   return makeint(signbit(d) ? -1 : 1);
 }
 
-TYPEDOP(fabs, 0, "`f1 -> `f2. Returns | `f1 |", 1,
+TYPEDOP(fabs, 0, "`f1 -> `f2. Returns |`f1|, the absolute value of `f1.", 1,
         (value f), OP_LEAF | OP_NOESCAPE, "D.d")
 {
-  return makefloat(fabs(floatval(f)));
+  return makefloat(fabs(floatval_op(f, &op_fabs)));
 }
 
-TYPEDOP(fneg, 0, "`f1 -> `f2. Returns -`f1", 1,
-        (value f), OP_LEAF | OP_NOESCAPE, "D.d")
+static inline double neg(double d)
 {
-  return makefloat(-floatval(f));
+  return -d;
 }
 
-TYPEDOP(frandom, 0, " -> `f. Returns a random value in [0, 1)", 0,
+FUNOP(neg, "-`f1")
+
+TYPEDOP(frandom, 0, "-> `f. Returns a random value in [0, 1)", 0,
         (void), OP_LEAF | OP_NOESCAPE, ".d")
 {
-#ifdef WIN32
-  return makefloat(rand() / (RAND_MAX + 1.0));
-#else
-  return makefloat(random() / (RAND_MAX + 1.0));
-#endif
+  return makefloat(drand48());
 }
 
 TYPEDOP(fsign, 0, "`f -> `n. Returns -1 for negative `f (including negative"
-        " zero), 1 for positive, 0 for `f == 0. Signals an error if `f is"
-        " Not a Number (NaN).",
+        " zero), 1 for strictly positive, 0 for positive zero."
+        " Causes an error if `f is Not a Number (NaN).",
         1, (value f), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  double d = floatval(f);
-
+  double d = floatval_op(f, &op_fsign);
   if (isnan(d))
-    runtime_error(error_bad_value);
+    primitive_runtime_error(error_bad_value, &op_fsign, 1, f);
 
   return makeint(signbit(d) ? -1 : d > 0 ? 1 : 0);
 }
 
-TYPEDOP(ftoi, 0, "`f -> `n. Returns int(`f). Signals an error if `f is out"
-        " of range or Not a Number (NaN).",
+TYPEDOP(ftoi, 0, "`f -> `n. Returns `f as an integer by discarding the"
+        " fractional part (truncating the value toward zero).\n"
+        "Causes an error if `f is out of range or Not a Number (NaN).",
         1, (value f),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
 {
-  double d = floatval(f);
+  double d = floatval_op(f, &op_ftoi);
 
   if (isnan(d) || d >= MAX_TAGGED_INT + 1 || d <= MIN_TAGGED_INT - 1)
-    runtime_error(error_bad_value);
+    primitive_runtime_error(error_bad_value, &op_ftoi, 1, f);
 
   return makeint((long)d);
 }
 
+
 TYPEDOP(itof, 0, "`n -> `f. Returns the integer `n as a float", 1, (value n),
         OP_LEAF | OP_NOESCAPE, "n.d")
 {
-  ISINT(n);
-  return makefloat((double)intval(n));
+  if (!integerp(n))
+    primitive_runtime_error(error_bad_type, &op_itof, 1, n);
+  return makefloat(intval(n));
 }
 
 TYPEDOP(atof, 0, "`s -> `f. Converts string to float."
@@ -179,38 +212,30 @@ TYPEDOP(atof, 0, "`s -> `f. Converts string to float."
         1, (struct string *s),
         OP_LEAF | OP_NOESCAPE, "s.[ds]")
 {
+  if (!TYPE(s, type_string))
+    primitive_runtime_error(error_bad_type, &op_atof, 1, s);
+
   double d;
-
-  TYPEIS(s, type_string);
-  if (!mudlle_strtofloat(s->str, &d))
+  if (!mudlle_strtofloat(s->str, string_len(s), &d))
     return s;
-  else
-    return makefloat(d);
-}
-
-TYPEDOP(fpow, 0, "`f1 `f2 -> `f3. Returns `f1 raised to the power of `f2",
-        2, (value f1, value f2), OP_LEAF | OP_NOESCAPE, "DD.d")
-{
-  double d1 = floatval(f1), d2 = floatval(f2);
-  return makefloat(pow(d1, d2));
+  return makefloat(d);
 }
 
 TYPEDOP(fcmp, 0, "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
-        " 1 if `f1 > `f2. Signals an error if either `f1 or `f2 is"
+        " 1 if `f1 > `f2. Causes an error if either `f1 or `f2 is"
         " Not a Number (NaN).",
         2, (value f1, value f2), OP_LEAF | OP_NOALLOC | OP_NOESCAPE,
         "DD.n")
 {
-  double d1 = floatval(f1), d2 = floatval(f2);
+  double d1, d2;
+  floatval_op2(&d1, &d2, f1, f2, &op_fcmp);
 
-  if (d1 < d2)
+  if (isunordered(d1, d2))
+    primitive_runtime_error(error_bad_value, &op_fcmp, 2, f1, f2);
+
+  if (isless(d1, d2))
     return makeint(-1);
-  if (d1 == d2)
-    return makeint(0);
-  if (d1 > d2)
-    return makeint(1);
-
-  runtime_error(error_bad_value);
+  return makeint(isgreater(d1, d2));
 }
 
 static const typing lp_solve_tset = {
@@ -395,31 +420,42 @@ FULLOP(lp_solve, 0,
 }
 
 
-FUNFUNC(sqrt)
-FUNFUNC(exp)
-FUNFUNC(log)
-FUNFUNC(sin)
-FUNFUNC(cos)
-FUNFUNC(tan)
-FUNFUNC(atan)
-FUNFUNC(asin)
-FUNFUNC(acos)
+FUNFUNC(sqrt, "the square root of `f1")
+FUNFUNC(exp, "e to the power of `f1")
+FUNFUNC(log, "the natural logarithm of `f1")
+FUNFUNC(sin, "the sine of `f1 radians")
+FUNFUNC(cos, "the cosine of `f1 radians")
+FUNFUNC(tan, "the tangent of `f1 radians")
+FUNFUNC(atan, "the arc tangent of `f1 in the range [-pi/2, pi/2]")
+FUNFUNC(asin, "the arc sine of `f1 in the range [-pi/2, pi/2]")
+FUNFUNC(acos, "the arc cosine of `f1 in the range [0, pi]")
 
-FUNFUNC(ceil)
-FUNFUNC(floor)
-FUNFUNC(round)
-FUNFUNC(trunc)
+FUNFUNC(ceil, "the smallest integral value not less than `f1")
+FUNFUNC(floor, "the largest integral value not greater than `f1")
+FUNFUNC(round, "the nearest integer, rounding halfway cases away from zero")
+FUNFUNC(trunc, "the nearest integer whose absolute value is not larger")
 
-FBINFUNC(atan2, atan2)
-FBINFUNC(hypot, hypot)
-FBINFUNC(mod, fmod)
+FBINFUNC(atan2, atan2,
+         "the arc tangent of `f1/`f2, using the signs to"
+         " determine the quadrant of the result")
+FBINFUNC(hypot, hypot, "the square root of `f1*`f1+`f2*`f2")
+FBINFUNC(mod, fmod, "the floating-point remainder of `f1 divided by `f2")
+FBINFUNC(pow, pow, "`f1 raised to the power of `f2")
 
 FBINOP(add, +)
 FBINOP(sub, -)
 FBINOP(mul, *)
 FBINOP(div, /)
 
-#define DEFCONST(name) system_define(#name, alloc_mudlle_float(name))
+static void sys_def_float(struct string *name, double d)
+{
+  system_string_define(name, alloc_mudlle_float(d));
+}
+
+#define DEFCONST(name) do {                                     \
+  STATIC_STRING(name_ ## name, #name);                          \
+  sys_def_float(GET_STATIC_STRING(name_ ## name), name);        \
+} while (0)
 
 void float_init(void)
 {

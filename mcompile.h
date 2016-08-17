@@ -22,12 +22,16 @@
 #ifndef MCOMPILE_H
 #define MCOMPILE_H
 
-#include "tree.h"
-#include "ins.h"
+#include "mudlle.h"
+
+struct alloc_block;
+struct block;
+struct fncode;
+struct mfile;
 
 /* Compile module references */
 
-int mstart(block_t heap, mfile f, int seclev);
+bool mstart(struct alloc_block *heap, struct mfile *f, int seclev);
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -38,14 +42,14 @@ int mstart(block_t heap, mfile f, int seclev);
    Returns: true if compilation can proceed
 */
 
-void mstop(mfile f);
+void mstop(struct mfile *f);
 /* Effects: Stop processing module f */
 
-void mrecall(ulong n, const char *name, fncode fn);
+void mrecall(ulong n, const char *name, struct fncode *fn);
 /* Effects: Generate code to recall variable n
 */
 
-void mexecute(ulong offset, const char *name, int count, fncode fn);
+void mexecute(ulong offset, const char *name, int count, struct fncode *fn);
 /* Effects: Generates code to call function in variable n, with count
      arguments. If name is NULL, assume that it is part of a protected
      imported module (used for builtins)
@@ -55,11 +59,11 @@ bool mwritable(ulong n, const char *name);
 /* Effects: Return true if variable n/name may be written to. Otherwise,
    log error message.*/
 
-void massign(ulong n, const char *name, fncode fn);
+void massign(ulong n, const char *name, struct fncode *fn);
 /* Effects: Generate code to assign to variable n
 */
 
-void mwarn_module(int seclev, block b);
+void mwarn_module(int seclev, struct block *b);
 /* Effects: Warns about unused variables in module name
  */
 

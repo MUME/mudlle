@@ -32,8 +32,9 @@
 #include "../call.h"
 #include "../charset.h"
 #include "../print.h"
+
 #include "runtime.h"
-#include "stringops.h"
+#include "mudlle-string.h"
 
 
 #ifdef USE_PCRE
@@ -52,16 +53,23 @@
 #  include <unistd.h>
 #endif
 
+#ifdef USE_PCRE
 /* these flags unfortunately overlap with some of PCRE's normal flags */
 #define PCRE_7BIT    ((MAX_TAGGED_INT >> 1) + 1) /* highest bit */
 #define PCRE_INDICES (PCRE_7BIT >> 1)            /* second highest bit */
 #define PCRE_BOOLEAN (PCRE_7BIT >> 2)            /* third highest bit */
+#endif
+
+struct mregexp {
+  struct mprivate p;
+  struct string *re;
+};
 
 bool is_regexp(value _re)
 {
-  struct grecord *re = _re;
+  struct mregexp *re = _re;
   return (TYPE(re, type_private)
-          && re->data[0] == makeint(PRIVATE_REGEXP));
+          && re->p.ptype == makeint(PRIVATE_REGEXP));
 }
 
 TYPEDOP(stringp, "string?", "`x -> `b. TRUE if `x is a string", 1, (value v),
@@ -74,9 +82,7 @@ TYPEDOP(make_string, 0, "`n -> `s. Create an all-zero string of length `n,"
         " where 0 <= `n <= `MAX_STRING_SIZE.",
         1, (value msize), OP_LEAF | OP_NOESCAPE, "n.s")
 {
-  int size = GETINT(msize);
-  if (size < 0 || size > MAX_STRING_SIZE)
-    runtime_error(error_bad_value);
+  int size = GETRANGE(msize, 0, MAX_STRING_SIZE);
   struct string *newp = alloc_empty_string(size);
   /* alloc_empty_string() doesn't zero its data,
    * and we don't want to pass sensitive info to
@@ -93,22 +99,38 @@ TYPEDOP(string_length, 0, "`s -> `n. Return length of string",
   return makeint(string_len(str));
 }
 
+#define DEF_MEM_TRANS(name, op)                         \
+static void name(char *dst, const char *src, size_t l)  \
+{                                                       \
+  for (; l; --l, ++src, ++dst)                          \
+    *dst = op(*src);                                    \
+}                                                       \
+static void name(char *dst, const char *src, size_t l)
+
+DEF_MEM_TRANS(mem8lwr, TO_8LOWER);
+DEF_MEM_TRANS(mem8upr, TO_8UPPER);
+DEF_MEM_TRANS(mem7prt, TO_7PRINT);
+
+static value string_translate(struct string *src,
+                              void (*f)(char *, const char *, size_t))
+{
+  TYPEIS(src, type_string);
+  long l = string_len(src);
+
+  GCPRO1(src);
+  struct string *dst = alloc_empty_string(l);
+  UNGCPRO();
+
+  f(dst->str, src->str, l);
+  return dst;
+}
+
 TYPEDOP(string_downcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
         " characters lower case",
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
-  TYPEIS(s, type_string);
-  GCPRO1(s);
-  long l = string_len(s);
-  struct string *newp = alloc_empty_string(l);
-  UNGCPRO();
-
-  char *s1 = s->str, *s2 = newp->str;
-  while (l--)
-    s2[l] = TO_8LOWER(s1[l]);
-
-  return newp;
+  return string_translate(s, mem8lwr);
 }
 
 TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
@@ -116,28 +138,7 @@ TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
-  TYPEIS(s, type_string);
-  GCPRO1(s);
-  long l = string_len(s);
-  struct string *newp = alloc_empty_string(l);
-  UNGCPRO();
-
-  char *s1 = s->str, *s2 = newp->str;
-  while (l--)
-    s2[l] = TO_8UPPER(s1[l]);
-
-  return newp;
-}
-
-
-TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
-        " character `n",
-	2, (struct string *str, value c),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.1")
-{
-  TYPEIS(str, type_string);
-  memset(str->str, GETINT(c), string_len(str));
-  return str;
+  return string_translate(s, mem8upr);
 }
 
 TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
@@ -145,17 +146,115 @@ TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
+  return string_translate(s, mem7prt);
+}
+
+
+static value string_span(const char *start, const char *end,
+                         const char *accept, long alen)
+{
+  const char *str = start;
+  if (alen == 1)
+    {
+      char c = *accept;
+      for (; str < end; ++str)
+        if (*str != c)
+          break;
+    }
+  else
+    for (; str < end; ++str)
+      if (memchr(accept, *str, alen) == NULL)
+        break;
+  return makeint(str - start);
+}
+
+static value string_cspan(const char *start, const char *end,
+                          const char *reject, long rlen)
+{
+  const char *str = start;
+  if (rlen == 0)
+    ;
+  else if (rlen == 1)
+    {
+      char c = *reject;
+      for (; str < end; ++str)
+        if (*str == c)
+          break;
+    }
+  else
+    for (; str < end; ++str)
+      if (memchr(reject, *str, rlen) != NULL)
+        break;
+  return makeint(str - start);
+}
+
+static value string_xspan(struct string *s, value mofs, value mmax,
+                          struct string *filter,
+                          value (*func)(const char *, const char *,
+                                        const char *, long))
+{
   TYPEIS(s, type_string);
-  GCPRO1(s);
-  long l = string_len(s);
-  struct string *newp = alloc_empty_string(l);
-  UNGCPRO();
+  TYPEIS(filter, type_string);
+  long slen = string_len(s);
+  long ofs = GETINT(mofs);
+  if (ofs < 0)
+    ofs += slen;
+  if (ofs < 0 || ofs > slen)
+    runtime_error(error_bad_value);
+  long max = GETRANGE(mmax, 0, LONG_MAX);
+  const char *start = s->str + ofs;
+  max += ofs;
+  if (max > slen)
+    max = slen;
+  const char *end = s->str + max;
+  return func(start, end, filter->str, string_len(filter));
+}
 
-  char *s1 = s->str, *s2 = newp->str;
-  while (l--)
-    s2[l] = TO_7PRINT(s1[l]);
+TYPEDOP(string_span, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
+        " characters, but at most `n1, in string `s0,starting at offset `n0,"
+        " that consist entirely of characters in `s1.\n"
+        "See also `string_cspan().",
+        4, (struct string *s, value mofs, value mmax, struct string *accept),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "snns.n")
+{
+  return string_xspan(s, mofs, mmax, accept, string_span);
+}
 
-  return newp;
+TYPEDOP(string_cspan, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
+        " characters, at most `n1, in string `s0 starting at offset `n0"
+        " that consists entirely of characters not in `s1.\n"
+        "See also `string_span().",
+        4, (struct string *s, value mofs, value mmax, struct string *reject),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "snns.n")
+{
+  return string_xspan(s, mofs, mmax, reject, string_cspan);
+}
+
+TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
+        " character `n",
+	2, (struct string *str, value c),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.1")
+{
+  enum runtime_error error;
+  if (!TYPE(str, type_string) || !integerp(c))
+    {
+      error = error_bad_type;
+      goto got_error;
+    }
+  ulong len = string_len(str);
+  /* allow readonly for empty string */
+  if (len == 0)
+    return str;
+  if (obj_readonlyp(&str->o))
+    {
+      error = error_value_read_only;
+      goto got_error;
+    }
+  memset(str->str, intval(c), len);
+  return str;
+
+ got_error:
+    primitive_runtime_error(error, &op_string_fill, 2, str, c);
 }
 
 TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
@@ -178,6 +277,9 @@ TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
       }
   if (want == l)
     return s;
+
+  if (want > MAX_STRING_SIZE)
+    runtime_error(error_bad_value);
 
   GCPRO1(s);
   struct string *newp = alloc_empty_string(want);
@@ -219,63 +321,77 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
 {
   TYPEIS(s, type_string);
 
-  int mode = GETINT(mmode);
+  long mode = GETINT(mmode);
   const char *toenc = NULL;
-  switch (mode) {
-  case 0: toenc = "ISO-8859-1"; break;
-  case 1: case 2: toenc = "ISO-8859-1//TRANSLIT"; break;
-  case 3: toenc = "ISO-8859-1//IGNORE"; break;
-  }
+  switch (mode)
+    {
+    case 0: toenc = "ISO-8859-1"; break;
+    case 1: case 2: toenc = "ISO-8859-1//TRANSLIT"; break;
+    case 3: toenc = "ISO-8859-1//IGNORE"; break;
+    }
   if (toenc == NULL)
     runtime_error(error_bad_value);
-
-  char *localstr;
-  LOCALSTR(localstr, s);
 
   iconv_t cd = iconv_open(toenc, "UTF-8");
   if (cd == (iconv_t)-1)
     runtime_error(error_bad_value);
 
   struct oport *op = NULL;
-  GCPRO1(op);
+  GCPRO2(op, s);
 
   struct string *result;
 
+  size_t inpos = 0;
   size_t inlen = string_len(s);
-  for (;;) {
-    char buf[4096], *ostr = buf;
-    size_t olen = sizeof buf;
-    size_t r = iconv(cd, &localstr, &inlen, &ostr, &olen);
-    if (r == (size_t)-1 && errno != E2BIG && inlen > 0) {
-      if (mode >= 2) {
-        --inlen;
-        ++localstr;
-      } else {
-        iconv_close(cd);
-        runtime_error(error_bad_value);
+  for (;;)
+    {
+      char buf[4096];
+      size_t r, oused;
+      {
+        char *instr = s->str + inpos;
+        size_t olen = sizeof buf;
+        char *ostr = buf;
+        r = iconv(cd, &instr, &inlen, &ostr, &olen);
+        oused = ostr - buf;
+        inpos = instr - s->str;
       }
+      if (r == (size_t)-1 && errno != E2BIG && inlen > 0)
+        {
+          if (mode >= 2)
+            {
+              --inlen;
+              ++inpos;
+            }
+          else
+            {
+              iconv_close(cd);
+              runtime_error(error_bad_value);
+            }
+        }
+      if (op == NULL)
+        {
+          if (inlen == 0)
+            {
+              /* common (?) case; everything converted in one go */
+              result = alloc_string_length(buf, oused);
+              break;
+            }
+          op = make_string_oport();
+        }
+      opwrite(op, buf, oused);
+      if (inlen == 0)
+        {
+          result = port_string(op, (size_t)-1);
+          break;
+        }
     }
-    if (op == NULL) {
-      if (inlen == 0) {
-        /* common (?) case; everything converted in one go */
-        result = alloc_string_length(buf, ostr - buf);
-        break;
-      }
-      op = make_string_oport();
-    }
-    opwrite(op, buf, ostr - buf);
-    if (inlen == 0) {
-      result = port_string(op);
-      break;
-    }
-  }
   UNGCPRO();
   iconv_close(cd);
   return result;
 }
 
 EXT_TYPEDOP(string_ref, 0, "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
-            " character of `s",
+            " character of `s. Negative `n1 are counted from the end of `s.",
 	    2, (struct string *str, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
@@ -290,13 +406,16 @@ EXT_TYPEDOP(string_ref, 0, "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
   return makeint((unsigned char)str->str[idx]);
 }
 
-EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n2. Set the `n1'th"
-            " character of `s to the character whose code is `n2",
+EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n3. Set the `n1'th"
+            " character of `s to the character whose code is `n2.\n"
+            "Negative `n1 are counted from the end of `s.\n"
+            "The return value is the actual stored value, which is"
+            " `n2 & 255.",
 	    3, (struct string *str, value i, value mc),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "snn.n")
 {
   TYPEIS(str, type_string);
-  if (str->o.flags & OBJ_READONLY)
+  if (obj_readonlyp(&str->o))
     primitive_runtime_error(error_value_read_only, &op_string_set, 3,
                             str, i, mc);
   if (!integerp(i) || !integerp(mc))
@@ -313,6 +432,11 @@ EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n2. Set the `n1'th"
   return makeint((unsigned char)(str->str[idx] = c));
 }
 
+static inline int canon_sign(long l)
+{
+  return l < 0 ? -1 : l > 0;
+}
+
 #define STRING_CMP(type, desc, canon)                                   \
 static value string_n ## type ## cmp(struct string *s1,                 \
                                      struct string *s2, long lmax)      \
@@ -324,10 +448,18 @@ static value string_n ## type ## cmp(struct string *s1,                 \
   const char *t1 = s1->str;                                             \
   const char *t2 = s2->str;                                             \
                                                                         \
+  size_t minlen = l1 < l2 ? l1 : l2;                                    \
+  if ((#type)[0] == 0)                                                  \
+    {                                                                   \
+      long r = memcmp(t1, t2, minlen);                                  \
+      if (r == 0)                                                       \
+        r = l1 - l2;                                                    \
+      return makeint(canon_sign(r));                                    \
+    }                                                                   \
+                                                                        \
   for (int i = 0; ; ++i, ++t1, ++t2)                                    \
     {                                                                   \
-      if (i == l1) return makeint(i - l2);                              \
-      if (i == l2) return makeint(1);                                   \
+      if (i == minlen) return makeint(canon_sign(l1 - l2));             \
       int diff = canon(*t1) - canon(*t2);                               \
       if (diff) return makeint(diff);                                   \
     }                                                                   \
@@ -388,102 +520,162 @@ STRING_CMP(, , (unsigned char))
 STRING_CMP(8i, " ignoring case", TO_8LOWER)
 STRING_CMP(i, " ignoring accentuation and case", TO_7LOWER)
 
-TYPEDOP(string_search, 0,
-        "`s1 `s2 -> `n. Searches in string `s1 for string `s2."
-        " Returns -1 if not found, index of first matching character"
-        " otherwise.",
-	2, (struct string *s1, struct string *s2),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
-        "ss.n")
+static value string_index(struct string *haystack, char needle, long ofs)
 {
-  ulong l1, l2, i, j, i1;
-  char *t1, *t2, lastc2;
+  const char *str = haystack->str;
+  const char *found = memchr(str + ofs, needle, string_len(haystack) - ofs);
+  if (found == NULL)
+    return makeint(-1);
+  return makeint(found - str);
+}
 
-  TYPEIS(s1, type_string);
-  TYPEIS(s2, type_string);
+TYPEDOP(string_index, 0,
+        "`s `n1 -> `n2. Returns the index in `s of the first occurrence"
+        " of the character `n1, or -1 if not found.",
+        2, (struct string *haystack, value mneedle),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
+        "sn.n")
+{
+  if (!TYPE(haystack, type_string) || !integerp(mneedle))
+    primitive_runtime_error(error_bad_type, &op_string_index, 2,
+                            haystack, mneedle);
+  return string_index(haystack, intval(mneedle), 0);
+}
 
-  l1 = string_len(s1);
-  l2 = string_len(s2);
+TYPEDOP(string_index_offset, 0,
+        "`s `n1 `n2 -> `n3. Returns the index in `s of the first occurrence,"
+        " not before index `n2, of the character `n1, or -1 if not found.",
+        3, (struct string *haystack, value mneedle, value mofs),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
+        "snn.n")
+{
+  enum runtime_error error;
+  if (!TYPE(haystack, type_string)
+      || !integerp(mneedle)
+      || !integerp(mofs))
+    {
+      error = error_bad_type;
+      goto got_error;
+    }
+  long ofs = intval(mofs);
+  if (ofs < 0)
+    ofs += string_len(haystack);
+  if (ofs < 0 || ofs > string_len(haystack))
+    {
+      error = error_bad_value;
+      goto got_error;
+    }
+  return string_index(haystack, intval(mneedle), ofs);
+
+ got_error:
+  primitive_runtime_error(error, &op_string_index_offset, 3,
+                          haystack, mneedle, mofs);
+}
+
+/* find distance from the last character to its previous occurrence
+   or length of string if none */
+static size_t steplen(const char *s, size_t l)
+{
+  char c = s[l - 1];
+  for (size_t step = 1; step < l; ++step)
+    if (s[l - 1 - step] == c)
+      return step;
+  return l;
+}
+
+static size_t step8ilen(const char *s, size_t l)
+{
+  char c = TO_7LOWER(s[l - 1]);
+  for (size_t step = 1; step < l; ++step)
+    if (TO_7LOWER(s[l - 1 - step]) == c)
+      return step;
+  return l;
+}
+
+static int string_search(struct string *s1, struct string *s2,
+                         long ofs,
+                         int (*cmpfn)(const void *, const void *, size_t),
+                         void *(*chrfn)(const void *, int, size_t),
+                         size_t (*stepfn)(const char *, size_t))
+{
+  ulong l1 = string_len(s1);
+  ulong l2 = string_len(s2);
+
+  if (ofs < 0)
+    ofs += l1;
+  if (ofs < 0 || ofs > l1)
+    runtime_error(error_bad_value);
+  l1 -= ofs;
 
   /* Immediate termination conditions */
-  if (l2 == 0) return makeint(0);
-  if (l2 > l1) return makeint(-1);
+  if (l2 == 0) return 0;
+  if (l2 > l1) return -1;
 
-  t1 = s1->str;
-  t2 = s2->str;
-  lastc2 = t2[l2 - 1];
+  const char *t1 = s1->str + ofs;
+  const char *t2 = s2->str;
 
-  i = l2 - 1; /* No point in starting earlier */
+  size_t c2_step = stepfn(t2, l2);
+  char lastc2 = t2[l2 - 1];
+  size_t i = l2 - 1; /* No point in starting earlier */
   for (;;)
     {
       /* Search for lastc2 in t1 starting at i */
-      while (t1[i] != lastc2)
-	if (++i == l1) return makeint(-1);
+      const char *next_c2 = chrfn(t1 + i, lastc2, l1 - i);
+      if (next_c2 == NULL)
+        return -1;
 
-      /* Check if rest of string matches */
-      j = l2 - 1;
-      i1 = i;
-      do
-	if (j == 0) return makeint(i1); /* match found at i1 */
-      while (t2[--j] == t1[--i1]);
+      const char *check_start = next_c2 - (l2 - 1);
+      if (cmpfn(check_start, t2, l2 - 1) == 0)
+        return check_start - t1 + ofs;
 
-      /* No match. If we wanted better efficiency, we could skip over
-	 more than one character here (depending on where the next to
-	 last 'lastc2' is in s2.
-	 Probably not worth the bother for short strings */
-      if (++i == l1) return makeint(-1); /* Might be end of s1 */
+      i += c2_step;
+      if (i >= l1)
+        return -1;
     }
 }
 
-TYPEDOP(string_isearch, 0,
-        "`s1 `s2 -> `n. Searches in string `s1 for string `s2"
-        " (case- and accentuation-insensitive)."
-        " Returns -1 if not found, index of first matching character"
-        " otherwise.",
-	2, (struct string *s1, struct string *s2),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
-        "ss.n")
+int mudlle_string_isearch(struct string *haystack, struct string *needle)
 {
-  ulong l1, l2, i, j, i1;
-  char *t1, *t2, lastc2;
+  return string_search(haystack, needle, 0, mem8icmp, mem8ichr, step8ilen);
+}
 
+static value string_msearch(struct string *s1, struct string *s2,
+                            long ofs,
+                            int (*cmpfn)(const void *, const void *, size_t),
+                            void *(*chrfn)(const void *, int, size_t),
+                            size_t (*stepfn)(const char *, size_t))
+{
   TYPEIS(s1, type_string);
   TYPEIS(s2, type_string);
+  return makeint(string_search(s1, s2, ofs, cmpfn, chrfn, stepfn));
+}
 
-  l1 = string_len(s1);
-  l2 = string_len(s2);
+#define DEF_STRING_SEARCH(infix, cmpfn, chrfn, stepfn, doc)             \
+TYPEDOP(string_ ## infix ## search, 0,                                  \
+        "`s1 `s2 -> `n. Searches in string `s1 for string `s2" doc "."  \
+        " Returns the first index in `s1 where `s2 was found,"          \
+        " or -1 if not found.",                                         \
+	2, (struct string *s1, struct string *s2),                      \
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, \
+        "ss.n")                                                         \
+{                                                                       \
+  return string_msearch(s1, s2, 0, cmpfn, chrfn, stepfn);               \
+}
 
-  /* Immediate termination conditions */
-  if (l2 == 0) return makeint(0);
-  if (l2 > l1) return makeint(-1);
+DEF_STRING_SEARCH(,  memcmp,   memchr,   steplen, "")
+DEF_STRING_SEARCH(i, mem8icmp, mem8ichr, step8ilen,
+                  " (case- and accentuation-insensitive)")
 
-  t1 = s1->str;
-  t2 = s2->str;
-  lastc2 = TO_7LOWER(t2[l2 - 1]);
-
-  i = l2 - 1; /* No point in starting earlier */
-  for (;;)
-    {
-      /* Search for lastc2 in t1 starting at i */
-      while (TO_7LOWER(t1[i]) != lastc2)
-	if (++i == l1) return makeint(-1);
-
-      /* Check if rest of string matches */
-      j = l2 - 1;
-      i1 = i;
-      do
-	{
-	  if (j == 0) return makeint(i1); /* match found at i1 */
-	  --j; --i1;
-	}
-      while (TO_7LOWER(t2[j]) == TO_7LOWER(t1[i1]));
-
-      /* No match. If we wanted better efficiency, we could skip over
-	 more than one character here (depending on where the next to
-	 last 'lastc2' is in s2.
-	 Probably not worth the bother for short strings */
-      if (++i == l1) return makeint(-1); /* Might be end of s1 */
-    }
+TYPEDOP(string_isearch_offset, 0,
+        "`s1 `n0 `s2 -> `n1. Searches in string `s1, starting at offset"
+        " `n0, for string `s2 (case- and accentuation-insensitive)."
+        " Returns the first index in `s1 where `s2 was found,"
+        " or -1 if not found.",
+	3, (struct string *s1, value ofs, struct string *s2),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
+        "sns.n")
+{
+  return string_msearch(s1, s2, GETINT(ofs), mem8icmp, mem8ichr, step8ilen);
 }
 
 TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
@@ -491,14 +683,22 @@ TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
 	3, (struct string *s, value start, value length),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "snn.s")
 {
-  TYPEIS(s, type_string);
+  enum runtime_error error;
+  if (!TYPE(s, type_string) || !integerp(start) || !integerp(length))
+    {
+      error = error_bad_type;
+      goto got_error;
+    }
 
-  long first = GETINT(start);
+  long first = intval(start);
   if (first < 0)
     first += string_len(s);
-  long size = GETINT(length);
+  long size = intval(length);
   if (first < 0 || size < 0 || first + size > string_len(s))
-    runtime_error(error_bad_index);
+    {
+      error = error_bad_index;
+      goto got_error;
+    }
 
   GCPRO1(s);
   struct string *newp = alloc_empty_string(size);
@@ -506,6 +706,9 @@ TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
   UNGCPRO();
 
   return newp;
+
+ got_error:
+  primitive_runtime_error(error, &op_substring, 3, s, start, length);
 }
 
 bool string_equalp(struct string *a, struct string *b)
@@ -515,11 +718,66 @@ bool string_equalp(struct string *a, struct string *b)
   return la == string_len(b) && memcmp(a->str, b->str, la) == 0;
 }
 
+VARTOP(concat_strings, 0, "`s0 `s1 ... -> `s. Returns the concatenated"
+       " strings `s0, `s1, ... as a new string.",
+       OP_STR_READONLY | OP_LEAF, "s*.s")
+{
+  long size = 0;
+  for (int n = 0; n < nargs; ++n)
+    {
+      TYPEIS(args->data[n], type_string);
+      size += string_len((struct string *)(args->data[n]));
+    }
+  if (size > MAX_STRING_SIZE)
+    runtime_error(error_bad_value);
+  GCPRO1(args);
+  struct string *res = alloc_empty_string(size);
+  UNGCPRO();
+  char *dest = res->str;
+  for (int n = 0; n < nargs; ++n)
+    {
+      long l = string_len((struct string *)(args->data[n]));
+      memcpy(dest, ((struct string *)(args->data[n]))->str, l);
+      dest += l;
+    }
+  return res;
+}
+
+value concat_strings(struct string **strings, int count)
+{
+  enum runtime_error error = error_bad_type;
+  long size = 0;
+  for (int n = 0; n < count; ++n)
+    {
+      if (!TYPE(strings[n], type_string))
+        goto got_error;
+      size += string_len(strings[n]);
+    }
+  if (size > MAX_STRING_SIZE)
+    {
+      error = error_bad_value;
+      goto got_error;
+    }
+
+  struct string *res = alloc_empty_string(size);
+  char *dest = res->str;
+  for (int n = 0; n < count; ++n)
+    {
+      long l = string_len(strings[n]);
+      memcpy(dest, strings[n]->str, l);
+      dest += l;
+    }
+  return res;
+
+ got_error: ;
+  struct vector *v = alloc_vector(count);
+  memcpy(v->data, strings, count * sizeof *strings);
+  primitive_runtime_error(error, &op_concat_strings, 1, v);
+}
+
 value string_append(struct string *s1, struct string *s2,
                     const struct primitive_ext *op)
 {
-  GCPRO2(s1, s2);
-
   long l1 = string_len(s1);
   long l2 = string_len(s2);
 
@@ -527,10 +785,11 @@ value string_append(struct string *s1, struct string *s2,
   if (nl > MAX_STRING_SIZE)
     primitive_runtime_error(error_bad_value, op, 2, s1, s2);
 
+  GCPRO2(s1, s2);
   struct string *newp = alloc_empty_string(nl);
+  UNGCPRO();
   memcpy(newp->str, s1->str, l1);
   memcpy(newp->str + l1, s2->str, l2);
-  UNGCPRO();
 
   return newp;
 }
@@ -560,48 +819,51 @@ TYPEDOP(split_words, 0, "`s -> `l. Split string `s into a list of words."
 
   int idx = 0;
 
-  for (;;) {
-    while (idx < slen && s->str[idx] == ' ')
-      ++idx;
+  for (;;)
+    {
+      while (idx < slen && s->str[idx] == ' ')
+        ++idx;
 
-    if (idx == slen)
-      break;
+      if (idx == slen)
+        break;
 
-    char *endp;
-    int end;
-    if ((s->str[idx] == '\'' || s->str[idx] == '"') /* quoted words */
-        && (endp = memchr(s->str + idx + 1, s->str[idx], slen - idx - 1)))
+      char *endp;
+      int end;
+      if ((s->str[idx] == '\'' || s->str[idx] == '"') /* quoted words */
+          && (endp = memchr(s->str + idx + 1, s->str[idx], slen - idx - 1)))
         end = endp - s->str + 1;
-    else
-      {
-        end = idx + 1;
-        while (end < slen && s->str[end] != ' ')
-          ++end;
-      }
+      else
+        {
+          end = idx + 1;
+          while (end < slen && s->str[end] != ' ')
+            ++end;
+        }
 
-    int len = end - idx;
-    struct string *wrd = alloc_empty_string(len);
-    memcpy(wrd->str, s->str + idx, len);
+      int len = end - idx;
+      struct string *wrd = alloc_empty_string(len);
+      memcpy(wrd->str, s->str + idx, len);
 
-    idx = end;
+      idx = end;
 
-    if (!l)
-      l = last = alloc_list(wrd, NULL);
-    else
-      {
-	value v = alloc_list(wrd, NULL);
-	last->cdr = v;
-	last = v;
-      }
-  }
+      if (!l)
+        l = last = alloc_list(wrd, NULL);
+      else
+        {
+          value v = alloc_list(wrd, NULL);
+          last->cdr = v;
+          last = v;
+        }
+    }
 
   UNGCPRO();
 
   return l;
 }
 
-TYPEDOP(atoi, 0, "`s -> `n|`s. Converts string into integer. Returns `s if"
-        " conversion failed.",
+TYPEDOP(atoi, 0, "`s -> `n|`s. Converts the string `s into an integer.\n"
+        "Returns `s if the conversion failed.\n"
+        "Handles binary, octal, decimal, and hexadecimal notation.\n"
+        "Equivalent to `atoi_base(`s, 0).",
 	1, (struct string *s),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "s.S")
@@ -609,11 +871,51 @@ TYPEDOP(atoi, 0, "`s -> `n|`s. Converts string into integer. Returns `s if"
   if (!TYPE(s, type_string))
     primitive_runtime_error(error_bad_type, &op_atoi, 1, s);
 
-  int n;
-  if (!mudlle_strtoint(s->str, &n))
+  long n;
+  if (!mudlle_strtolong(s->str, string_len(s), &n, 0))
     return s;
 
   return makeint(n);
+}
+
+TYPEDOP(atoi_base, 0, "`s `n0 -> `n1|`s. Converts the string `s into an"
+        " integer.\n"
+        "`n0 specifies the base, which must be between 2 and 36 inclusive,"
+        " or the special value 0.\n"
+        "Any leading whitespace is ignored. Then there may be an optional"
+        " sign character (\"+\" or \"-\").\n"
+        "For base 0, a following prefix decides the base: \"0x\" for"
+        " hexadecimal (also allowed for base 16), \"0\" for octal,"
+        " or \"0b\" for binary (also allowed for base 2). Any other digit"
+        " means decimal base.\n"
+        "Following the optional prefix, the rest of the number is"
+        " interpreted according to the (possibly deduced) base.\n"
+        "Returns `s if the conversion failed.",
+	2, (struct string *s, value mbase),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
+        "sn.S")
+{
+  enum runtime_error error;
+  if (!TYPE(s, type_string) || !integerp(mbase))
+    {
+      error = error_bad_type;
+      goto got_error;
+    }
+
+  long base = intval(mbase);
+  if (base != 0 && (base < 2 || base > 26))
+    {
+      error = error_bad_value;
+      goto got_error;
+    }
+
+  long n;
+  if (!mudlle_strtolong(s->str, string_len(s), &n, base))
+    return s;
+  return makeint(n);
+
+ got_error:
+  primitive_runtime_error(error, &op_atoi_base, 2, s, mbase);
 }
 
 TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value n),
@@ -622,8 +924,11 @@ TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value n),
   if (!integerp(n))
     primitive_runtime_error(error_bad_type, &op_itoa, 1, n);
 
-  char buf[16];
-  sprintf(buf, "%ld", intval(n));
+  /* conservative limit: 3 bits per decimal digit, round up, one sign
+     character, one zero character */
+  char buf[(TAGGED_INT_BITS - 1 + 2) / 3 + 1 + 1];
+  int c = sprintf(buf, "%ld", intval(n));
+  assert(c < sizeof buf);
   return make_readonly(alloc_string(buf));
 }
 
@@ -817,12 +1122,18 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
   int errofs;
   void *(*old_malloc)(size_t) = pcre_malloc;
   void (*old_free)(void *) = pcre_free;
-  char *lpat;
 
-  int flags = GETINT(mflags);
+  long flags = GETINT(mflags);
   TYPEIS(pat, type_string);
+  char *lpat = mudlle_string_dup(pat);
+  size_t zpos = strlen(lpat);
+  if (zpos != string_len(pat))
+    {
+      free(lpat);
+      STATIC_STRING(bad_nul_str, "invalid NUL character");
+      return alloc_list(GET_STATIC_STRING(bad_nul_str), makeint(zpos));
+    }
 
-  LOCALSTR(lpat, pat);
   if (flags & PCRE_7BIT)
     {
       strto7print(lpat);
@@ -838,15 +1149,19 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
   pcre_malloc = old_malloc;
   pcre_free = old_free;
 
+  free(lpat);
+
   value result;
   if (p == NULL)
     result = alloc_list(alloc_string(errstr), makeint(errofs));
   else
     {
-      struct grecord *mregexp  = alloc_private(PRIVATE_REGEXP, 1);
-      make_readonly(regexp_str);
-      mregexp->data[1] = &regexp_str->o;
+      struct mregexp *mregexp = (struct mregexp *)alloc_private(
+        PRIVATE_REGEXP, 1);
+      mregexp->re = make_readonly(regexp_str);
       result = make_readonly(mregexp);
+      if (!check_immutable(result))
+        abort();
     }
 
   UNGCPRO();
@@ -858,21 +1173,21 @@ static const pcre *get_regexp(value x)
   if (!is_regexp(x))
     runtime_error(error_bad_type);
 
-  struct grecord *re = x;
-  struct string *restr = (struct string *)re->data[1];
-  assert(TYPE(restr, type_string));
-  return (const pcre *)restr->str;
+  struct mregexp *re = x;
+  assert(TYPE(re->re, type_string));
+  return (const pcre *)re->re->str;
 }
 
 TYPEDOP(regexp_exec, 0,
-        "`r `s `n0 `n1 -> `v. Tries to match the string `s, starting at"
+        "`r `s `n0 `n1 -> `v|`b. Tries to match the string `s, starting at"
 	" character `n0 with regexp matcher `r and flags `n1.\n"
-	"Returns a vector of submatches or false if no match.\n"
+	"Returns `false if no match; otherwise, it returns a vector of"
+	" submatches unless `PCRE_BOOLEAN is specified (see below).\n"
 	"A submatch is either a string matched by the corresponding"
 	" parenthesis group, or null if that group was not used.\n"
 	"If `n1 & `PCRE_INDICES, submatches are instead represented as"
 	" cons(`start, `length) or null.\n"
-        "If `n1 & PCRE_BOOLEAN, the result is instead a boolean saying"
+        "If `n1 & `PCRE_BOOLEAN, the result is instead a boolean saying"
         " whether a match was found.\n"
         "`PCRE_INDICES and `PCRE_BOOLEAN must not both be set.\n"
 	"The following flags are supported:\n"
@@ -887,7 +1202,7 @@ TYPEDOP(regexp_exec, 0,
         4, (struct string *mre, struct string *str, value msofs, value mflags),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "osnn.[vn]")
 {
-  int flags = GETINT(mflags);
+  long flags = GETINT(mflags);
   const pcre *re = get_regexp(mre);
   TYPEIS(str, type_string);
 
@@ -911,7 +1226,7 @@ TYPEDOP(regexp_exec, 0,
     runtime_error(error_bad_value);
 
   {
-    char *haystack = str->str;
+    const char *haystack = str->str;
     char *lstr = NULL;
 
     if (flags & PCRE_7BIT)
@@ -933,7 +1248,7 @@ TYPEDOP(regexp_exec, 0,
       return makebool(false);
     if (res < 0)
       runtime_error(error_bad_value);
-    if (flags & PCRE_BOOLEAN)
+    if (boolean)
       return makebool(true);
   }
 
@@ -969,31 +1284,22 @@ TYPEDOP(crypt, 0, "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
 	2, (struct string *s, struct string *salt),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.s")
 {
-  char buffer[9];
-  int i;
-  char *p;
-
   TYPEIS(s, type_string);
   TYPEIS(salt, type_string);
 
   /* Use all the characters in the string, rather than the first 8. */
-  memset(buffer, 0, sizeof buffer);
-
-  for (p = s->str, i = 0; *p; ++p, i = (i + 1) & 7)
+  char buffer[9] = { 0 };
+  const char *p = s->str;
+  for (int i = 0; *p; ++p, i = (i + 1) & 7)
     buffer[i] += *p;
 
-  for (i = 0; i < 8; ++i)
+  for (int i = 0; i < 8; ++i)
     if (!buffer[i])
       buffer[i] = ' ';
 
   return alloc_string(crypt(buffer, salt->str));
 }
 #endif	/* HAVE_CRYPT */
-
-static void define_string(const char *name, const char *val)
-{
-  system_define(name, make_readonly(alloc_string(val)));
-}
 
 static void define_strings(void)
 {
@@ -1006,8 +1312,12 @@ static void define_strings(void)
 #  error Fix me
 #endif
     ;
-  define_string("host_type", host_type);
+  system_define("host_type", make_readonly(alloc_string(host_type)));
 }
+
+STATIC_STRING(static_obj_empty_string, "");
+struct string *const static_empty_string
+  = GET_STATIC_STRING(static_obj_empty_string);
 
 void string_init(void)
 {
@@ -1028,11 +1338,18 @@ void string_init(void)
   DEFINE(string_8iequalp);
   DEFINE(string_search);
   DEFINE(string_isearch);
+  DEFINE(string_isearch_offset);
+  DEFINE(string_index);
+  DEFINE(string_index_offset);
+  DEFINE(string_span);
+  DEFINE(string_cspan);
   DEFINE(substring);
+  DEFINE(concat_strings);
   DEFINE(string_append);
   DEFINE(split_words);
   DEFINE(itoa);
   DEFINE(atoi);
+  DEFINE(atoi_base);
   DEFINE(string_upcase);
   DEFINE(string_downcase);
   DEFINE(string_7bit);

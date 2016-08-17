@@ -35,253 +35,6 @@
 
 /* Interface to machine code. */
 
-#ifdef AMIGA
-
-inline value invoke0(struct closure *c)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c()
-   Returns: c()'s result
-*/
-{
-  value result;
-  GCPRO1(c);
-  push_registers();
-  UNGCPRO();
-  result = mc_invoke(c, 0, NULL, NULL, NULL, NULL);
-  pop_registers();
-  return result;
-}
-
-inline value invoke1(struct closure *c, value arg)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg)
-   Returns: c(arg)'s result
-*/
-{
-  GCPRO2(arg, c);
-  push_registers();
-  UNGCPRO();
-
-  value result = mc_invoke(c, 1, arg, NULL, NULL, NULL);
-  pop_registers();
-  return result;
-}
-
-inline value invoke1plus(struct closure *c, value arg, struct vector *args)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(args)
-   Returns: c(args)'s result
-*/
-{
-  struct vector *extra;
-  value result;
-  int nargs;
-
-  {
-    GCPRO3(arg, args, c);
-    push_registers();
-    UNGCPRO();
-  }
-
-  nargs = 1 + vector_len(args);
-  switch (nargs)
-    {
-    case 1:
-      result = mc_invoke(c, 1, arg, NULL, NULL, NULL);
-      break;
-    case 2:
-      result = mc_invoke(c, 2, arg, args->data[0], NULL, NULL);
-      break;
-    case 3:
-      result = mc_invoke(c, 3, arg, args->data[0], args->data[1], NULL);
-      break;
-    case 4:
-      result = mc_invoke(c, 4, arg, args->data[0], args->data[1], args->data[2]);
-      break;
-    default:
-      {
-        GCPRO3(arg, args, c);
-        extra = (struct vector *)unsafe_allocate_record(type_internal, nargs - 3);
-        UNGCPRO();
-      }
-      memcpy(extra->data, args->data + 2, (nargs - 3) * sizeof(value));
-      result = mc_invoke(c, 4, arg, args->data[0], args->data[1], extra);
-      break;
-    }
-  pop_registers();
-  return result;
-}
-
-inline value invoke(struct closure *c, struct vector *args)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(args)
-   Returns: c(args)'s result
-*/
-{
-  struct vector *extra;
-  value result;
-  int nargs;
-
-  {
-    GCPRO2(c, args);
-    push_registers();
-    UNGCPRO();
-  }
-
-  nargs = vector_len(args);
-  switch (nargs)
-    {
-    case 0:
-      result = mc_invoke(c, 0, NULL, NULL, NULL, NULL);
-      break;
-    case 1:
-      result = mc_invoke(c, 1, args->data[0], NULL, NULL, NULL);
-      break;
-    case 2:
-      result = mc_invoke(c, 2, args->data[0], args->data[1], NULL, NULL);
-      break;
-    case 3:
-      result = mc_invoke(c, 3, args->data[0], args->data[1], args->data[2], NULL);
-      break;
-    case 4:
-      result = mc_invoke(c, 4, args->data[0], args->data[1], args->data[2], args->data[3]);
-      break;
-    default:
-      {
-        GCPRO2(c, args);
-        extra = (struct vector *)unsafe_allocate_record(type_internal, nargs - 3);
-        UNGCPRO();
-        memcpy(extra->data, args->data + 3, (nargs - 3) * sizeof(value));
-        result = mc_invoke(c, 4, args->data[0], args->data[1], args->data[2], extra);
-        break;
-      }
-    }
-  pop_registers();
-  return result;
-}
-
-#endif
-
-#ifdef sparc
-
-inline value invoke0(struct closure *c)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c()
-   Returns: c()'s result
-*/
-{
-  return mc_invoke(NULL, NULL, NULL, NULL, NULL, c, 0);
-}
-
-inline value invoke1(struct closure *c, value arg)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg)
-   Returns: c(arg)'s result
-*/
-{
-  return mc_invoke(arg, NULL, NULL, NULL, NULL, c, 1);
-}
-
-inline value invoke2(struct closure *c, value arg1, value arg2)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2)
-   Returns: c()'s result
-*/
-{
-  return mc_invoke(arg1, arg2, NULL, NULL, NULL, c, 2);
-}
-
-inline value invoke3(struct closure *c, value arg1, value arg2, value arg3)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2, arg3)
-   Returns: c()'s result
-*/
-{
-  return mc_invoke(arg1, arg2, arg3, NULL, NULL, c, 3);
-}
-
-inline value invoke4(struct closure *c, value arg1, value arg2, value arg3,
-		     value arg4)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(arg1, arg2, arg3, arg4)
-   Returns: c()'s result
-*/
-{
-  return mc_invoke(arg1, arg2, arg3, arg4, NULL, c, 4);
-}
-
-inline value invoke1plus(struct closure *c, value arg, struct vector *args)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(args)
-   Returns: c(args)'s result
-*/
-{
-  int nargs = 1 + vector_len(args);
-
-  CASSERT_EXPR(MAX_PRIMITIVE_ARGS == 5);
-  switch (nargs)
-    {
-    case 1:
-      return mc_invoke(arg, NULL, NULL, NULL, NULL, c, 1);
-    case 2:
-      return mc_invoke(arg, args->data[0], NULL, NULL, NULL, c, 2);
-    case 3:
-      return mc_invoke(arg, args->data[0], args->data[1], NULL, NULL, c, 3);
-    case 4:
-      return mc_invoke(arg, args->data[0], args->data[1], args->data[2], NULL, c, 4);
-    case 5:
-      return mc_invoke(arg, args->data[0], args->data[1], args->data[2],
-		       args->data[3], c, 5);
-    default:
-      return mc_invoke_vector(arg, args->data[0], args->data[1], args->data[2],
-			      args->data[3], c, nargs, args, 4);
-    }
-}
-
-inline value invoke(struct closure *c, struct vector *args)
-/* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
-   Effects: Executes c(args)
-   Returns: c(args)'s result
-*/
-{
-  int nargs = vector_len(args);
-
-  CASSERT_EXPR(MAX_PRIMITIVE_ARGS == 5);
-  switch (nargs)
-    {
-    case 0:
-      return mc_invoke(NULL, NULL, NULL, NULL, NULL, c, 0);
-    case 1:
-      return mc_invoke(args->data[0], NULL, NULL, NULL, NULL, c, 1);
-    case 2:
-      return mc_invoke(args->data[0], args->data[1], NULL, NULL, NULL, c, 2);
-    case 3:
-      return mc_invoke(args->data[0], args->data[1], args->data[2], NULL, NULL, c, 3);
-    case 4:
-      return mc_invoke(args->data[0], args->data[1], args->data[2],
-		       args->data[3], NULL, c, 4);
-    case 5:
-      return mc_invoke(args->data[0], args->data[1], args->data[2],
-		       args->data[3], args->data[4], c, 5);
-    default:
-      return mc_invoke_vector(args->data[0], args->data[1], args->data[2],
-			      args->data[3], args->data[4], c, nargs, args, 5);
-    }
-}
-
-#endif
-
 #ifdef i386
 /* The invokexxx fns are defined in x86builtins.s */
 #endif
@@ -433,8 +186,7 @@ value call0(value c)
         struct primitive *prim = c;
         ++prim->call_count;
         value (*op)() = prim->op->op;
-	struct vector *args
-          = (struct vector *)unsafe_allocate_record(type_vector, 0);
+	struct vector *args = UNSAFE_ALLOCATE_RECORD(vector, 0);
 	return op(args, 0);
       }
 
@@ -483,8 +235,7 @@ value call ## N(value c, PRIMARGS ## N)                                 \
         ++prim->call_count;                                             \
         value (*op)() = prim->op->op;                                   \
         GCPRO_N(N, PRIMARGNAMES ## N);                                  \
-        struct vector *args                                             \
-          = (struct vector *)unsafe_allocate_record(type_vector, N);    \
+        struct vector *args = UNSAFE_ALLOCATE_RECORD(vector, N);        \
         CONCATSEMI(N, __VSET);                                          \
         UNGCPRO();                                                      \
         return op(args, N);                                             \
@@ -550,10 +301,10 @@ value call1plus(value c, value arg, struct vector *args)
         value (*op)() = prim->op->op;
 
         GCPRO2(arg, args);
-	struct vector *real_args
-          = (struct vector *)unsafe_allocate_record(type_vector, nargs);
+	struct vector *real_args = UNSAFE_ALLOCATE_RECORD(vector, nargs);
 	real_args->data[0] = arg;
-	memcpy(real_args->data + 1, args->data, (nargs - 1) * sizeof (value));
+	memcpy(real_args->data + 1, args->data,
+               (nargs - 1) * sizeof (value));
 	UNGCPRO();
 
 	return op(args, nargs);
@@ -623,7 +374,7 @@ value call(value c, struct vector *args)
 static struct vector *make_vargs(int argc, va_list vargs)
 {
   if (argc == 0)
-    return (struct vector *)unsafe_allocate_record(type_vector, 0);
+    return UNSAFE_ALLOCATE_RECORD(vector, 0);
 
   struct gcpro gcpros[argc];
   value args[argc];
@@ -632,14 +383,13 @@ static struct vector *make_vargs(int argc, va_list vargs)
       args[i] = va_arg(vargs, value);
       GCPRO(gcpros[i], args[i]);
     }
-  struct vector *v
-    = (struct vector *)unsafe_allocate_record(type_vector, argc);
+  struct vector *v = UNSAFE_ALLOCATE_RECORD(vector, argc);
   UNGCPRO1(gcpros[0]);
   memcpy(v->data, args, sizeof args);
   return v;
 }
 
-#define __VARG(N) __PRIMARG(N) = me.u.c.args[N - 1] = va_arg(va, value)
+#define __VARG(N) __PRIMARG(N) = me.args[N - 1] = va_arg(va, value)
 #define __INVOKE(N)                             \
  case N:                                        \
  {                                              \
@@ -662,26 +412,46 @@ static value callv(value c, int nargs, va_list va, const char *name)
    Requires: callable(c, argc) does not fail.
 */
 {
-  struct call_stack me;
-  me.next = call_stack;
-
-  if (name != NULL)
+  if (nargs == 0)
     {
-      me.type = call_string;
-      me.u.c.u.name = name;
-      me.u.c.nargs = nargs;
-      call_stack = &me;
+      if (name == NULL)
+        return call0(c);
+
+      struct call_stack_c_header me = {
+        .s = {
+          .next = call_stack,
+          .type = call_string,
+        },
+        .u.name = name,
+        .nargs  = 0
+      };
+      call_stack = &me.s;
+      value result = call0(c);
+      call_stack = me.s.next;
+      return result;
+    }
+
+  bool use_vector = nargs > MAX_PRIMITIVE_ARGS;
+  struct {
+    struct call_stack_c_header c;
+    value args[MAX_PRIMITIVE_ARGS];
+  } me;
+
+  if (name)
+    {
+      me.c = (struct call_stack_c_header){
+	.s = {
+	  .next = call_stack,
+	  .type = call_string,
+	},
+	.u.name = name,
+	.nargs = nargs
+      };
+      call_stack = &me.c.s;
     }
 
   value result;
-
-  if (nargs == 0)
-    {
-      result = call0(c);
-      goto done;
-    }
-
-  if (nargs > MAX_PRIMITIVE_ARGS)
+  if (use_vector)
     goto call_vector;
 
   check_allow_mudlle_call();
@@ -720,17 +490,17 @@ static value callv(value c, int nargs, va_list va, const char *name)
     }
 
  call_vector: ;
-  /* initiate data in case there is a GC */
-  me.u.c.nargs = 1;
-  me.u.c.args[0] = NULL;
   GCPRO1(c);
+  me.c.nargs = 0;		/* in case there's GC */
   struct vector *argv = make_vargs(nargs, va);
   UNGCPRO();
-  me.u.c.args[0] = argv;
+  me.c.nargs = 1;
+  me.args[0] = argv;
   result = call(c, argv);
 
  done:
-  call_stack = me.next;
+  if (name)
+    call_stack = me.c.s.next;
   return result;
 }
 
@@ -743,39 +513,52 @@ static inline enum call_trace_mode call_trace_mode(void)
   return call_trace_on;
 }
 
-static value longjmp_result;
+struct setjmp_data {
+  value func;
+  value result;
+};
 
-static void docall0_setjmp(void *f)
+static void docall0_setjmp(void *_data)
 {
-  value buf;
+  struct setjmp_data *data = _data;
 
+  value f = data->func;
   GCPRO1(f);
-  buf = mjmpbuf();
-  longjmp_result = call1(f, buf);
+  value buf = mjmpbuf(&data->result);
   UNGCPRO();
+  data->result = call1(f, buf);
 }
 
 value msetjmp(value f)
 {
-  if (mcatch(docall0_setjmp, f, call_trace_mode()))
-    return longjmp_result;
-  return NULL;
+  struct setjmp_data data = { .func = f };
+  mcatch(docall0_setjmp, &data, call_trace_mode());
+  return data.result;
 }
 
-void mlongjmp(value buf, value x)
+void mlongjmp(struct mjmpbuf *buf, value x)
 {
   assert(is_mjmpbuf(buf));
-
-  exception_context = ((struct mjmpbuf *)buf)->context;
-  longjmp_result = x;
-  mthrow(SIGNAL_LONGJMP, x);
+  *buf->result = x;
+  buf->result = NULL;           /* mark as target of longjmp() */
+  mthrow(SIGNAL_LONGJMP, error_none);
 }
 
-void mthrow(long sig, value val)
+void mrethrow(void)
 {
-  exception_signal = sig;
-  exception_value = val;
-  nosiglongjmp(catch_context->exception, sig);
+  nosiglongjmp(catch_context->exception, 1);
+}
+
+void mthrow(enum mudlle_signal sig, enum runtime_error err)
+{
+  mexception = (struct mexception){ .sig = sig, .err = err };
+  mrethrow();
+}
+
+void maybe_mrethrow(void)
+{
+  if (has_pending_exception())
+    mrethrow();
 }
 
 struct call_info {
@@ -787,18 +570,28 @@ struct call_info {
 static void docall(void *x)
 {
   struct call_info *info = x;
-  struct call_stack me;
-  me.next = call_stack;
-  if (info->name)
+  if (info->name == NULL)
     {
-      me.type = call_string;
-      me.u.c.u.name = info->name;
-      me.u.c.nargs = 1;
-      me.u.c.args[0] = info->args;
-      call_stack = &me;
+      info->result = call(info->c, info->args);
+      return;
     }
+  struct {
+    struct call_stack_c_header c;
+    value args[1];
+  } me = {
+    .c = {
+      .s = {
+	.next = call_stack,
+	.type = call_string
+      },
+      .u.name = info->name,
+      .nargs = 1
+    },
+    .args = { info->args }
+  };
+  call_stack = &me.c.s;
   info->result = call(info->c, info->args);
-  call_stack = me.next;
+  call_stack = me.c.s.next;
 }
 
 value mcatch_call(const char *name, value c, struct vector *arguments)
@@ -847,19 +640,28 @@ struct call1plus_info {
 static void docall1plus(void *x)
 {
   struct call1plus_info *info = x;
-  struct call_stack me;
-  me.next = call_stack;
-  if (info->name)
+  if (info->name == NULL)
     {
-      me.type = call_string;
-      me.u.c.u.name = info->name;
-      me.u.c.nargs = 2;
-      me.u.c.args[0] = info->arg;
-      me.u.c.args[1] = info->args;
-      call_stack = &me;
+      info->result = call1plus(info->c, info->arg, info->args);
+      return;
     }
+  struct {
+    struct call_stack_c_header c;
+    value args[2];
+  } me = {
+    .c = {
+      .s = {
+        .next = call_stack,
+        .type = call_string
+      },
+      .u.name = info->name,
+      .nargs = 2,
+    },
+    .args = { info->arg, info->args }
+  };
+  call_stack = &me.c.s;
   info->result = call1plus(info->c, info->arg, info->args);
-  call_stack = me.next;
+  call_stack = me.c.s.next;
 }
 
 value mcatch_call1plus(const char *name, value c, value arg,

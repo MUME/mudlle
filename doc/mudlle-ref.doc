@@ -384,10 +384,10 @@ constants:
   type_code, type_closure, type_variable, type_internal, type_primitive,
   type_varargs, type_secure, type_integer, type_string, type_vector, type_pair,
   type_symbol, type_table, type_private, type_object, type_character, type_gone,
-  type_outputport, type_mcode, type_null
+  type_oport, type_mcode, type_null
 
 Most of these values should not be seen... (specifically: type_code,
-type_variable, type_internal, type_outputport, type_mcode). type_closure,
+type_variable, type_internal, type_oport, type_mcode). type_closure,
 type_primitive, type_varargs and type_secure all count as functions.
 
 3.4 Expressions

@@ -37,5 +37,6 @@ enum {
 void io_init(void);
 
 struct oport *get_oport(struct oport *oport);
+void check_string_port(struct oport *oport);
 
 #endif /* RUNTIME_IO_H */

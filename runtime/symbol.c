@@ -27,7 +27,7 @@
 #include "../table.h"
 
 
-TYPEDOP(symbolp, "symbol?", "`x -> `b. TRUE if `x is a symbol", 1, (value v),
+TYPEDOP(symbolp, "symbol?", "`x -> `b. True if `x is a symbol.", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "x.n")
 {
   return makebool(TYPE(v, type_symbol));
@@ -40,14 +40,12 @@ TYPEDOP(make_symbol, 0, "`s `x -> `sym. Creates a symbol with name `s and"
         OP_LEAF | OP_NOESCAPE, "sx.y")
 {
   TYPEIS(s, type_string);
-  if (~s->o.flags & OBJ_READONLY)
+  if (!obj_readonlyp(&s->o))
     {
       /* technically, symbol names do not have to be readonly, but as
          they always are in tables, we make them so anyway */
-      char *scopy;
-      LOCALSTR(scopy, s);
       GCPRO1(v);
-      s = make_readonly(alloc_string_length(scopy, string_len(s)));
+      s = make_readonly(mudlle_string_copy(s));
       UNGCPRO();
     }
   return alloc_symbol(s, v);
@@ -60,7 +58,10 @@ TYPEDOP(make_psymbol, 0, "`s `x -> `sym. Creates a read-only symbol with"
         2, (struct string *s, value v),
         OP_LEAF | OP_NOESCAPE | OP_CONST, "sx.y")
 {
-  return make_readonly(code_make_symbol(s, v));
+  bool imm = immutablep(v);
+  struct symbol *sym = code_make_symbol(s, v);
+  sym->o.flags |= OBJ_READONLY | (imm ? OBJ_IMMUTABLE : 0);
+  return sym;
 }
 
 TYPEDOP(symbol_name, 0, "`sym -> `s. Returns the name of a symbol",
@@ -86,25 +87,44 @@ EXT_TYPEDOP(symbol_set, "symbol_set!",
 {
   TYPEIS(s, type_symbol);
 
-  if (s->o.flags & OBJ_READONLY) runtime_error(error_value_read_only);
+  if (obj_readonlyp(&s->o))
+    runtime_error(error_value_read_only);
   s->data = val;
   return val;
 }
 
-TYPEDOP(tablep, "table?", "`x -> `b. TRUE if `x is a symbol table",
+TYPEDOP(tablep, "table?", "`x -> `b. True if `x is a symbol table, including"
+        " case- and accent-sensitive tables. Cf. `ctable?().",
         1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, type_table));
 }
 
-TYPEDOP(make_table, 0, "-> `table. Create a new (empty) symbol table",
+TYPEDOP(ctablep, "ctable?", "`x -> `b. True if `x is a case- and accent-"
+        " sensitive table. Cf. `table?().",
+        1, (struct table *t),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
+{
+  return makebool(TYPE(t, type_table) && is_ctable(t));
+}
+
+TYPEDOP(make_table, 0, "-> `table. Create a new (empty) case- and accent-"
+        "insensitive symbol table. Cf. `make_ctable().",
         0, (void), OP_LEAF | OP_NOESCAPE, ".t")
 {
   return alloc_table(DEF_TABLE_SIZE);
 }
 
-static struct table *vector_to_table(struct vector *v, bool readonly)
+TYPEDOP(make_ctable, 0, "-> `table. Create a new (empty) case- and accent-"
+        "sensitive symbol table. Cf. `make_table().",
+        0, (void), OP_LEAF | OP_NOESCAPE, ".t")
+{
+  return alloc_ctable(DEF_TABLE_SIZE);
+}
+
+static struct table *vector_to_table(struct vector *v, bool readonly,
+                                     bool ctable)
 {
   TYPEIS(v, type_vector);
   long vlen = vector_len(v);
@@ -116,13 +136,16 @@ static struct table *vector_to_table(struct vector *v, bool readonly)
       immutable &= sym->o.flags;
     }
 
+  ulong tsize = table_good_size(vlen);
+  if (tsize > MAX_VECTOR_SIZE)
+    runtime_error(error_bad_value);
+
   GCPRO1(v);
-  struct table *table = alloc_table(table_good_size(vlen));
+  struct table *table = (ctable ? alloc_ctable : alloc_table)(tsize);
   for (long i = 0; i < vlen; ++i)
     {
-      struct symbol *sym = v->data[i], *sym2;
-      if (table_lookup_len(table, sym->name->str, string_len(sym->name),
-                           &sym2))
+      struct symbol *sym = v->data[i];
+      if (table_mlookup(table, sym->name) != NULL)
         runtime_error(error_bad_value);
       table_add_sym_fast(table, sym);
     }
@@ -138,7 +161,7 @@ TYPEDOP(vector_to_table, 0, "`v -> `table. Create a new table from the symbols"
         " in `v. There will be a runtime error if any symbols collide.",
         1, (struct vector *v), OP_LEAF | OP_NOESCAPE, "v.t")
 {
-  return vector_to_table(v, false);
+  return vector_to_table(v, false, false);
 }
 
 TYPEDOP(vector_to_ptable, 0, "`v -> `table. Create a new read-only table from"
@@ -147,7 +170,24 @@ TYPEDOP(vector_to_ptable, 0, "`v -> `table. Create a new read-only table from"
         "There will be a runtime error if any symbols collide.",
         1, (struct vector *v), OP_LEAF | OP_NOESCAPE | OP_CONST, "v.t")
 {
-  return vector_to_table(v, true);
+  return vector_to_table(v, true, false);
+}
+
+TYPEDOP(vector_to_ctable, 0, "`v -> `table. Create a new case- and"
+        " accentuation-sensitive table from the symbols in `v.\n"
+        "There will be a runtime error if any symbols collide.",
+        1, (struct vector *v), OP_LEAF | OP_NOESCAPE, "v.t")
+{
+  return vector_to_table(v, false, true);
+}
+
+TYPEDOP(vector_to_pctable, 0, "`v -> `table. Create a new read-only case- and"
+        " accentuation-sensitive table from the symbols in `v.\n"
+        "If all symbols are immutable, the table will also be immutable.\n"
+        "There will be a runtime error if any symbols collide.",
+        1, (struct vector *v), OP_LEAF | OP_NOESCAPE | OP_CONST, "v.t")
+{
+  return vector_to_table(v, true, true);
 }
 
 TYPEDOP(table_list, 0,
@@ -177,28 +217,20 @@ static struct vector *make_table_copy(struct table *table, int *used)
 {
   TYPEIS(table, type_table);
 
-  struct copy_table_data data;
-  {
-    GCPRO1(table);
-    data = (struct copy_table_data){
-      .buckets = alloc_vector(table_entries(table)),
-      .used    = 0
-    };
-    UNGCPRO();
-  }
-
-  {
-    GCPRO1(data.buckets);
-    table_foreach(table, &data, copy_table_entry);
-    UNGCPRO();
-  }
+  GCPRO1(table);
+  struct copy_table_data data = {
+    .buckets = alloc_vector(table_entries(table)),
+    .used    = 0
+  };
+  UNGCPRO();
+  table_foreach(table, &data, copy_table_entry);
 
   *used = data.used;
   return data.buckets;
 }
 
 TYPEDOP(table_foreach, 0,
-        "`c `table -> . Runs `c(`sym) for each symbol `sym in `table."
+        "`c `table -> . Runs `c(`sym) for each non-null symbol `sym in `table."
         " It is safe to modify `table from `c().",
 	2, (value f, struct table *table),
 	0, "ft.")
@@ -221,7 +253,7 @@ TYPEDOP(table_foreach, 0,
 }
 
 TYPEDOP(table_reduce, 0, "`f `x0 `t -> `x. Reduces table `t with function"
-        " `x = `f(`s, `x) for each symbol `s and initial value `x0",
+        " `x = `f(`s, `x) for each non-null symbol `s and initial value `x0.",
 	3, (value f, value x, struct table *table),
 	0, "fxt.x")
 {
@@ -243,13 +275,13 @@ TYPEDOP(table_reduce, 0, "`f `x0 `t -> `x. Reduces table `t with function"
 }
 
 TYPEDOP(table_existsp, "table_exists?",
-        "`c `table -> `x. Returns the first symbol `s in `table"
+        "`c `table -> `x. Returns the first non-null symbol `s in `table"
 	" for which `c(`s) is true, or false",
 	2, (value f, struct table *table),
 	0, "ft.[yz]")
 {
   struct vector *buckets = NULL;
-  value res = makebool(0);
+  value res = makebool(false);
   int used;
 
   callable(f, 1);
@@ -271,34 +303,27 @@ TYPEDOP(table_existsp, "table_exists?",
 }
 
 TYPEDOP(table_vector, 0,
-        "`table -> `v. Returns a vector of the entries in table",
+        "`table -> `v. Returns a vector of the non-null entries in `table.",
 	1, (struct table *table),
 	OP_LEAF | OP_NOESCAPE, "t.v")
 {
-  struct vector *res, *buckets = NULL;
   int used;
+  struct vector *buckets = make_table_copy(table, &used);
+  if (used == vector_len(buckets))
+    return buckets;
 
   GCPRO1(buckets);
-
-  buckets = make_table_copy(table, &used);
-
-  if (used == vector_len(buckets))
-    res = buckets;
-  else
-    {
-      res = alloc_vector(used);
-      memcpy(res->data,
-	     buckets->data,
-	     sizeof res->data[0] * used);
-    }
-
+  struct vector *res = alloc_vector(used);
   UNGCPRO();
-
+  memcpy(res->data,
+         buckets->data,
+         sizeof res->data[0] * used);
   return res;
 }
 
-TYPEDOP(table_prefix, 0, "`table `s -> `l. Returns list of symbols in `table"
-        " whose value is non-null, and whose name starts with `s",
+TYPEDOP(table_prefix, 0, "`table `s -> `l. Returns list of all symbols in"
+        " `table whose value is non-null and whose name starts with `s.\n"
+        "For non-ctables, case and accentuation are ignored.",
         2, (struct table *table, struct string *name),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ts.l")
 {
@@ -317,68 +342,62 @@ EXT_TYPEDOP(table_ref, 0,
       || !TYPE(s, type_string))
     primitive_runtime_error(error_bad_type, &op_table_ref, 2, table, s);
 
-  struct symbol *sym;
-  if (!table_lookup_len(table, s->str, string_len(s), &sym)) return NULL;
-  return sym->data;
+  struct symbol *sym = table_mlookup(table, s);
+  return sym == NULL ? NULL : sym->data;
 }
 
 TYPEDOP(table_lookup, 0, "`table `s -> `x. Returns the symbol for `s in"
-        " `table, or false if none",
+        " `table, or false if none. Cf. `table_symbol_ref().",
         2, (struct table *table, struct string *s),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "ts.[yz]")
 {
-  struct symbol *sym;
-
   TYPEIS(table, type_table);
   TYPEIS(s, type_string);
 
-  if (!table_lookup_len(table, s->str, string_len(s), &sym)
-      || !sym->data)
-    return makebool(false);
+  struct symbol *sym = table_mlookup(table, s);
+  return sym ? sym : makebool(false);
+}
+
+TYPEDOP(table_symbol_ref, 0, "`table `s `x -> `sym. Returns the symbol for `s"
+        " in `table, creating it with value `x if necessary."
+        " Cf. `table_lookup().",
+        3, (struct table *table, struct string *s, value x),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "tsx.y")
+{
+  TYPEIS(table, type_table);
+  TYPEIS(s, type_string);
+
+  struct symbol *sym = table_mlookup(table, s);
+  if (sym == NULL)
+    {
+      if (obj_readonlyp(&table->o))
+        runtime_error(error_value_read_only);
+      GCPRO2(table, x);
+      if (!obj_readonlyp(&s->o))
+        s = make_readonly(mudlle_string_copy(s));
+      sym = alloc_symbol(s, x);
+      UNGCPRO();
+      table_add_sym_fast(table, sym);
+    }
   return sym;
 }
 
-runtime_errors safe_table_mset(struct table *table, struct string *s, value *x)
+static value mudlle_table_set(value container, struct table *table,
+                              struct string *s, value x,
+                              const struct primitive_ext *op)
 {
+  enum runtime_error error;
   if (!TYPE(s, type_string))
-    return error_bad_type;
-
-  if (((struct obj *)table)->flags & OBJ_READONLY)
-    return error_value_read_only;
-
-  struct symbol *sym;
-  if (table_lookup_len(table, s->str, string_len(s), &sym))
     {
-      if (sym->o.flags & OBJ_READONLY)
-        return error_value_read_only;
-      sym->data = *x;
+      error = error_bad_type;
+      goto got_error;
     }
-  else if (*x)
-    {
-      value x2 = *x;
-      GCPRO2(table, x2);
-      if (!(s->o.flags & OBJ_READONLY))
-	{
-	  /* make a copy of index string (otherwise it may get modified...) */
-	  s = make_readonly(mudlle_string_copy(s));
-	}
-      table_add_fast(table, s, x2);
-      UNGCPRO();
-      *x = x2;
-    }
-  return error_none;
-}
+  error = safe_table_mset(table, s, &x);
+  if (error == error_none)
+    return x;
 
-static value table_mset(value container, struct table *table,
-                        struct string *s, value x,
-                        const struct primitive_ext *op)
-{
-  GCPRO1(container);
-  runtime_errors error = safe_table_mset(table, s, &x);
-  UNGCPRO();
-  if (error != error_none)
-    primitive_runtime_error(error, op, 3, container, s, x);
-  return x;
+ got_error:
+  primitive_runtime_error(error, op, 3, container, s, x);
 }
 
 EXT_TYPEDOP(table_set, "table_set!",
@@ -388,36 +407,56 @@ EXT_TYPEDOP(table_set, "table_set!",
 	    OP_LEAF | OP_NOESCAPE, "tsx.3")
 {
   TYPEIS(table, type_table);
-  return table_mset(table, table, s, x, &op_table_set);
+  return mudlle_table_set(table, table, s, x, &op_table_set);
 }
 
 TYPEDOP(table_remove, "table_remove!",
-        "`table `s -> `b. Removes the entry for `s in `table `x. "
-	"Returns true if such an entry was found.",
+        "`table `s -> `b. Removes the entry for `s in `table.\n"
+        "This is a costly operation as it may need to partially rehash"
+        " the table.\n"
+	"Returns true if such an entry was found, even if it had value null.",
 	2, (struct table *table, struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ts.n")
 {
-  int r;
-
   TYPEIS(table, type_table);
   TYPEIS(s, type_string);
-  if (((struct obj *)table)->flags & OBJ_READONLY)
+  if (obj_readonlyp(&table->o))
     runtime_error(error_value_read_only);
-  GCPRO1(s);
-  r = table_remove_len(table, s->str, string_len(s));
-  UNGCPRO();
-  return makebool(r);
+  return makebool(table_remove_len(table, s->str, string_len(s)));
+}
+
+TYPEDOP(table_copy, 0,
+        "`t0 -> `t1. Make a copy of table `t0, leaving out any null symbols.",
+        1, (struct table *table),
+        OP_LEAF | OP_NOESCAPE, "t.t")
+{
+  TYPEIS(table, type_table);
+  return table_copy(table);
+}
+
+TYPEDOP(table_shallow_copy, 0,
+        "`t0 -> `t1. Make a copy of table `t0, reusing its symbols.",
+        1, (struct table *table),
+        OP_LEAF | OP_NOESCAPE, "t.t")
+{
+  TYPEIS(table, type_table);
+  return table_shallow_copy(table);
 }
 
 
 void symbol_init(void)
 {
   DEFINE(tablep);
+  DEFINE(ctablep);
   DEFINE(make_table);
+  DEFINE(make_ctable);
   DEFINE(table_ref);
   DEFINE(table_lookup);
+  DEFINE(table_symbol_ref);
   DEFINE(table_set);
   DEFINE(table_remove);
+  DEFINE(table_copy);
+  DEFINE(table_shallow_copy);
 
   DEFINE(table_list);
   DEFINE(table_vector);
@@ -428,6 +467,8 @@ void symbol_init(void)
 
   DEFINE(vector_to_table);
   DEFINE(vector_to_ptable);
+  DEFINE(vector_to_ctable);
+  DEFINE(vector_to_pctable);
 
   DEFINE(make_symbol);
   DEFINE(make_psymbol);
@@ -436,4 +477,6 @@ void symbol_init(void)
   DEFINE(symbol_get);
   DEFINE(symbol_set);
 
+
+  system_define("MAX_TABLE_ENTRIES", makeint(MAX_TABLE_ENTRIES));
 }

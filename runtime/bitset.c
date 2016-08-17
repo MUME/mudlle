@@ -19,9 +19,12 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "runtime.h"
-#include "../interpret.h"
 #include <string.h>
+
+#include "bitset.h"
+#include "runtime.h"
+
+#include "../interpret.h"
 
 TYPEDOP(new_bitset, 0,
         "`n -> `bitset. Returns an empty bitset usable for storing at"
@@ -29,11 +32,8 @@ TYPEDOP(new_bitset, 0,
 	1, (value n),
 	OP_LEAF | OP_NOESCAPE, "n.s")
 {
-  long size = GETINT(n);
-  if (size < 0)
-    runtime_error(error_bad_value);
-
-  size = (size + 7) >> 3;
+  long size = GETRANGE(n, 0, MAX_STRING_SIZE * CHAR_BIT);
+  size = (size + CHAR_BIT - 1) / CHAR_BIT;
   struct string *newp = alloc_empty_string(size);
   memset(newp->str, 0, size);
   return newp;

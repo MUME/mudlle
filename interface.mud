@@ -23,7 +23,7 @@ eval = fn (s)
   [
     | prelinked |
 
-    if (prelinked = mc:compile(mudlle_parse(s), false, 1))
+    if (prelinked = mc:compile(mudlle_parse(s, null), false, 1))
       mc:linkrun(prelinked, 1, true)
     else
       false
@@ -49,32 +49,38 @@ lcompile = fn (s, protect)
 fcompile = fn (s) lcompile(s, false);
 pcompile = fn (s) lcompile(s, true);
 fload = fn (s) mc:linkrun(load_data(s), 1, true);
-test = fn (s) mc:compile(mudlle_parse(s), false, 1);
+test = fn (s) mc:compile(mudlle_parse(s, null), false, 1);
 ftest = fn (s) mc:compile(mudlle_parse_file(s, s, s), false, 1);
 
 protect_compiler_libs = fn()
-  [
-    module_set!("dihash",    module_protected, 1);
-    module_set!("compiler",  module_protected, 1);
-    module_set!("link",      module_protected, 1);
-    module_set!("misc",      module_protected, 1);
-    module_set!("sequences", module_protected, 1);
-    module_set!("dlist",     module_protected, 1);
-    module_set!("graph",     module_protected, 1);
-    module_set!("ax86",      module_protected, 1);
-    module_set!("vars",      module_protected, 1);
-    module_set!("flow",      module_protected, 1);
-    module_set!("optimise",  module_protected, 1);
-    module_set!("ins3",      module_protected, 1);
-    module_set!("mx86",      module_protected, 1);
-    module_set!("phase1",    module_protected, 1);
-    module_set!("phase2",    module_protected, 1);
-    module_set!("phase3",    module_protected, 1);
-    module_set!("phase4",    module_protected, 1);
-    module_set!("genx86",    module_protected, 1);
-    module_set!("x86",       module_protected, 1);
-    module_set!("compile",   module_protected, 1);
-    module_set!("noinf",     module_protected, 1);
-    module_set!("inference", module_protected, 1);
-    detect_immutability();
+[
+  | cmods |
+  cmods = '[
+    "dihash"
+    "compiler"
+    "link"
+    "misc"
+    "sequences"
+    "dlist"
+    "graph"
+    "ax86"
+    "vars"
+    "flow"
+    "optimise"
+    "ins3"
+    "mx86"
+    "phase1"
+    "phase2"
+    "phase3"
+    "phase4"
+    "genx86"
+    "x86"
+    "compile"
+    "noinf"
+    "inference"
   ];
+
+  for (|i, l| [ l = vlength(cmods); i = 0 ]; i < l; ++i)
+    module_set!(cmods[i], module_protected, 1);
+  detect_immutability();
+];

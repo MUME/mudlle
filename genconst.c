@@ -2,13 +2,13 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "alloc.h"
 #include "context.h"
 #include "error.h"
-#include "mvalues.h"
+
+#  include "genconstdefs.h"
 
 #define PR(name, value) ((void)printf("#define %-24s %11zu\n", #name, (value)))
-
-#define DEF(op) ((void)printf("#define %-24s %11d\n", #op, (int)op))
 
 int main(int argc, char **argv)
 {
@@ -48,9 +48,18 @@ int main(int argc, char **argv)
 
   PR(cs_next,              offsetof(struct call_stack, next));
   PR(cs_type,              offsetof(struct call_stack, type));
-  PR(cs_u,                 offsetof(struct call_stack, u));
+  PR(cs_SIZE,              sizeof (struct call_stack));
 
-#  include "genconstdefs.h"
+#ifdef GCSTATS
+  PR(gcstats_alloc,        offsetof(struct gcstats, a));
+  PR(gcstats_alloc_size,   sizeoffield(struct gcstats_alloc, types[0]));
+  PR(gcstats_alloc_nb,     offsetof(struct gcstats_alloc, types[0].nb));
+  PR(gcstats_alloc_sz,     offsetof(struct gcstats_alloc, types[0].size));
+#endif
+
+#define DEF(op) ((void)printf("#define %-24s %11d\n", #op, (int)op));
+  FOR_DEFS(DEF)
+  FOR_MUDLLE_TYPES(DEF)
 
   return 0;
 }

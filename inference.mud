@@ -1409,7 +1409,40 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function, mc:li
 
   verify_call_types = fn (ins, typeset)
     [
-      | f, ftype, args, atypes, nargs, fclass, fval, var_type, name |
+      | f, ftype, args, atypes, nargs, fclass, fval, var_type, name,
+        call_check |
+
+      call_check = fn (fval)
+        [
+          | test_val |
+
+          test_val = fn (v)
+            [
+              | vclass, val |
+              vclass = v[mc:v_class];
+              if (vclass == mc:v_constant)
+                val = v[mc:v_kvalue]
+              else if (vclass == mc:v_global_constant)
+                val = global_value(v[mc:v_goffset])
+              else
+                exit<function> typeset[v[mc:v_number]];
+              mc:itypemap[typeof(val)] . val
+            ];
+
+          | test_fn |
+          if (!function?(test_fn = mc:lookup_call_check(fval)))
+            exit<function> true;
+
+          | s, targs |
+          targs = lmap(test_val, args);
+          if (s = test_fn(fval, targs))
+            [
+              mc:warning("%s", s);
+              exit<function> false;
+            ];
+
+          true
+        ];
 
       var_type = fn (v)
         [
@@ -1448,6 +1481,13 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function, mc:li
                 exit<function> null;
               fval = global_value(f[mc:v_goffset])
             ]
+          else if (fclass == mc:v_global)
+            [
+              fval = global_value(f[mc:v_goffset]);
+              if (function?(fval))
+                call_check(fval);
+              exit<function> null;
+            ]
           else
             exit<function> null;
 
@@ -1469,32 +1509,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function, mc:li
             ];
         ];
 
-      | test_fn |
-      if (function?(fval) && function?(test_fn = mc:lookup_call_check(fval)))
-        [
-          | test_val |
-
-          test_val = fn (v)
-            [
-              | vclass, val |
-              vclass = v[mc:v_class];
-              if (vclass == mc:v_constant)
-                val = v[mc:v_kvalue]
-              else if (vclass == mc:v_global_constant)
-                val = global_value(v[mc:v_goffset])
-              else
-                exit<function> typeset[v[mc:v_number]];
-              mc:itypemap[typeof(val)] . val
-            ];
-
-          | s, targs |
-          targs = lmap(test_val, args);
-          if (s = test_fn(fval, targs))
-            [
-              mc:warning("%s", s);
-              exit<function> null;
-            ];
-        ];
+      if (function?(fval) && !call_check(fval))
+        exit<function> null;
 
       | ftypes, badarg, desc, bad_nargs |
       bad_nargs = fn (expect)

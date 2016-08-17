@@ -27,7 +27,7 @@
 struct env			/* Is a record */
 {
   struct obj o;
-  value used;			/* # of elements used as opposed to allocated */
+  value used;         /* # of elements used as opposed to allocated */
   value size;
   struct vector *values;
 };
@@ -48,14 +48,14 @@ ulong env_add_entry(struct env *env, value v);
    Requires: table contain less than 2^30 entries.
 */
 
-#define ENV_ADD_ENTRY(env, v) \
-  do { \
-    if ((long)(env)->used >= (long)(env)->size) env_add_entry((env), (v)); \
-    else \
-      { \
+#define ENV_ADD_ENTRY(env, v) do {                      \
+    if ((long)(env)->used >= (long)(env)->size)         \
+      env_add_entry((env), (v));                        \
+    else                                                \
+      {                                                 \
 	(env)->values->data[intval((env)->used)] = (v); \
-	(env)->used = (value)((long)(env)->used + 2); \
-      } \
+	(env)->used = (value)((long)(env)->used + 2);   \
+      }                                                 \
   } while(0)
 
 #endif

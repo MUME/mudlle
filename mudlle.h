@@ -59,21 +59,36 @@ typedef char mp_limb_t;
 #  include <alloca.h>
 #endif
 
+
 #define VLENGTH(name) (sizeof (name) / sizeof (name)[0])
 
-#define CASSERT_EXPR(what)                      \
-  ((void)sizeof (int [(what) ? 1 : -1]))
-#define CASSERT(name, what) typedef int __cassert_ ## name[(what) ? 1 : -1] \
+#ifdef HAVE_STATIC_ASSERT
+
+#define CASSERT(name, what)                                     \
+  _Static_assert((what), "CASSERT(" #name ", " #what ")")
+#define CASSERT_EXPR(what)                                      \
+  ((void)sizeof (struct {                                       \
+      _Static_assert((what), "CASSERT_EXPR(" #what ")");        \
+      int i;                                                    \
+  }))
+#define CASSERT_VLEN(name, len)                                 \
+  _Static_assert(VLENGTH(name) == (len),                        \
+                 "CASSERT_VLEN(" #name ", " #len ")")
+
+#else  /* ! HAVE_STATIC_ASSERT */
+
+#define __CASSERT_SIZE(what)                            \
+  (__builtin_constant_p(what) && (what) ? 1 : -1)
+#define CASSERT_EXPR(what)                              \
+  ((void)sizeof (int [__CASSERT_SIZE(what)]))
+#define CASSERT(name, what)                             \
+  typedef int __cassert_ ## name[__CASSERT_SIZE(what)]  \
   __attribute__((unused))
-#define CASSERT_VLEN(name, len) \
+#define CASSERT_VLEN(name, len)                         \
   CASSERT(name ## _length, VLENGTH(name) == (len))
 
-extern int debug_level;
+#endif  /* ! HAVE_STATIC_ASSERT */
 
-#define DEBUG(n, stmt) do { if (debug_level >= n) stmt; } while (0)
-
-int load_file(const char *fullname, const char *filename,
-              const char *nicename, int seclev, bool reload);
 
 #ifdef WIN32
 static inline long __ntohl(long n)
@@ -90,6 +105,15 @@ static inline short __ntohs(short n)
           | ((n & 0xff00) >> 8));
 }
 #endif /* WIN32 */
+
+enum mudlle_data_version {
+  MDATA_VER_LEGACY,
+  MDATA_VER_NEW_HASH,       /* new hash algorithm for symbol tables */
+  MDATA_VER_RO_SYM_NAMES,   /* symbols forced to have readonly names */
+
+  MDATA_VERSIONS,
+  MDATA_VER_CURRENT = MDATA_VERSIONS - 1
+};
 
 void mudlle_init(void);
 

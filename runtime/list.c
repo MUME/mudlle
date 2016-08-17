@@ -19,7 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "list.h"
 #include "runtime.h"
+
 #include "../interpret.h"
 
 TYPEDOP(cons, 0, "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2."
@@ -30,15 +32,18 @@ TYPEDOP(cons, 0, "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2."
   return alloc_list(car, cdr);
 }
 
-TYPEDOP(pcons, 0, "`x1 `x2 -> `l. Make a new, read-only pair from elements"
-        " `x1 and `x2.",
+TYPEDOP(pcons, 0, "`x1 `x2 -> `l. Make a new read-only, possibly immutable,"
+        " pair from elements `x1 and `x2.",
 	2, (value car, value cdr),
 	OP_LEAF | OP_NOESCAPE | OP_CONST, "xx.k")
 {
-  return make_readonly(alloc_list(car, cdr));
+  unsigned imm = immutablep(car) && immutablep(cdr) ? OBJ_IMMUTABLE : 0;
+  struct list *p = alloc_list(car, cdr);
+  p->o.flags |= OBJ_READONLY | imm;
+  return p;
 }
 
-TYPEDOP(car, 0, "`l -> `x. Returns first element of pair `l",
+TYPEDOP(car, 0, "`l -> `x. Returns the first element of pair `l.",
         1, (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
@@ -46,7 +51,8 @@ TYPEDOP(car, 0, "`l -> `x. Returns first element of pair `l",
   return l->car;
 }
 
-TYPEDOP(cdr, 0, "`l -> `x. Returns 2nd element of pair `l", 1, (struct list *l),
+TYPEDOP(cdr, 0, "`l -> `x. Returns second element of pair `l.",
+        1, (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
   TYPEIS(l, type_pair);
@@ -73,23 +79,25 @@ TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object",
   return makebool(v == NULL);
 }
 
-EXT_TYPEDOP(setcar, "set_car!", "`l `x -> `x. Sets the first element of"
+EXT_TYPEDOP(set_carb, "set_car!", "`l `x -> `x. Sets the first element of"
             " pair `l to `x",
             2, (struct list *l, value x),
             OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "kx.1")
 {
   TYPEIS(l, type_pair);
-  if (l->o.flags & OBJ_READONLY) runtime_error(error_value_read_only);
+  if (obj_readonlyp(&l->o))
+    runtime_error(error_value_read_only);
   return l->car = x;
 }
 
-EXT_TYPEDOP(setcdr, "set_cdr!", "`l `x -> `x. Sets the 2nd element of"
+EXT_TYPEDOP(set_cdrb, "set_cdr!", "`l `x -> `x. Sets the second element of"
             " pair `l to `x",
             2, (struct list *l, value x),
             OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "kx.1")
 {
   TYPEIS(l, type_pair);
-  if (l->o.flags & OBJ_READONLY) runtime_error(error_value_read_only);
+  if (obj_readonlyp(&l->o))
+    runtime_error(error_value_read_only);
   return l->cdr = x;
 }
 
@@ -109,7 +117,8 @@ FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
   return l;
 }
 
-FULLOP(plist, 0, "`x1 ... -> `l. Returns a read-only and (if all elements are immutable) immutable list of the arguments.",
+FULLOP(plist, 0, "`x1 ... -> `l. Returns a read-only and (if all elements"
+       " are immutable) immutable list of the arguments.",
        NVARARGS, (struct vector *args, ulong nargs), 0,
        OP_LEAF | OP_NOESCAPE | OP_CONST,
        list_tset, static)
@@ -122,9 +131,8 @@ FULLOP(plist, 0, "`x1 ... -> `l. Returns a read-only and (if all elements are im
     {
       value v = args->data[--nargs];
       immutable = immutable && immutablep(v);
-      l = make_readonly(alloc_list(v, l));
-      if (immutable)
-        l->o.flags |= OBJ_IMMUTABLE;
+      l = alloc_list(v, l);
+      l->o.flags |= OBJ_READONLY | (immutable ? OBJ_IMMUTABLE : 0);
     }
 
   UNGCPRO();
@@ -140,8 +148,8 @@ void list_init(void)
   DEFINE(pcons);
   DEFINE(car);
   DEFINE(cdr);
-  DEFINE(setcar);
-  DEFINE(setcdr);
+  DEFINE(set_carb);
+  DEFINE(set_cdrb);
   system_define("null", NULL);
   DEFINE(list);
   DEFINE(plist);

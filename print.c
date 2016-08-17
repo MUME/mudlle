@@ -19,20 +19,20 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <string.h>
-#include <stddef.h>
-#include <string.h>
 #include <setjmp.h>
+#include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "alloc.h"
+#include "code.h"
 #include "global.h"
 #include "ins.h"
 #include "print.h"
 #include "strbuf.h"
 #include "table.h"
 
-#include "runtime/stringops.h"
+#include "runtime/mudlle-string.h"
 
 
 #define DEFAULT_PRINT_COUNT 512
@@ -68,7 +68,43 @@ static void check_cutoff(struct oport *f, struct print_config *config)
     longjmp(print_complex, 1);
   if (config->maxlen != (size_t)-1
       && string_port_length(f) >= config->maxlen)
-    longjmp(print_complex, 2);
+    longjmp(print_complex, 1);
+}
+
+void sb_write_string(struct strbuf *sb, const char *str, size_t len)
+{
+  sb_makeroom(sb, 2 + len);     /* conservative */
+  sb_addc(sb, '"');
+
+  const char *end = str + len;
+  for (;;)
+    {
+      const char *s = str;
+      while (s < end && writable(*s))
+        ++s;
+      sb_addmem(sb, str, s - str);
+      str = s;
+
+      if (str == end)
+        break;
+
+      unsigned char c = *str++;
+      sb_addc(sb, '\\');
+      switch (c)
+        {
+        case '\\': case '"': sb_addc(sb, c); break;
+        case '\a': sb_addc(sb, 'a'); break;
+        case '\b': sb_addc(sb, 'b'); break;
+        case '\f': sb_addc(sb, 'f'); break;
+        case '\n': sb_addc(sb, 'n'); break;
+        case '\r': sb_addc(sb, 'r'); break;
+        case '\t': sb_addc(sb, 't'); break;
+        case '\v': sb_addc(sb, 'v'); break;
+        default: sb_printf(sb, "%03o", c); break;
+        }
+    }
+
+  sb_addc(sb, '"');
 }
 
 static void write_string(struct oport *p, struct print_config *config,
@@ -77,76 +113,67 @@ static void write_string(struct oport *p, struct print_config *config,
   ulong l = string_len(print);
 
   if (config->level == prt_display)
-    pswrite_substring(p, print, 0, l);
-  else
     {
-      long idx = 0;
-      const char *suffix = "\"";
-
-      if (l > MAX_PRINT_STRLEN)
-	{
-	  l = MAX_PRINT_STRLEN;
-	  suffix = " ...\"";
-	}
-
-      GCPRO2(p, print);
-
-      pputc('"', p);
-      while (idx < l)
-	{
-	  long pos = idx;
-	  int c;
-
-	  while (pos < l && writable(print->str[pos]))
-	    ++pos;
-
-	  opwrite(p, print->str + idx, pos - idx);
-
-	  if (pos == l)
-	    break;
-
-	  c = (unsigned char)print->str[pos];
-	  pputc('\\', p);
-	  switch (c)
-	    {
-	    case '\\': case '"': pputc(c, p); break;
-            case '\a': pputc('a', p); break;
-            case '\b': pputc('b', p); break;
-            case '\f': pputc('f', p); break;
-            case '\n': pputc('n', p); break;
-            case '\r': pputc('r', p); break;
-	    case '\t': pputc('t', p); break;
-	    case '\v': pputc('v', p); break;
-	    default: pprintf(p, "%03o", c); break;
-	    }
-
-	  idx = pos + 1;
-	}
-      pputs(suffix, p);
-      UNGCPRO();
+      pswrite_substring(p, print, 0, l);
+      return;
     }
+
+  long idx = 0;
+  const char *suffix = "\"";
+
+  if (config->maxlen == (size_t)-1 && l > MAX_PRINT_STRLEN)
+    {
+      l = MAX_PRINT_STRLEN;
+      suffix = " ...\"";
+    }
+
+  GCPRO2(p, print);
+
+  pputc('"', p);
+  while (idx < l)
+    {
+      long pos = idx;
+      while (pos < l && writable(print->str[pos]))
+        ++pos;
+
+      opwrite(p, print->str + idx, pos - idx);
+
+      if (pos == l)
+        break;
+
+      unsigned char c = print->str[pos];
+      pputc('\\', p);
+      switch (c)
+        {
+        case '\\': case '"': pputc(c, p); break;
+        case '\a': pputc('a', p); break;
+        case '\b': pputc('b', p); break;
+        case '\f': pputc('f', p); break;
+        case '\n': pputc('n', p); break;
+        case '\r': pputc('r', p); break;
+        case '\t': pputc('t', p); break;
+        case '\v': pputc('v', p); break;
+        default: pprintf(p, "%03o", c); break;
+        }
+
+      idx = pos + 1;
+    }
+  pputs(suffix, p);
+  UNGCPRO();
 }
 
 static int last_instr_line;
 
 static const char *global_name(int idx)
 {
-  static char buf[64], *p = NULL;
-  struct string *str;
-
   if (idx < 0 || idx >= vector_len(global_names))
     return "<unknown>";
 
-  str = GNAME(idx);
-  if (string_len(str) >= sizeof buf)
-    {
-      p = realloc(p, string_len(str) + 1);
-      memcpy(p, str->str, string_len(str) + 1);
-      return p;
-    }
-
-  strcpy(buf, str->str);
-  return buf;
+  static struct strbuf sb = SBNULL;
+  sb_empty(&sb);
+  struct string *str = GNAME(idx);
+  sb_addmem(&sb, str->str, string_len(str));
+  return sb_str(&sb);
 }
 
 static void print_global_exec(struct oport *f, const char *type, int nargs,
@@ -156,29 +183,25 @@ static void print_global_exec(struct oport *f, const char *type, int nargs,
 }
 
 static int write_instruction(struct icode *code, struct oport *f,
-			     instruction *i, ulong ofs)
+			     union instruction *i, ulong ofs)
 {
-  ubyte byte1, byte2;
-  ubyte op;
-  sbyte sgnbyte;
-  word word1;
-  int line;
-
-  instruction *old_i = i;
+  union instruction *old_i = i;
   static const char *const brname[] = { "", "(loop)", "(nz)", "(z)" };
   static const char *const builtin_names[] = {
     "eq", "neq", "gt", "lt", "le", "ge", "ref", "set",
     "add", "sub", "bitand", "bitor", "not" };
+  CASSERT_VLEN(builtin_names, op_builtin_not - op_builtin_eq + 1);
 
-#define insubyte() (*i++)
-#define insbyte() ((sbyte)insubyte())
-#define insuword() (byte1 = *i++, byte2 = *i++, (byte1 << 8) + byte2)
-#define insword() ((word)insuword())
+#define insinstr() (*i++)
+#define insoper()  (insinstr().op)
+#define insubyte() (insinstr().u)
+#define insbyte()  (insinstr().s)
+#define insuword() (i += 2, (i[-2].u << 8) + i[-1].u)
+#define insword()  ((word)insuword())
 
-  op = insubyte();
+  enum operator op = insoper();
 
-  line = get_code_line_number(code, ofs);
-
+  int line = get_code_line_number(code, ofs);
   if (line != last_instr_line)
     pprintf(f, "%5d: ", line);
   else
@@ -186,18 +209,21 @@ static int write_instruction(struct icode *code, struct oport *f,
   last_instr_line = line;
 
   pprintf(f, "%5lu: ", ofs);
-  if (op >= op_recall && op <= op_closure_var + closure_var)
+
+  if (op >= op_recall && op <= op_closure_var + vclass_closure)
     {
       static const char *const opnames[] = {
         "recall", "assign", "vref", "closure var"
       };
       static const char *const classname[] = {
-        "local", "closure", "global"
+	[vclass_local]	 = "local",
+	[vclass_closure] = "closure",
+	[vclass_global]	 = "global"
       };
 
       const char *opname = opnames[(op - op_recall) / 3];
-      variable_class vclass = (op - op_recall) % 3;
-      if (vclass == global_var)
+      enum variable_class vclass = (op - op_recall) % 3;
+      if (vclass == vclass_global)
 	{
 	  unsigned uw = insuword();
 	  pprintf(f, "%s[global] %u %s\n", opname, uw, global_name(uw));
@@ -212,7 +238,7 @@ static int write_instruction(struct icode *code, struct oport *f,
     pprintf(f, "typeset_check %d\n", insubyte());
   else if (op >= op_typecheck && op < op_typecheck + last_synthetic_type)
     pprintf(f, "typecheck %s %d\n",
-            mtypenames[op - op_typecheck],
+            mudlle_type_names[op - op_typecheck],
             insubyte());
   else switch (op)
     {
@@ -226,7 +252,9 @@ static int write_instruction(struct icode *code, struct oport *f,
     case op_closure_code1: pprintf(f, "closure code %u\n", insubyte()); break;
     case op_closure_code2: pprintf(f, "closure code %u\n", insuword()); break;
     case op_execute: pprintf(f, "execute %u\n", insubyte()); break;
-    case op_execute_primitive: pprintf(f, "execute_primitive %u\n", insubyte()); break;
+    case op_execute_primitive:
+      pprintf(f, "execute_primitive %u\n", insubyte());
+      break;
     case op_execute_secure: pprintf(f, "execute_secure %u\n", insubyte());
       break;
     case op_execute_varargs: pprintf(f, "execute_varargs %u\n", insubyte());
@@ -245,15 +273,19 @@ static int write_instruction(struct icode *code, struct oport *f,
     case op_pop_n: pprintf(f, "pop %u\n", insubyte()); break;
     case op_exit_n: pprintf(f, "exit %u\n", insubyte()); break;
     case op_branch1: case op_branch_z1: case op_branch_nz1: case op_loop1:
-      sgnbyte = insbyte();
-      pprintf(f, "branch%s %d (to %d)\n", brname[(op - op_branch1) / 2],
-              sgnbyte, ofs + i - old_i + sgnbyte);
-      break;
+      {
+        sbyte sgnbyte = insbyte();
+        pprintf(f, "branch%s %d (to %lu)\n", brname[(op - op_branch1) / 2],
+                sgnbyte, ofs + (i - old_i + sgnbyte));
+        break;
+      }
     case op_branch2: case op_branch_z2: case op_branch_nz2: case op_loop2:
-      word1 = insword();
-      pprintf(f, "wbranch%s %d (to %d)\n", brname[(op - op_branch1) / 2],
-              word1, ofs + i - old_i + word1);
-      break;
+      {
+        word word1 = insword();
+        pprintf(f, "wbranch%s %d (to %lu)\n", brname[(op - op_branch1) / 2],
+                word1, ofs + (i - old_i + word1));
+        break;
+      }
     case op_clear_local:
       pprintf(f, "clear[local] %u\n", (unsigned)insubyte());
       break;
@@ -265,33 +297,26 @@ static int write_instruction(struct icode *code, struct oport *f,
 static void write_code(struct oport *f, struct print_config *config,
                        struct icode *c)
 {
-  instruction *ins;
-  ulong nbins, i;
-
   last_instr_line = -1;
 
   GCPRO2(f, c);
-  ins = (instruction *)((char *)c + offsetof(struct icode,
-                                             constants[c->nb_constants]));
-  nbins = (instruction *)((char *)c + c->code.o.size) - ins;
-  pprintf(f, "Code %lu bytes:\n", nbins);
-  i = 0;
-  while (i < nbins)
-    {
-      ins = (instruction *)((char *)c + offsetof(struct icode,
-                                                 constants[c->nb_constants]));
-      i += write_instruction(c, f, ins + i, i);
-    }
+  union instruction *const ins
+    = (union instruction *)&c->constants[c->nb_constants];
+  long nbins = (union instruction *)((char *)c + c->code.o.size) - ins;
+  pprintf(f, "Code %ld bytes:\n", nbins);
+
+  for (long i = 0; i < nbins; )
+    i += write_instruction(c, f, ins + i, i);
 
   pprintf(f, "\n%u locals, %u stack, seclevel %u, %u constants:\n",
 	  c->nb_locals, c->stkdepth, c->code.seclevel, c->nb_constants);
-  for (i = 0; i < c->nb_constants; i++)
+  for (long i = 0; i < c->nb_constants; i++)
     {
       pprintf(f, "%lu: ", i);
       if (integerp(c->constants[i]))
         {
           long l = intval(c->constants[i]);
-          strbuf_t sb = sb_initf("%ld (%#lx)", l, l);
+          struct strbuf sb = sb_initf("%ld (%#lx)", l, l);
           pputs(sb_str(&sb), f);
           sb_free(&sb);
         }
@@ -397,7 +422,7 @@ static void write_table(struct oport *f, struct print_config *config,
             break;
           /* fallthrough */
         default:
-          pputs("{table}", f);
+          pputs(is_ctable(t) ? "{ctable}" : "{table}", f);
           return;
         }
     }
@@ -412,6 +437,11 @@ static void write_table(struct oport *f, struct print_config *config,
   if (config->level != prt_display && toplev)
     pputc('\'', data.oport);
   pputc('{', data.oport);
+  if (is_ctable(t))
+    {
+      pputc('c', data.oport);
+      data.prefix = " ";
+    }
   table_foreach(t, &data, write_table_entry);
   pputc('}', data.oport);
   UNGCPRO();
@@ -427,20 +457,19 @@ static void write_object(struct oport *f, struct print_config *config,
 {
 }
 
-static void write_integer(struct oport *f, long v, size_t maxlen)
+static bool write_integer(struct oport *f, long v, size_t maxlen)
 {
   char buf[INTSTRSIZE];
-  char *s = int2str(buf, 10, (ulong)v, true);
+  char *s = inttostr(buf, 10, (ulong)v, true);
   size_t slen = strlen(s);
   opwrite(f, s, maxlen < slen ? maxlen : slen);
+  return maxlen >= slen;
 }
 
 static void write_float(struct oport *f, struct mudlle_float *v)
 {
   char buf[FLOATSTRLEN];
-  int len;
-
-  len = snprintf(buf, FLOATSTRLEN, "%#g", v->d);
+  int len = snprintf(buf, FLOATSTRLEN, "%#g", v->d);
   if (len > 0 && buf[len - 1] == '.')
     snprintf(buf, FLOATSTRLEN, "%#.7g", v->d);
 
@@ -459,24 +488,30 @@ static void write_bigint(struct oport *f, struct print_config *config,
     pputs("#b", f);
   pputs(buf, f);
 #else
-  pputs("#bigint-unsupported", f);
+  pputs("{bigint-unsupported}", f);
 #endif
 }
 
-static void write_private(struct oport *f, struct grecord *val)
+static void write_private(struct oport *f, struct mprivate *val)
 {
-  if (val->data[0] == makeint(PRIVATE_MJMPBUF))
+  assert(integerp(val->ptype));
+  switch (intval(val->ptype))
     {
-      struct mjmpbuf *buf = (struct mjmpbuf *)val;
-      if (buf->context)
-        pputs("{jmpbuf}", f);
-      else
-        pputs("{old jmpbuf}", f);
+    case PRIVATE_MJMPBUF:
+      {
+        struct mjmpbuf *buf = (struct mjmpbuf *)val;
+        if (buf->context)
+          pputs("{jmpbuf}", f);
+        else
+          pputs("{old jmpbuf}", f);
+        break;
+      }
+    case PRIVATE_REGEXP:
+      pputs("{regexp}", f);
+      break;
+    default:
+      pputs("{private}", f);
     }
-  else if (is_regexp(val))
-    pputs("{regexp}", f);
-  else
-    pputs("{private}", f);
 }
 
 static void _print_value(struct oport *f, struct print_config *config,
@@ -484,27 +519,39 @@ static void _print_value(struct oport *f, struct print_config *config,
 {
   static const bool hidden[][last_type] = {
     [prt_display] = {
-      [type_code]       = true,
-      [type_variable]   = true,
-      [type_internal]   = true,
-      [type_symbol]     = true,
-      [type_table]      = true,
-      [type_gone]       = true,
-      [type_outputport] = true,
-      [type_mcode]      = true,
+      [type_code]     = true,
+      [type_variable] = true,
+      [type_internal] = true,
+      [type_symbol]   = true,
+      [type_table]    = true,
+      [type_gone]     = true,
+      [type_oport]    = true,
+      [type_mcode]    = true,
     },
     [prt_write] = {
-      [type_code]       = true,
-      [type_internal]   = true,
-      [type_gone]       = true,
-      [type_outputport] = true,
-      [type_mcode]      = true,
+      [type_code]     = true,
+      [type_internal] = true,
+      [type_gone]     = true,
+      [type_oport]    = true,
+      [type_mcode]    = true,
     },
     [prt_examine] = {
-      [type_internal]   = true,
-      [type_gone]       = true,
-      [type_outputport] = true,
-      [type_mcode]      = true,
+      [type_internal] = true,
+      [type_gone]     = true,
+      [type_oport]    = true,
+      [type_mcode]    = true,
+    },
+    [prt_constant] = {
+      /* these are inverted! */
+      [type_integer]  = true,
+      [type_string]   = true,
+      [type_vector]   = true,
+      [type_pair]     = true,
+      [type_symbol]   = true,
+      [type_table]    = true,
+      [type_float]    = true,
+      [type_bigint]   = true,
+      [type_null]     = true,
     }
   };
 
@@ -524,10 +571,19 @@ static void _print_value(struct oport *f, struct print_config *config,
   struct obj *obj = v;
 
   assert(obj->type < last_type);
-  if (hidden[config->level][obj->type])
-    pprintf(f, "{%s}", mtypenames[obj->type]);
-  else
-    switch (obj->type)
+
+  if (config->level == prt_constant)
+    {
+      if (!hidden[config->level][obj->type])
+	longjmp(print_complex, 1);
+    }
+  else if (hidden[config->level][obj->type])
+    {
+      pprintf(f, "{%s}", mudlle_type_names[obj->type]);
+      return;
+    }
+
+  switch (obj->type)
       {
       default: abort();
       case type_string: write_string(f, config, v); break;
@@ -536,9 +592,10 @@ static void _print_value(struct oport *f, struct print_config *config,
           struct symbol *sym = v;
 
           GCPRO2(f, sym);
+          if (config->level != prt_display && toplev) pputc('\'', f);
           pprintf(f, "<");
           write_string(f, config, sym->name);
-          pprintf(f, ",");
+          pprintf(f, "=");
           _print_value(f, config, sym->data, false);
           pprintf(f, ">");
           UNGCPRO();
@@ -650,20 +707,20 @@ static void _print_value(struct oport *f, struct print_config *config,
       }
 }
 
-void output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
+/* return true if value was correctly printed */
+bool output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
                       value v, size_t maxlen)
 {
-  if (!f) return;
+  if (!f) return false;
   /* Optimise common cases (avoid complexity check overhead) */
   if (integerp(v))
-    {
-      write_integer(f, intval(v), maxlen);
-      return;
-    }
+    return write_integer(f, intval(v), maxlen);
   if (v == NULL)
     {
-      opwrite(f, "null", maxlen < 4 ? maxlen : 4);
-      return;
+      const char *s = (no_quote || level == prt_constant) ? "()" : "null";
+      size_t l = strlen(s);
+      opwrite(f, s, maxlen < l ? maxlen : l);
+      return maxlen >= l;
     }
 
   struct print_config config = {
@@ -677,40 +734,55 @@ void output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
   };
 
   if (((struct obj *)v)->type == type_string && maxlen == (size_t)-1)
-    write_string(f, &config, v);
+    {
+      write_string(f, &config, v);
+      return true;
+    }
+
+  struct oport *p = NULL;
+  GCPRO3(f, v, p);
+  p = make_string_oport();
+  bool ok = false;
+  if (setjmp(print_complex))	/* exit when problems */
+    {
+      if (level == prt_constant)
+	;			/* make no effort to do anything nice */
+      else if (string_port_length(p) >= maxlen)
+	port_append_substring(f, p, 0, maxlen);
+      else
+	{
+	  struct strbuf sb = sb_initf("<complex %s>",
+				      mudlle_type_names[TYPEOF(v)]);
+	  size_t len = sb_len(&sb);
+	  opwrite(f, sb_str(&sb), maxlen < len ? maxlen : len);
+	  sb_free(&sb);
+	}
+    }
   else
     {
-      struct oport *p = NULL;
-      GCPRO3(f, v, p);
-      p = make_string_oport();
-      if (setjmp(print_complex)) /* exit when problems */
-        if (string_port_length(p) >= maxlen)
-          port_append_substring(f, p, 0, maxlen);
-        else
-          {
-            strbuf_t sb = sb_initf("<complex %s>", mtypenames[TYPEOF(v)]);
-            size_t len = sb_len(&sb);
-            opwrite(f, sb_str(&sb), maxlen < len ? maxlen : len);
-            sb_free(&sb);
-          }
-      else
-        {
-          _print_value(p, &config, v, !no_quote);
-          port_append_substring(f, p, 0, maxlen);
-        }
-      opclose(p);
-      UNGCPRO();
+      _print_value(p, &config, v, !no_quote);
+      ok = string_port_length(p) <= maxlen;
+      port_append_substring(f, p, 0, maxlen);
     }
+  opclose(p);
+  UNGCPRO();
+  return ok;
 }
 
-void output_value(struct oport *f, enum prt_level level, bool no_quote, value v)
+void output_value(struct oport *f, enum prt_level level, bool no_quote,
+                  value v)
 {
   output_value_cut(f, level, no_quote, v, (size_t)-1);
 }
 
-void describe_fn(strbuf_t *sb, value v)
+void describe_fn(struct strbuf *sb, value v)
 {
-  struct oport *op = make_strbuf_oport(sb);
+  struct oport *op;
+  {
+    GCPRO1(v);
+    op = make_strbuf_oport(sb);
+    UNGCPRO();
+  }
 
   if (!pointerp(v))
     goto no_fn;
@@ -723,8 +795,7 @@ void describe_fn(strbuf_t *sb, value v)
     case type_varargs:
       {
         struct primitive *prim = v;
-        pprintf(op, "%s() [%s]", prim->op->name,
-                mtypenames[o->type]);
+        pprintf(op, "%s() [%s]", prim->op->name, mudlle_type_names[o->type]);
         return;
       }
     case type_closure:
@@ -735,7 +806,7 @@ void describe_fn(strbuf_t *sb, value v)
         struct string *filename = code->filename;
         long lineno = code->lineno;
 
-        GCPRO3(op, name, filename);
+        GCPRO2(op, filename);
         if (name)
           pswrite(op, name);
         else

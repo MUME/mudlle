@@ -21,19 +21,20 @@
 
 #include <string.h>
 #include <stddef.h>
-#include "objenv.h"
+
 #include "alloc.h"
+#include "objenv.h"
+#include "mvalues.h"
 
 struct env *alloc_env(ulong size)
 /* Returns: A new environment, of initial size size, initialised to NULL.
 */
 {
-  struct env *newp = (struct env *)allocate_record(type_internal, 3);
-  value tmp;
-
+  struct env *newp = (struct env *)allocate_record(
+    type_internal, grecord_fields(*newp));
   GCPRO1(newp);
-  tmp = alloc_vector(size);
-  newp->values = tmp;
+  struct vector *v = alloc_vector(size);
+  newp->values = v;
   UNGCPRO();
   newp->used = makeint(0);
   newp->size = makeint(size);

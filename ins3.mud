@@ -258,7 +258,7 @@ mc:itype_typeset =
     // itype_other
     ,((1 << type_code) | (1 << type_variable) | (1 << type_internal)
       | (1 << type_private) | (1 << type_object) | (1 << type_character)
-      | (1 << type_gone) | (1 << type_outputport) | (1 << type_mcode))
+      | (1 << type_gone) | (1 << type_oport) | (1 << type_mcode))
     ,(1 << type_integer)        // zero
   ];
 assert(vlength(mc:itype_typeset) == vlength(itype_names));
@@ -281,7 +281,7 @@ mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
    itype_other,                 // type_object
    itype_other,                 // type_character
    itype_other,                 // type_gone
-   itype_other,                 // type_outputport
+   itype_other,                 // type_oport
    itype_other,                 // type_mcode
    itype_float,                 // type_float
    itype_bigint,                // type_bigint
@@ -319,7 +319,7 @@ mc:itypemap_inverse = sequence // map from type_xxx/stype_xxx -> itype typesets
    itype_any,	                // type_object
    itype_any,	                // type_character
    itype_any,	                // type_gone
-   itype_any,	                // type_outputport
+   itype_any,	                // type_oport
    itype_any,	                // type_mcode
    itype_any & ~itype_float,    // type_float
    itype_any & ~itype_bigint,   // type_bigint
@@ -963,7 +963,12 @@ be generated in fncode" (fcode, label)
 	  if (il[mc:il_label])
 	    dformat("%s:", mc:slabel(il[mc:il_label]));
 	  dformat("\t%s\t(%s) ", il[mc:il_lineno], il[mc:il_number]);
-	  closures = mc:print_ins(il[mc:il_ins], closures);
+          | ins |
+          ins = il[mc:il_ins];
+          if (ins == null)
+            display("<removed>")
+          else
+            closures = mc:print_ins(il[mc:il_ins], closures);
 	  newline();
 	  scan = dnext(scan);
 	  if (scan == ilist) exit closures

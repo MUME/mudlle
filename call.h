@@ -22,6 +22,7 @@
 #ifndef CALL_H
 #define CALL_H
 
+#include "error.h"
 #include "types.h"
 
 #define DO1(op) op(1)
@@ -113,13 +114,9 @@ bool minlevel_violator(value c);
 /* Returns: true is calling c will cause a minlevel runtime error
 */
 
-/* as above, but trap errors */
-/* Errors can be detected by checking exception_signal, it will be 0
-   if all went well.
-   Otherwise exception_signal and exception_value are set, and NULL is
-   returned.
+/* As above, but trap errors. An error was caused if
+   has_pending_exception(); mexception.sig and .err are set appropriately.
 */
-
 value mcatchv(const char *name, value c, int argc, ...);
 
 static inline value mcatch_call0(const char *name, value c)
@@ -180,8 +177,11 @@ value invoke(struct closure *c, struct vector *args);
 */
 
 value msetjmp(value f);
-void mlongjmp(value buf, value x) NORETURN;
+void mlongjmp(struct mjmpbuf *buf, value x) NORETURN;
 
-void mthrow(long sig, value val) NORETURN;
+void mrethrow(void) NORETURN;
+void mthrow(enum mudlle_signal sig, enum runtime_error err) NORETURN;
+
+void maybe_mrethrow(void);
 
 #endif

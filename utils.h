@@ -61,4 +61,19 @@ void *reverse_list_internal(void *l, size_t ofs);
    (void)(&(l) - &(l)->next),                                   \
    (type *)reverse_list_internal(l, offsetof(type, next)))
 
+static inline unsigned long get_stack_pointer(void)
+{
+  unsigned long r;
+#ifdef i386
+  asm("movl %%esp,%0" : "=rm" (r));
+#elif defined __x86_64__
+  asm("movq %%rsp,%0" : "=rm" (r));
+#else
+ #warning Improve this
+  volatile int v;
+  r = (unsigned long)&v;
+#endif
+  return r;
+}
+
 #endif

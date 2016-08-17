@@ -22,8 +22,13 @@
 #ifndef MPARSER_H
 #define MPARSER_H
 
-#include "tree.h"
+#include <stdbool.h>
 
-mfile parse(block_t heap);
+struct alloc_block;
+struct constant;
+struct mfile;
+
+bool parse(struct alloc_block *heap, struct mfile **f);
+bool parse_constant(struct alloc_block *heap, struct constant **c);
 
 #endif /* MPARSER_H */

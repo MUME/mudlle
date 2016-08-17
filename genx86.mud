@@ -44,16 +44,16 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
     type_trap, call, set_seclev, mzero, mfalse,
     call_closure, call_primitive, call_varargs,
     call_builtin, perform3, perform3cst, setcc, intcst?, argstart, enames,
-    commute_x86relop, in_scratch?, logical_or, safemove, myvexists?,
+    commute_x86relop, in_scratch?, logical_or, safemove,
     push_args,
     cmpeq, kset, kequal?, kseclevel, kmaxseclevel, call_kset, call_seclevel,
-    kglobal_lookup, maybe_call_global_lookup,
+    kconcat_strings, call_bconcat, kglobal_lookup, maybe_call_global_lookup,
     needs_closure?, is_leaf?, update_maxseclev?,
     needs_global?, leaaddcst, fetch2, fetch_for_dest,
     fake_prim_type |
 
   // used to indicate any primitive; i.e., stype_function - type_closure
-  fake_prim_type = -1;
+  fake_prim_type = '[];
 
   mc:nops_inlined = mc:nops_called = 0;
   mc:framesizes = make_vector(10);
@@ -102,7 +102,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
     // Types: ifn : intermediate function
     // Returns: true if ifn reads or writes a global variable
     [
-      | is_global?, needs_global, uses_global |
+      | is_global?, uses_global |
 
       is_global? = fn (v)
 	[
@@ -126,43 +126,36 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 	    lexists?(is_global?, mc:arguments(ins, null))
 	];
 
-      needs_global = false;
-      graph_nodes_apply(fn (n)
-			  if (!needs_global)
-			    needs_global =
-			      dreduce(fn (il, ng) ng || uses_global(il),
-				      false, graph_node_get(n)[mc:f_ilist]),
-			cdr(ifn[mc:c_fvalue]));
-      if (mc:verbose >= 3)
-	dformat("%s:%s global %s\n", ifn[mc:c_ffilename], ifn[mc:c_flineno],
-                needs_global);
-      needs_global
+      graph_nodes_exists?(fn (n) [
+        dexists?(uses_global, graph_node_get(n)[mc:f_ilist])
+      ], cdr(ifn[mc:c_fvalue]));
     ];
 
   // nb of registers of each category available
-  x86:nscratch = fn (ifn) 1;
-  x86:ncaller = fn (ifn) 2;
+  x86:nscratch = fn (ifn) 1;    // eax
+  x86:ncaller = fn (ifn) 2;     // edx, edi
   x86:nregargs = fn (ifn) 0;
-  x86:ncallee = fn (ifn)
+  x86:ncallee = fn (ifn)        // esi (unless globals), ebx (unless closure)
     [
-      | nc, ng, ncallee |
+      | ncallee |
 
       ncallee = 0;
 
-      ifn[mc:c_fmisc][mc:c_fm_globalsbase] = ng = needs_global?(ifn);
-      if (!ng) ++ncallee;
+      if (!(ifn[mc:c_fmisc][mc:c_fm_globalsbase] = needs_global?(ifn)))
+        ++ncallee;
 
-      ifn[mc:c_fmisc][mc:c_fm_closurebase] = nc = needs_closure?(ifn);
-      if (!nc) ++ncallee;
+      if (!(ifn[mc:c_fmisc][mc:c_fm_closurebase] = needs_closure?(ifn)))
+        ++ncallee;
 
       ncallee
     ];
 
-  kset           = mc:make_kglobal("set!");
-  kequal?        = mc:make_kglobal("equal?");
-  kseclevel      = mc:make_kglobal("seclevel");
-  kmaxseclevel   = mc:make_kglobal("maxseclevel");
-  kglobal_lookup = mc:make_kglobal("global_lookup");
+  kset            = mc:make_kglobal("set!");
+  kequal?         = mc:make_kglobal("equal?");
+  kseclevel       = mc:make_kglobal("seclevel");
+  kmaxseclevel    = mc:make_kglobal("maxseclevel");
+  kglobal_lookup  = mc:make_kglobal("global_lookup");
+  kconcat_strings = mc:make_kglobal("concat_strings");
 
   x86:uses_scratch? = fn (ins)
     [
@@ -182,7 +175,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
           || op == mc:branch_any_prim
           || op == mc:branch_not_prim)
       else if (class == mc:i_trap)
-        !((op = ins[mc:i_top]) == mc:trap_type)
+        ins[mc:i_top] != mc:trap_type
       else
         true
     ];
@@ -389,20 +382,31 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
         [
           | called, args |
           @(called . args) = ins[mc:i_cargs];
-          if ((called == kseclevel || called == kmaxseclevel) && args == null)
-            exit<function> false;
-
-          if (called == kset && llength(args) == 3)
+          if (called == kseclevel || called == kmaxseclevel)
             [
-              | types, type |
-              types = ins[mc:i_ctypes];
-              type = if (types) cadr(types) else get_type(car(args));
-              // count vector/string assignment as a leaf operation
-              if (type & ~(itype_vector | itype_string) == 0)
+              if (args == null)
                 exit<function> false;
             ]
-          else if (called == kglobal_lookup && llength(args) == 1
-                   && get_type(car(args)) == itype_string)
+
+          else if (called == kset)
+            [
+              if (llength(args) == 3)
+                [
+                  | types, type |
+                  types = ins[mc:i_ctypes];
+                  type = if (types) cadr(types) else get_type(car(args));
+                  // count vector/string assignment as a leaf operation
+                  if (type & ~(itype_vector | itype_string) == 0)
+                    exit<function> false;
+                ]
+            ]
+          else if (called == kglobal_lookup)
+            [
+              if (llength(args) == 1
+                  && get_type(car(args)) == itype_string)
+                exit<function> false;
+            ]
+          else if (called == kconcat_strings)
             exit<function> false;
 
           exit<function> true;
@@ -490,14 +494,12 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 	  else
 	    [
               set_seclev(code, reg_arg1, x86:sl_c);
-	      if (ainfo[3] == 0)
-		call_builtin(code, "bcleargc0")
-	      else if (ainfo[3] == 1)
-		call_builtin(code, "bcleargc1")
-	      else if (ainfo[3] == 2)
-		call_builtin(code, "bcleargc2")
-	      else
-		call_builtin(code, "bcleargc");
+              | f |
+              f = if (ainfo[3] >= 4)
+                "bcleargc"
+              else
+                '["bcleargc0" "bcleargc1" "bcleargc2" "bcleargc3"][ainfo[3]];
+              call_builtin(code, f);
 	    ];
 
 	  offset = argstart;
@@ -670,9 +672,16 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
           // Don't check reads for >= V
           if (trap == mc:trap_global_write || mc:update_maxseclev == true)
             [
+              | greg |
+              greg = reg_arg0;
+              if (trap == mc:trap_global_write)
+                [
+                  x86:mov(code, x86:lvar, arg2, x86:lreg, reg_arg0);
+                  greg = reg_arg1;
+                ];
               // ignores nerror value
               x86:mov(code, x86:lglobal, arg1[mc:v_name] . x86:gl_c,
-                      x86:lreg, reg_arg0);
+                      x86:lreg, greg);
               call_builtin(code,
                            if (trap == mc:trap_global_write) "bwglobal"
                            else "brglobal");
@@ -1427,7 +1436,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 	  [
 	    | dr |
 
-	    type_trap(code, type_string, r1, type1);
+	    type_trap(code, type_string, r1, type1 & ~itype_null);
 	    dr = reg_dest(d);
 
 	    if (integer?(c) && c >= 0 && c < (1 << 27))
@@ -1660,20 +1669,9 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
       flags = primitive_flags(prim);
 
       // Save stack frame address (for GC and call traces)
-      x86:lea(code, x86:lspecial, "ccontext", x86:lreg, x86:reg_eax);
-      x86:mov(code, x86:lreg, x86:reg_esp, x86:lidx,
-              x86:reg_eax . x86:cc_frame_end_sp);
-      x86:mov(code, x86:lreg, reg_fp, x86:lidx,
-              x86:reg_eax . x86:cc_frame_end_bp);
-
-      if (!(flags & OP_NOALLOC))
-	[
-	  // save callee registers (for GC)
-	  x86:mov(code, x86:lreg, reg_closure,
-                  x86:lidx, x86:reg_eax . x86:cc_callee);
-	  x86:mov(code, x86:lreg, x86:reg_globals,
-                  x86:lidx, x86:reg_eax . x86:cc_callee + 4);
-	];
+      call_builtin(
+        code,
+        if (flags & OP_NOALLOC) "bsave_caller_noalloc" else "bsave_caller");
 
       x86:callrel_prim(code, called[mc:v_name]);
 
@@ -1681,23 +1679,17 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
       if (vector?(dest) && mc:in_reg(dest))
         dreg = mc:get_reg(dest);
 
-      if (!(flags & OP_NOALLOC))
-	[
-	  // restore callee registers
-	  x86:lea(code, x86:lspecial, "ccontext", x86:lreg, x86:reg_edx);
-          if (dreg != reg_closure)
-            x86:mov(code, x86:lidx, x86:reg_edx . x86:cc_callee,
-                    x86:lreg, reg_closure);
-          if (dreg != x86:reg_globals)
-            x86:mov(code, x86:lidx, x86:reg_edx . x86:cc_callee + 4,
-                    x86:lreg, x86:reg_globals);
-	];
-
-      if (dreg != x86:reg_edx)
-        x86:xor(code, x86:lreg, x86:reg_edx, x86:lreg, x86:reg_edx);
-      if (dreg != x86:reg_edi
-          && !(flags & OP_NOALLOC)) // if noalloc, %edi cannot have "gone bad"
-        x86:xor(code, x86:lreg, x86:reg_edi, x86:lreg, x86:reg_edi);
+      if (flags & OP_NOALLOC)
+        [
+          if (dreg != x86:reg_edx)
+            x86:xor(code, x86:lreg, x86:reg_edx, x86:lreg, x86:reg_edx);
+          // if noalloc, %edi cannot have "gone bad"
+          if (dreg != x86:reg_edi
+              && !(flags & OP_NOALLOC))
+            x86:xor(code, x86:lreg, x86:reg_edi, x86:lreg, x86:reg_edi);
+        ]
+      else
+        call_builtin(code, "brestore_caller");
 
       true
     ];
@@ -1726,6 +1718,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 
   call = fn (code, called, nargs, callprimop, seclev?)
     [
+      // update find_mcode() in error.c if these instructions change
       move(code, x86:lvar, called, x86:lreg, reg_closure_in);
       move(code, x86:limm, nargs, x86:lreg, reg_argcount);
       if (seclev?)
@@ -1745,9 +1738,8 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
         [
           | argv |
 
-          argv = list_to_vector(lmap(fn (v) v[mc:v_kvalue], args));
-          protect(argv);
-          check_immutable(argv);
+          argv = check_immutable(protect(
+            list_to_vector(lmap(fn (v) v[mc:v_kvalue], args))));
           assert(immutable?(argv));
 
           move(code, x86:lvar, mc:var_make_constant(argv), x86:lreg, reg_arg0);
@@ -1769,6 +1761,18 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
       if (nargs > 0)
 	x86:add(code, x86:limm, 4 * nargs, x86:lreg, reg_sp); // pop args
       move(code, x86:lreg, reg_result, x86:lvar, dest);
+    ];
+
+  call_bconcat = fn (code, args, dest)
+    [
+      | nargs |
+      nargs = llength(args);
+      push_args(code, args);
+      move(code, x86:limm, nargs, x86:lreg, reg_arg0);
+      call_builtin(code, "bconcat");
+      if (nargs > 0)
+        x86:add(code, x86:limm, 4 * nargs, x86:lreg, reg_sp);
+      move(code, x86:lreg, reg_arg0, x86:lvar, dest);
     ];
 
   call_kset = fn (code, args, dest, types, sizeinfo)
@@ -1861,18 +1865,31 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
       dest = ins[mc:i_cdest];
       done = false;
 
-      if (called == kset && nargs == 3)
-	exit<function> call_kset(code, args, dest, ins[mc:i_ctypes],
-                                 ins[mc:i_csizeinfo]);
-
-      if (called == kseclevel && nargs == 0)
-	exit<function> call_seclevel(code, dest, x86:sl_mudlle);
-      if (called == kmaxseclevel && nargs == 0)
-	exit<function> call_seclevel(code, dest, x86:sl_maxlev);
-
-      if (called == kglobal_lookup && nargs == 1
-          && maybe_call_global_lookup(code, car(args), dest))
-        exit<function> null;
+      if (called == kset)
+        [
+          if (nargs == 3)
+            exit<function> call_kset(code, args, dest, ins[mc:i_ctypes],
+                                     ins[mc:i_csizeinfo]);
+        ]
+      else if (called == kseclevel)
+        [
+          if (nargs == 0)
+            exit<function> call_seclevel(code, dest, x86:sl_mudlle);
+        ]
+      else if (called == kmaxseclevel)
+        [
+          if (nargs == 0)
+            exit<function> move(code, x86:lspecial, "maxseclevel",
+                                x86:lvar, dest);
+        ]
+      else if (called == kglobal_lookup)
+        [
+          if (nargs == 1
+              && maybe_call_global_lookup(code, car(args), dest))
+            exit<function> null;
+        ]
+      else if (called == kconcat_strings)
+        exit<function> call_bconcat(code, args, dest);
 
       // Optimise calls to global constants
       if (called[mc:v_class] == mc:v_global_constant)
@@ -1970,12 +1987,23 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 
       for (;;)
 	[
-	  if ((mc:itypemap[type] & typeset) == itype_none)
+          | itype, itype_inv |
+          if (type == fake_prim_type)
+            [
+              itype     = mc:itypemap[stype_function];
+              itype_inv = itype_any;
+            ]
+          else
+            [
+              itype     = mc:itypemap[type];
+              itype_inv = mc:itypemap_inverse[type];
+            ];
+	  if ((itype & typeset) == itype_none)
 	    [
 	      // is not of given type
 	      if (reversed) x86:jmp(code, dest)
 	    ]
-	  else if ((mc:itypemap_inverse[type] & typeset) == itype_none)
+	  else if ((itype_inv & typeset) == itype_none)
 	    [
 	      // is of given type
 	      if (!reversed) x86:jmp(code, dest)
@@ -2270,7 +2298,6 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
               if (integer?(ni = aregs[i]))
                 regargs[ni] = null;
               // will not clobber any register
-              // dformat("HERE MOVE %w -> %w\n", aregs[i], regs[i]);
               move(code, x86:lvar, args[i], x86:lreg, regs[i]);
               aregs[i] = i;
               regargs[i] = i;
@@ -2290,17 +2317,6 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
 
   move = fn (code, stype, source, dtype, dest)
     safemove(code, stype, source, dtype, dest, regs_scratch);
-
-  myvexists? = fn "fn v -> . Returns first element x of v for which fn(x) is true, null if none found" (f, v)
-    [
-      | i, l |
-      l = vector_length(v);
-      i = 0;
-      loop
-	if (i == l) exit null
-	else if (f(v[i])) exit v[i]
-	else ++i
-    ];
 
   safemove = fn (code, stype, source, dtype, dest, scratchregs)
     // Scratch register usage:
@@ -2334,19 +2350,23 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes, mc:lineno
       else if (dtype == x86:lreg
                || (stype != x86:lidx && stype != x86:lridx
                    && stype != x86:lqidx && stype != x86:lglobal
-                   && stype != x86:lglobal_constant))
+                   && stype != x86:lglobal_constant
+                   && stype != x86:lspecial))
         x86:mov(code, stype, source, dtype, dest)
       else
         [
-          | sr |
-
           assert_message(dtype != x86:lridx && dtype != x86:lqidx,
                          "scaled destination unsupported (for now)");
           // find a usable scratch register
-          // can't use vexists? because 0 is a valid register number. grr.
-          sr = myvexists?(fn (r) !(dtype == x86:lidx && car(dest) == r),
-                          scratchregs);
-          assert_message(sr != null, "no register for move");
+          | sr |
+          for (|i| i = 0; i < vlength(scratchregs); ++i)
+            [
+              | r |
+              r = scratchregs[i];
+              if (!(dtype == x86:lidx && car(dest) == r))
+                exit<break> sr = r;
+            ];
+          assert(sr != null);
           x86:mov(code, stype, source, x86:lreg, sr);
           x86:mov(code, x86:lreg, sr, dtype, dest);
         ];

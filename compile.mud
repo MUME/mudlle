@@ -20,8 +20,8 @@
  */
 
 library compile // call actual compiler
-requires system, compiler, phase1, phase2, phase3, phase4, link, ins3, flow,
-  sequences
+requires compiler, flow, ins3, link, phase1, phase2, phase3, phase4, sequences,
+  system, vars
 defines mc:compile
 writes mc:verbose, mc:erred, mc:this_module, mc:disassemble
 [
@@ -88,6 +88,8 @@ writes mc:verbose, mc:erred, mc:this_module, mc:disassemble
         false;
 
       mc:sort_messages(false);
+
+      mc:reset_var_cache();
 
       result
     ];

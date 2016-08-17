@@ -36,7 +36,8 @@ defines
   mc:var_make_static, mc:var_make_function,
   mc:var_make_closure, mc:var_make_kglobal, mc:v_global_define, mc:v_function,
   mc:v_fvalue, mc:v_static, mc:v_sparent,
-  mc:in_reg, mc:get_reg
+  mc:in_reg, mc:get_reg,
+  mc:reset_var_cache
 reads mc:fname
 
 [
@@ -110,12 +111,18 @@ mc:v_function = 6;              // local function
 mc:v_static = 7;
  mc:v_sparent = 2;               // corresponding local/closure
 [
-  | globals, kglobals, dglobals, vindex, make_global |
+  | globals, kglobals, dglobals, vindex, make_global, string_cache |
 
   vindex = 0;
-  globals = make_table();
-  dglobals = make_table();
-  kglobals = make_table();
+
+  mc:reset_var_cache = fn ()
+    [
+      globals = make_table();
+      dglobals = make_table();
+      kglobals = make_table();
+      string_cache = make_ctable();
+    ];
+  mc:reset_var_cache();
 
   make_global =
     fn (globals, type)
@@ -147,10 +154,28 @@ mc:v_static = 7;
   mc:make_kglobal = fn (name) mc:var_make_kglobal(name, global_lookup(name));
 
   mc:var_make_constant = fn "x -> var. Returns a new constant variable with value x" (x)
-    vector(mc:v_constant, "", x, ++vindex, false, null, false);
+    [
+      assert(readonly?(x));
+      if (string?(x))
+        [
+          | sym, v |
+          sym = table_symbol_ref(string_cache, x, null);
+          v = symbol_get(sym);
+          if (!vector?(v))
+            [
+              v = vector(mc:v_constant, "", x, ++vindex, false, null, false);
+              symbol_set!(sym, v);
+            ];
+          exit<function> v;
+        ];
+      vector(mc:v_constant, "", x, ++vindex, false, null, false);
+    ];
 
   mc:var_make_local = fn "s -> var. Returns a new local variable (name s)" (name)
-    vector(mc:v_local, name, 0, ++vindex, false, null, false);
+    [
+      assert(readonly?(name));
+      vector(mc:v_local, name, 0, ++vindex, false, null, false);
+    ];
 
   mc:var_make_static = fn "v -> var. Returns a new static with parent v" (vector v)
     vector(mc:v_static, v[mc:v_name], v, ++vindex, false, null, false);
@@ -159,7 +184,10 @@ mc:v_static = 7;
     vector(mc:v_function, false, v, ++vindex, false, null, false);
 
   mc:var_make_closure = fn "s var1 -> var2. Returns a new closure variable (name s) with parent var1" (name, parent)
-    vector(mc:v_closure, name, parent, ++vindex, false, null, false);
+    [
+      assert(readonly?(name));
+      vector(mc:v_closure, name, parent, ++vindex, false, null, false);
+    ];
 
   mc:var_base = fn "var1 -> var2. Returns the real local variable of closure var var1" (v)
     [

@@ -27,14 +27,18 @@
 #include "interpret.h"
 #include "mcompile.h"
 #include "mparser.h"
+#include "mudlle.h"
 #include "print.h"
 #include "stack.h"
 #include "strbuf.h"
+#include "table.h"
 
 #include "runtime/runtime.h"
 
 void mudlle_init(void)
 {
+  assert(table_good_size(MAX_TABLE_ENTRIES) <= MAX_VECTOR_SIZE);
+  assert(table_good_size(MAX_TABLE_ENTRIES + 1) > MAX_VECTOR_SIZE);
   garbage_init();
   global_init();
   strbuf_init();
@@ -44,8 +48,6 @@ void mudlle_init(void)
   runtime_init();
   compile_init();
   mcompile_init();
-  interpret_init();
-  error_init();
   ports_init();
   context_init();
 }

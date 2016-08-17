@@ -26,34 +26,26 @@
 /* This files contains only #defines used for both C and assembly code */
 
 
-/* Must also define stricmp as needed */
-
 #ifdef __MACH__
 #  define nosiglongjmp longjmp
 #  define nosigsetjmp setjmp
 #endif
 
-#ifdef sparc
-#  ifdef __SVR4
-#    define stricmp strcasecmp
-#  endif
-#endif
-
-#ifdef hpux
-#  define stricmp strcasecmp
-#endif
-
-#ifdef __sgi
-#  define stricmp strcasecmp
-#endif
-
-#ifdef i386
-#  define stricmp strcasecmp
+#if defined i386
 #  define GCQDEBUG
 #  define GCDEBUG_CHECK
+#  undef WORDS_BIGENDIAN
+#elif defined __x86_64__
+#  undef WORDS_BIGENDIAN
+#else
+#  error "Unsupported architecture"
 #endif
 
 #ifdef linux
+#  define HAVE_ALLOCA_H
+#endif
+
+#ifdef __CYGWIN__
 #  define HAVE_ALLOCA_H
 #endif
 
@@ -78,36 +70,6 @@
 #define PRINT_CODE
 
 
-#ifdef sparc
-#  define USE_CCONTEXT
-#  ifdef __SVR4
-#    define __EXTENSIONS__
-#    define HAVE_ULONG
-#    define nosigsetjmp setjmp
-#    define nosiglongjmp longjmp
-#  else
-#    define HAVE_ALLOCA_H
-#    define nosigsetjmp _setjmp
-#    define nosiglongjmp _longjmp
-#    define HAVE_STRUCT_TM_TM_ZONE
-#  endif
-#endif /* sparc */
-
-#ifdef hpux
-#  define NOCOMPILER
-#  define nosigsetjmp setjmp
-#  define nosiglongjmp longjmp
-#endif /* hpux */
-
-#ifdef __sgi
-#  include <sys/bsd_types.h>
-#  define HAVE_ULONG
-#  define NOCOMPILER
-#  define HAVE_ALLOCA_H
-#  define nosigsetjmp setjmp
-#  define nosiglongjmp longjmp
-#endif /* __sgi */
-
 #ifdef linux
 #  ifndef __ASSEMBLER__
 #    include <sys/types.h>
@@ -115,7 +77,7 @@
 #  define HAVE_ULONG
 #  define nosigsetjmp _setjmp
 #  define nosiglongjmp _longjmp
-#  if defined(i386) || defined(sparc)
+#  if defined(i386)
 #    define USE_CCONTEXT
 #  else
 #    define NOCOMPILER
@@ -123,7 +85,6 @@
 #endif /* linux */
 
 #ifdef __CYGWIN__
-#  define HAVE_ALLOCA_H
 #  define NOCOMPILER
 #  define nosigsetjmp setjmp
 #  define nosiglongjmp longjmp
@@ -139,24 +100,29 @@
 #  define htons __ntohs
 #endif /* WIN32 */
 
-#ifdef AMIGA
-#  define HAVE_ALLOCA_H
-#  define HAVE_STRUCT_TM_TM_ZONE
-#  define nosigsetjmp setjmp
-#  define nosiglongjmp longjmp
-#endif /* AMIGA */
-
 #ifdef __MACH__
-#  define USE_CCONTEXT
+#  if defined i386
+#    define USE_CCONTEXT
+#  else
+#    define NOCOMPILER
+#  endif
 #  define HAVE_CRYPT 1
+#endif
+
+#undef HAVE_STATIC_ASSERT
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
+#  define HAVE_STATIC_ASSERT 1
+#elif defined __has_extension
+#  if __has_extension(c_static_assert)
+#    define HAVE_STATIC_ASSERT 1
+#  endif
 #endif
 
 /* Execution limits */
 
-#define MAX_CALLS 100000       /* Max # of calls executed / interpret */
 #define MAX_RECURSION 10000    /* Max # recursion depth / interpret */
 
-/* max # of faster calls (machine code) */
-#  define MAX_FAST_CALLS 0
+#define INTERPRETED_LOOP_COST 10 /* Relative cost of an interpreted loop */
+#  define MAX_LOOP_COUNT MAX_TAGGED_INT
 
 #endif /* OPTIONS_H */

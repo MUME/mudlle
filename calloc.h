@@ -30,17 +30,15 @@
        Individual deallocations are not possible.
 */
 
-typedef struct memblock **block_t;
-
-block_t new_block(void);
+struct alloc_block *new_block(void);
 /* Return: A new block from which to allocate some memory.
 */
 
-void free_block(block_t b);
+void free_block(struct alloc_block *b);
 /* Effect: Free all memory allocated in block b.
 */
 
-void *allocate(block_t b, unsigned long size);
+void *allocate(struct alloc_block *b, unsigned long size);
 /* Effects: Allocates size bytes from block b. This block is aligned
      correctly for all objects.
    Returns: A pointer to the start of the block.
@@ -48,5 +46,7 @@ void *allocate(block_t b, unsigned long size);
      for every BLOCK_SIZE bytes allocated (see calloc.c).
      Also, size must be smaller than BLOCK_SIZE
 */
+
+const char *heap_allocate_string(struct alloc_block *heap, const char *s);
 
 #endif

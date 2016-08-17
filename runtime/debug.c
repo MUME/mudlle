@@ -23,11 +23,14 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/param.h>
-#include <unistd.h>
 #include <string.h>
+#include <unistd.h>
+
+#include <sys/param.h>
 
 #include "basic.h"
+#include "debug.h"
+#include "mudlle-string.h"
 #include "runtime.h"
 
 #include "../alloc.h"
@@ -37,6 +40,7 @@
 #include "../ports.h"
 #include "../print.h"
 #include "../strbuf.h"
+#include "../table.h"
 #include "../utils.h"
 
 
@@ -77,7 +81,7 @@ SECTOP(help_string, 0, "`f -> `s. Returns `f's help string, or null if none",
       if (op->op->flags & OP_CONST)
         {
           size_t len = strlen(op->op->help);
-          strbuf_t sb = sb_initf(
+          struct strbuf sb = sb_initf(
             "%s%s%s",
             op->op->help,
             (len == 0
@@ -239,7 +243,8 @@ static void show_function(struct closure *c)
 
 TYPEDOP(profile, 0, "`f -> `x. Returns profiling information for `f:"
         " cons(#`calls, #`instructions) for mudlle functions, #`calls for"
-        " primitives",
+        " primitives.\n"
+        "Profiling information is only updated by interpreted code.",
         1, (value fn),
         OP_LEAF | OP_NOESCAPE, "[fo].[kn]")
 {
@@ -256,25 +261,11 @@ TYPEDOP(profile, 0, "`f -> `x. Returns profiling information for `f:"
   runtime_error(error_bad_type);
 }
 
-UNSAFEOP(dump_memory, 0, " -> . Dumps GC memory (for use by profiler)",
-	 0, (void),
-	 OP_LEAF | OP_NOESCAPE)
+UNSAFETOP(dump_memory, 0, "-> . Dumps GC memory (for use by profiler)",
+          0, (void), OP_LEAF | OP_NOESCAPE, ".")
 {
   dump_memory();
   undefined();
-}
-
-static int instr(char *s1, char *in)
-{
-  while (*in)
-    {
-      char *s = s1, *ins = in;
-
-      while (*s && tolower(*s) == tolower(*ins)) { s++; ins++; }
-      if (!*s) return true;
-      in++;
-    }
-  return false;
 }
 
 SECTOP(apropos, HELP_PREFIX "apropos",
@@ -285,49 +276,34 @@ SECTOP(apropos, HELP_PREFIX "apropos",
        OP_LEAF | OP_NOESCAPE, "s.")
 {
   TYPEIS(s, type_string);
-
-  struct list *globals = NULL;
-  GCPRO2(s, globals);
-  globals = global_list();
-  while (globals)
+  GCPRO1(s);
+  for (int i = 0, envused = intval(environment->used); i < envused; ++i)
     {
-      struct symbol *sym = globals->car;
+      if (mudlle_string_isearch(GNAME(i), s) < 0)
+        continue;
 
-      if (instr(s->str, sym->name->str))
-	{
-	  value v = GVAR(intval(sym->data));
-	  struct gcpro gcpro3;
+      output_value(mudout, prt_display, false, GNAME(i));
+      pputs("\n  ", mudout);
 
-	  GCPRO(gcpro3, v);
-	  output_value(mudout, prt_display, false, sym->name);
-	  pputs("\n  ", mudout);
-	  if (is_any_primitive(v))
-	    {
-	      struct primitive *op = v;
+      if (is_any_primitive(GVAR(i)))
+        {
+          struct primitive *op = GVAR(i);
 
-	      if (op->op->help)
-		pprintf(mudout, "Primitive: %s\n", op->op->help);
-	      else pputs("Undocumented primitive\n", mudout);
-	    }
-	  else if (TYPE(v, type_closure))
-	    {
-	      pputs("Function: ", mudout);
-	      show_function(v);
-	      pputc('\n', mudout);
-	    }
-	  else pprintf(mudout, "Variable\n");
-	  UNGCPRO1(gcpro3);
-	}
-      globals = globals->cdr;
+          if (op->op->help)
+            pprintf(mudout, "Primitive: %s\n", op->op->help);
+          else
+            pputs("Undocumented primitive\n", mudout);
+        }
+      else if (TYPE(GVAR(i), type_closure))
+        {
+          pputs("Function: ", mudout);
+          show_function(GVAR(i));
+          pputc('\n', mudout);
+        }
+      else
+        pputs("Variable\n", mudout);
     }
   UNGCPRO();
-  undefined();
-}
-
-TYPEDOP(debug, 0, "`n -> . Set debug level (0 = no debug)", 1, (value c),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.")
-{
-  debug_level = GETINT(c);
   undefined();
 }
 
@@ -346,70 +322,73 @@ FULLOP(quit, 0, "[`n] -> . Exit mudlle, optionally with exit code `n.",
 }
 
 #ifdef GCSTATS
-TYPEDOP(gcstats, 0, " -> `v. Returns GC statistics: vector(`minor_count,"
+TYPEDOP(gcstats, 0, "-> `v. Returns GC statistics: vector(`minor_count,"
         " `major_count, `size, `usage_minor, `usage_major, last gc sizes,"
-        " gen0 gc sizes, gen1 gc sizes). The sizes vectors are as"
-        " that of `short_gcstats()", 0, (void), OP_LEAF | OP_NOESCAPE, ".v")
+        " gen0 gc sizes, gen1 gc sizes). The sizes vectors are vectors"
+        " of vector(`objects, `rosize, `rwsize).", 0, (void),
+        OP_LEAF | OP_NOESCAPE, ".v")
 {
-  struct gcstats stats;
-  struct vector *gen0, *gen1 = NULL, *last = NULL, *v;
-  int i;
-
-  stats = gcstats;
-
-  gen0 = alloc_vector(2 * last_type);
-  GCPRO3(gen0, gen1, last);
-  gen1 = alloc_vector(2 * last_type);
-  last = alloc_vector(2 * last_type);
-  for (i = 0; i < last_type; i++)
+  struct vector *last = NULL;
+  struct vector *gen[2] = { 0 };
+  GCPRO3(gen[0], gen[1], last);
+  for (int g = 0; g < 2; ++g)
+    gen[g] = alloc_vector(last_type);
+  last = alloc_vector(last_type);
+  for (int i = 0; i < last_type; i++)
     {
-      last->data[2 * i] = makeint(stats.lnb[i]);
-      last->data[2 * i + 1] = makeint(stats.lsizes[i]);
-      gen0->data[2 * i] = makeint(stats.g0nb[i]);
-      gen0->data[2 * i + 1] = makeint(stats.g0sizes[i]);
-      gen1->data[2 * i] = makeint(stats.g1nb[i]);
-      gen1->data[2 * i + 1] = makeint(stats.g1sizes[i]);
+      struct vector *v = alloc_vector(2);
+      v->data[0] = makeint(gcstats.l.types[i].nb);
+      v->data[1] = makeint(gcstats.l.types[i].size);
+      last->data[i] = v;
+      for (int g = 0; g < 2; ++g)
+        {
+          v = alloc_vector(3);
+          v->data[0] = makeint(gcstats.gen[g].types[i].nb);
+          v->data[1] = makeint(gcstats.gen[g].types[i].rosize);
+          v->data[2] = makeint(gcstats.gen[g].types[i].rwsize);
+          gen[g]->data[i] = v;
+        }
     }
-  v = alloc_vector(8);
-  v->data[0] = makeint(stats.minor_count);
-  v->data[1] = makeint(stats.major_count);
-  v->data[2] = makeint(stats.size);
-  v->data[3] = makeint(stats.usage_minor);
-  v->data[4] = makeint(stats.usage_major);
+  struct vector *v = alloc_vector(8);
+  v->data[0] = makeint(gcstats.minor_count);
+  v->data[1] = makeint(gcstats.major_count);
+  v->data[2] = makeint(gcstats.size);
+  v->data[3] = makeint(gcstats.usage_minor);
+  v->data[4] = makeint(gcstats.usage_major);
   v->data[5] = last;
-  v->data[6] = gen0;
-  v->data[7] = gen1;
+  v->data[6] = gen[0];
+  v->data[7] = gen[1];
 
   UNGCPRO();
 
   return v;
 }
 
-FULLOP(reset_gcstats, "reset_gcstats!", " -> . Reset short GC statistics",
-       0, (void),
-       1,
+  #define GCSTATS_LEVEL 1
 
-       OP_LEAF | OP_NOALLOC | OP_NOESCAPE, NULL, static)
+SECTOP(reset_gcstats, "reset_gcstats!", "-> . Reset short GC statistics.",
+        0, (void), GCSTATS_LEVEL,
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".")
 {
-  memset(gcstats.anb, 0, sizeof gcstats.anb);
-  memset(gcstats.asizes, 0, sizeof gcstats.asizes);
+  gcstats.a = GCSTATS_ALLOC_NULL;
   undefined();
 }
 
-TYPEDOP(short_gcstats, 0, " -> `v. Returns short GC statistics. `v[2*`n] is"
-        " the number of allocations for type `n, and `v[2*`n+1] is total"
-        " bytes of allocation for type `n", 0, (void),
+TYPEDOP(short_gcstats, 0, "-> `v. Returns short GC statistics. `v[`n] is"
+        " a vector(`objects, `bytes) allcated for type `n.", 0, (void),
         OP_LEAF | OP_NOESCAPE, ".v")
 {
   struct gcstats stats = gcstats;
-  struct vector *v = alloc_vector(2 * last_type);
-
+  struct vector *v = alloc_vector(last_type);
+  GCPRO1(v);
   for (int i = 0; i < last_type; ++i)
     {
-      v->data[2 * i] = makeint(stats.anb[i]);
-      v->data[2 * i + 1] = makeint(stats.asizes[i]);
+      struct vector *w = alloc_vector(2);
+      w->data[0] = makeint(stats.a.types[i].nb);
+      w->data[1] = makeint(stats.a.types[i].size);
+      v->data[i] = w;
     }
-
+  UNGCPRO();
   return v;
 }
 
@@ -419,6 +398,8 @@ TYPEDOP(gc_generation, 0, "-> `n. Returns the number of garbage collections"
 {
   return makeint(gcstats.minor_count + gcstats.major_count);
 }
+
+#endif  /* GCSTATS */
 
 TYPEDOP(gc_cmp, 0, "`x0 `x1 -> `n. Compares `x0 and `x1 as == does, and"
         " returns -1 if `x0 is less than `x1, 0 if they are equal, or 1 if `x0"
@@ -436,16 +417,9 @@ TYPEDOP(gc_hash, 0,
 	1, (value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
-  unsigned long v = (unsigned long)x;
-
-#define ROL(x, n) (((x) << (n)) | ((x) >> (sizeof (x) * 8 - (n))))
-  v = v ^ ROL(v, 3) ^ ROL(v, 7) ^ ROL(v, 13) ^ ROL(v, 23);
-#undef ROL
-
-  return makeint(v & MAX_TAGGED_INT);
+  return makeint(case_symbol_hash_len((const char *)&x, sizeof x,
+                                      MAX_TAGGED_INT + 1));
 }
-
-#endif
 
 UNSAFETOP(garbage_collect, 0, "`n -> . Does a forced garbage collection,"
           " asserting room for `n bytes of allocations before another"
@@ -472,14 +446,13 @@ void debug_init(void)
   DEFINE(profile);
   DEFINE(dump_memory);
   DEFINE(apropos);
-  DEFINE(debug);
   DEFINE(quit);
 #ifdef GCSTATS
   DEFINE(gcstats);
   DEFINE(short_gcstats);
   DEFINE(reset_gcstats);
   DEFINE(gc_generation);
+#endif  /* GCSTATS */
   DEFINE(gc_cmp);
   DEFINE(gc_hash);
-#endif
 }

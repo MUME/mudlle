@@ -64,8 +64,10 @@
 
 #ifdef GCSTATS
 #define GCSTAT_ADD(type, size)						\
-	addl	$1,N(gcstats) + 4 * (5 + last_type * 6 + type);		\
-	addl	size,N(gcstats) + 4 * (5 + last_type * 7 + type)
+	addl	$1,(N(gcstats) + gcstats_alloc				\
+		    + gcstats_alloc_size * type + gcstats_alloc_nb);	\
+	addl	size,(N(gcstats) + gcstats_alloc			\
+		      + gcstats_alloc_size * type + gcstats_alloc_sz)
 
 #else  /* !GCSTATS */
 #define GCSTAT_ADD(type, size)
@@ -73,30 +75,26 @@
 
 
 /* End mudlle value stack frame ending before N values and PC. */
-#define END_FRAME_PC(n) \
-	lea	4*(1+n)(%esp),%eax; \
-	mov	%eax,N(ccontext)+cc_frame_end_sp; \
-	mov	%ebp,N(ccontext)+cc_frame_end_bp
+/* #define END_FRAME_PC(n) \ */
+/* 	lea	4*(1+n)(%esp),%eax; \ */
+/* 	mov	%eax,N(ccontext)+cc_frame_end_sp; \ */
+/* 	mov	%ebp,N(ccontext)+cc_frame_end_bp */
 
 /* End mudlle frame ending at last frame (at push %ebp). Uses
    'scratch' as scratch register. */
-#define END_PREVIOUS_FRAME_REG(scratch) \
-        xor     scratch,scratch; \
-        mov     scratch,N(ccontext)+cc_frame_end_bp; \
+#define END_PREVIOUS_FRAME_REG(scratch)                 \
+        xor     scratch,scratch;                        \
+        mov     scratch,N(ccontext)+cc_frame_end_bp;    \
         mov     %ebp,N(ccontext)+cc_frame_end_sp
 
-#define END_PARENT_FRAME(scratch) \
-        movl    $1,scratch; \
-        mov     scratch,N(ccontext)+cc_frame_end_bp; \
+#define END_PARENT_FRAME(scratch)                       \
+        movl    $1,scratch;                             \
+        mov     scratch,N(ccontext)+cc_frame_end_bp;    \
         mov     %ebp,N(ccontext)+cc_frame_end_sp
 
 #define END_PREVIOUS_FRAME END_PREVIOUS_FRAME_REG(arg0)
 
 #define CCALL_LEAF(fn) \
-	call	fn
-
-#define CCALL(fn) \
-	movw	$DEFAULT_SECLEVEL,N(internal_seclevel); \
 	call	fn
 
 /* Various ways of preserving the registers:
@@ -106,43 +104,43 @@
    CLEAR_CALLER: preserve no registers, just clear caller saved on return
      (assumes that called fn is NOALLOC)
 */
-#define SAVE_CALLEE \
-	mov	%ebx,N(ccontext)+cc_callee; \
+#define SAVE_CALLEE                             \
+	mov	%ebx,N(ccontext)+cc_callee;     \
 	mov	%esi,N(ccontext)+cc_callee+4
-#define RESTORE_CALLEE \
-	mov	N(ccontext)+cc_callee,%ebx; \
-	mov	N(ccontext)+cc_callee+4,%esi; \
+#define RESTORE_CALLEE                          \
+	mov	N(ccontext)+cc_callee,%ebx;     \
+	mov	N(ccontext)+cc_callee+4,%esi;   \
 	CLEAR_CALLER
 
-#define SAVE_CALLER \
-	mov	%ebx,N(ccontext)+cc_callee; \
-	mov	%esi,N(ccontext)+cc_callee+4; \
-	mov	%edx,N(ccontext)+cc_caller; \
+#define SAVE_CALLER                             \
+	mov	%ebx,N(ccontext)+cc_callee;     \
+	mov	%esi,N(ccontext)+cc_callee+4;   \
+	mov	%edx,N(ccontext)+cc_caller;     \
 	mov	%edi,N(ccontext)+cc_caller+4
-#define RESTORE_CALLER \
-	mov	N(ccontext)+cc_callee,%ebx; \
-	mov	N(ccontext)+cc_callee+4,%esi; \
-	mov	N(ccontext)+cc_caller,%edx; \
+#define RESTORE_CALLER                          \
+	mov	N(ccontext)+cc_callee,%ebx;     \
+	mov	N(ccontext)+cc_callee+4,%esi;   \
+	mov	N(ccontext)+cc_caller,%edx;     \
 	mov	N(ccontext)+cc_caller+4,%edi
 
-#define CLEAR_CALLER \
-	xor	%edx,%edx; \
-	xor	%edi,%edi
+#define CLEAR_CALLER                            \
+	movl    $0,%edx;                        \
+	movl    $0,%edi
 
 /* Push the current function's input arguments on the stack.
      in: argcount
      clobbers: esi, edi, ecx
  */
-#define REPUSH_ARGS \
-        /* %esp -= 4 * nargs */ \
-        mov     argcount,%ecx; \
-	neg     %ecx; \
-	lea     (%esp,%ecx,4),%esp; \
-	/* Copy argcount args from ebp+argstart to esp */ \
-	mov     argcount,%ecx; \
-	lea	argstart(%ebp),%esi; \
-	mov     %esp,%edi; \
-        rep; \
+#define REPUSH_ARGS                                             \
+        /* %esp -= 4 * nargs */                                 \
+        mov     argcount,%ecx;                                  \
+	neg     %ecx;                                           \
+	lea     (%esp,%ecx,4),%esp;                             \
+	/* Copy argcount args from ebp+argstart to esp */       \
+	mov     argcount,%ecx;                                  \
+	lea	argstart(%ebp),%esi;                            \
+	mov     %esp,%edi;                                      \
+        rep;                                                    \
         movsl
 
 /* Simple integer manipulation macros */
@@ -158,22 +156,19 @@
 #define ISINT(x) \
 	test	$1,x		/* Is x an integer ? */
 
-#define ISINTB(x) \
-	testb	$1,x		/* Is x an integer ? */
-
 #define ISNULL(x) \
 	test	x,x		/* Is x NULL (registers only) */
 
 #define IS_READ_WRITE(x) \
         testb   $OBJ_READONLY,object_flags(x)
 
-#define CHECK_LOOP(type)                                \
+#define CHECK_LOOP()                                    \
 	subl	$1,N(xcount);                           \
-	je	E(type ## error_loop);                  \
+	je	E(early_error_loop);                    \
 	cmpl    (N(mudlle_stack_limit)),%esp;           \
-	jb	E(type ## error_recurse);               \
+	jb	E(early_error_recurse);                 \
 	cmpw	N(minlevel),%cx;                        \
-	jb	E(type ## error_security_violation)
+	jb	E(early_error_security_violation)
 
 #define E(n) N(b ## n)
 
@@ -311,6 +306,20 @@ cadd:	/* Call plus primitive for string append */
 	leave
 	ret
 
+GFUNC(bconcat): /* concatenate argcount (eax) strings on stack */
+        push    %ebp
+        mov     %esp,%ebp
+        SAVE_CALLER
+	push    arg0
+	lea     8(%ebp),arg0
+        push    arg0
+	END_PREVIOUS_FRAME
+	CCALL_LEAF(N(concat_strings))
+	/* add	$8,%esp */
+        RESTORE_CALLER
+	leave
+        ret
+
 GFUNC(btypeof):
         ISNULL(arg0)
         mov	ICST(type_null),arg1
@@ -411,7 +420,7 @@ cset:	/* Call set! */
 	push	arg1
 	push	arg0
 	END_PREVIOUS_FRAME
-	CCALL_LEAF(N(code_set))
+	CCALL_LEAF(N(code_setb))
 	/* add	$12,%esp */
 	RESTORE_CALLEE
         leave
@@ -479,30 +488,34 @@ strsetnosign:
 
 /* Special ops: bcleargc, bwglobal, brglobal */
 
+/* arg0: written value; arg1: goffset written to */
 GFUNC(bwglobal):
-	/* Make a proper stack trace for iterate_cc_frame() */
 	push    %ebp
 	mov     %esp,%ebp
-	END_PREVIOUS_FRAME_REG(arg1) /* XXX does this needs to be reversed? */
 
-	/* We don't need to protect %eax (arg0) or %ecx (arg1) */
-	push	%edx /* protect from cdecl call */
-	push	arg0 /* goffset arg */
+	push	arg0            /* written value */
+	push    arg1            /* goffset arg */
+	END_PREVIOUS_FRAME
 	call	N(check_global_write)
-	mov	-4(%ebp),%edx /* cdecl argument cleanup */
+	/* add $8,%esp */
+
+	CLEAR_CALLER
 
 	leave
 	ret
 
-/* Could be factorized if we had a free register */
-GFUNC(brglobal): /* see bwglobal comments */
+/* arg0: goffset read from */
+GFUNC(brglobal):
 	push    %ebp
 	mov     %esp,%ebp
-	END_PREVIOUS_FRAME_REG(arg1)
-	push	%edx
-	push	arg0
+	END_PREVIOUS_FRAME
+
+	push	arg1
 	call	N(check_global_read)
-	mov	-4(%ebp),%edx /* cdecl argument cleanup */
+	/* add $4,%esp */
+
+	CLEAR_CALLER
+
 	leave
 	ret
 
@@ -535,27 +548,22 @@ GFUNC(bcleargc):
 	xor	%edi,%edi
 	ret
 
+GFUNC(bcleargc4):
+	mov	closure_in,16(%esp)
+GFUNC(bcleargc3):
+	mov	closure_in,12(%esp)
+GFUNC(bcleargc2):
+	mov	closure_in,8(%esp)
+GFUNC(bcleargc1):
+	mov	closure_in,4(%esp)
 GFUNC(bcleargc0):
 	jne	E(early_error_wrong_parameters)
 	CHECK_LOOP()
 	ret
 
-GFUNC(bcleargc1):
-	jne	E(early_error_wrong_parameters)
-	CHECK_LOOP()
-	mov	closure_in,4(%esp)
-	ret
-
-GFUNC(bcleargc2):
-	jne	E(early_error_wrong_parameters)
-	CHECK_LOOP()
-	mov	closure_in,4(%esp)
-	mov	closure_in,8(%esp)
-	ret
-
 /* Build varargs vector & count */
 GFUNC(bvarargs):
-	CHECK_LOOP(early_)
+	CHECK_LOOP()
 
 	/* in: argcount: argument count, arguments on stack */
 	/* returns vector in %eax */
@@ -677,6 +685,27 @@ GFUNC(balloc_vector):
 	movl	$garbage_record | type_vector << 8, object_info(arg1)
 	ret
 
+GFUNC(bsave_caller):
+        lea     4(%esp),%eax
+        movl    %eax,N(ccontext)+cc_frame_end_sp
+        movl    %ebp,N(ccontext)+cc_frame_end_bp
+        movl    closure,N(ccontext)+cc_callee
+        movl    globals,N(ccontext)+cc_callee + 4
+	ret
+
+GFUNC(bsave_caller_noalloc):
+        lea     4(%esp),%eax
+        movl    %eax,N(ccontext)+cc_frame_end_sp
+        movl    %ebp,N(ccontext)+cc_frame_end_bp
+	ret
+
+GFUNC(brestore_caller):
+        movl    N(ccontext)+cc_callee,closure
+        movl    N(ccontext)+cc_callee + 4,globals
+	/* could have gone bad if a primitive caused GC */
+	CLEAR_CALLER
+        ret
+
 /* Interface operations:
     bcall: any call from machine language
     interpreter_invoke: machine language -> interpreter
@@ -687,8 +716,11 @@ GFUNC(balloc_vector):
    closure_in contains called fn
 */
 GFUNC(bcall):
+	ISNULL(closure_in)
+	je	bcall_error_bad_function
+
 	ISINT(closure_inb)
-	jne	E(error_bad_function)
+	jne	bcall_error_bad_function
 
 	movw	$DEFAULT_SECLEVEL,N(internal_seclevel)
 
@@ -702,7 +734,8 @@ GFUNC(bcall):
 	je	call_secure
 
 	cmpb	$type_varargs,object_type(closure_in)
-	jne	E(error_bad_function)
+	jne	bcall_error_bad_function
+	/* fallthrough */
 
 call_varargs:
 	push    %ebp
@@ -713,12 +746,17 @@ call_varargs:
 	mov	object_offset+primitive_op(closure_in),closure_in
 	mov	primop_op(closure_in),closure_in
 
-	push    argcount        /* not used by makevarargs */
+	/* For call traces; read from handle_primitive_frame() in error.c */
+	push    $N(bcall_primitive_tail)
+        push    closure_in
+        push	argcount
+
+	push    argcount        /* not popped by makevarargs */
         END_PREVIOUS_FRAME_REG(%ecx)
 	call	makevarargs
 	push	%eax
 
-	CCALL(*closure_in)
+	CCALL_LEAF(*closure_in)
 	RESTORE_CALLEE
 
         leave
@@ -728,31 +766,36 @@ call_secure:
 	mov	object_offset+primitive_op(closure_in),%ecx
 	movw	primop_seclevel(%ecx),%di
 	cmpw	%di,N(internal_seclevel)
-	jb	E(error_security_violation)
+	jb	bcall_error_security_violation
 	mov     N(maxseclevel),%ecx
 	INTVAL(%ecx)
 	cmpw    %di,%cx
-	jb	E(error_security_violation)
+	jb	bcall_error_security_violation
 	/* fallthrough */
 
 call_primitive:
 	/* Check arg count */
-	mov	object_offset+primitive_op(closure_in),closure_in
-	cmpw	primop_nargs(closure_in),%ax
-	jne	E(error_wrong_parameters)
+	mov	object_offset+primitive_op(closure_in),%ecx
+	cmpw	primop_nargs(%ecx),%ax
+	jne	bcall_error_wrong_parameters
         /* fallthrough; this label is here to un-confuse gdb */
 
-call_primitive_tail:
+GFUNC(bcall_primitive_tail):
 	push    %ebp
         mov     %esp,%ebp
 
         /* Fetch actual C function */
-	mov	primop_op(closure_in),closure_in
+	mov	primop_op(%ecx),closure_in
+
+	/* For call traces; read from handle_primitive_frame() in error.c */
+	push    $N(bcall_primitive_tail)
+        push    closure_in
+        push    argcount
 
 	SAVE_CALLEE
 	REPUSH_ARGS
         END_PREVIOUS_FRAME
-	CCALL(*closure_in)
+	CCALL_LEAF(*closure_in)
 	RESTORE_CALLEE
 
 	leave
@@ -765,7 +808,7 @@ call_closure:
 
 /* Build varargs vector & count */
 makevarargs: /* preserves closure, closure_in, globals (ie ebx, edx, esi) */
-	/* in: argcount: argument count, arguments on stack */
+	/* in: argcount: argument count, arguments on stack before ebp */
 	/* returns vector in %eax */
 	push	%edx
 	lea	object_offset(,argcount,4),%edx
@@ -786,10 +829,10 @@ vararg_alloc:
 #endif
 	movl	$garbage_record | type_vector << 8,object_info(arg0)
 
-	/* Copy args from sp+20 (edx, pc, argcount, ebp, pc, args...) */
+	/* Copy args from bp+8 (edx, pc, argcount, ..., ebp, pc, args...) */
 	mov     8(%esp),%ecx     /* argcount */
 	mov	%esi,%edx
-	lea	20(%esp),%esi
+	lea	8(%ebp),%esi
 	lea	object_offset(arg0),%edi
 	rep
 	movsl
@@ -847,7 +890,7 @@ GFUNC(bcall_varargs):
         mov     %esp,%ebp
 	movw    %cx,N(internal_seclevel)
 	SAVE_CALLEE
-	push    argcount        /* not used by makevarargs */
+	push    argcount        /* not popped by makevarargs */
         END_PREVIOUS_FRAME_REG(%ecx)
 	call	makevarargs
 	push	%eax
@@ -873,6 +916,8 @@ GFUNC(bapply_varargs):
         leave
         ret
 
+	/* interpret the closure in closure_in with argcount arguments
+	   on the stack */
 GFUNC(interpreter_invoke):
 	push    %ebp
         mov     %esp,%ebp
@@ -884,77 +929,78 @@ GFUNC(interpreter_invoke):
 
         SAVE_CALLEE
 	END_PREVIOUS_FRAME
-	CCALL(N(interpreter_start))
+	CCALL_LEAF(N(interpreter_start))
+	/* add	$12,%esp */
 	RESTORE_CALLEE
 	leave
 	ret
 
-#define START_INVOKE \
-	push	%ebp; \
-	mov	%esp,%ebp; \
-	push	%ebx; \
-	push	%esi; \
-	push	%edi; \
-	sub	$cc_SIZE+cs_u,%esp; \
-	SAVE_CCONTEXT; \
+#define START_INVOKE                            \
+	push	%ebp;                           \
+	mov	%esp,%ebp;                      \
+	push	%ebx;                           \
+	push	%esi;                           \
+	push	%edi;                           \
+	sub	$cc_SIZE + cs_SIZE,%esp;        \
+	SAVE_CCONTEXT;                          \
 	PUSH_CALL_STACK
 
-#define END_INVOKE \
-	RESTORE_CCONTEXT; \
-	POP_CALL_STACK; \
-	mov	-12(%ebp),%edi; \
-	mov	-8(%ebp),%esi; \
-	mov	-4(%ebp),%ebx; \
-	leave; \
+#define END_INVOKE                              \
+	RESTORE_CCONTEXT;                       \
+	POP_CALL_STACK;                         \
+	mov	-12(%ebp),%edi;                 \
+	mov	-8(%ebp),%esi;                  \
+	mov	-4(%ebp),%ebx;                  \
+	leave;                                  \
 	ret
 
-#define SAVE_CCONTEXT \
-	mov	$N(ccontext),%esi; \
-	mov	%esp,%edi; \
-	mov	$cc_SIZE >> 2,%ecx; \
-	rep; \
-	movsl; \
+#define SAVE_CCONTEXT                           \
+	mov	$N(ccontext),%esi;              \
+	mov	%esp,%edi;                      \
+	mov	$cc_SIZE >> 2,%ecx;             \
+	rep;                                    \
+	movsl;                                  \
 	mov	%ebp,N(ccontext)+cc_frame_start
 
-#define RESTORE_CCONTEXT \
-	lea	-(12+cc_SIZE+cs_u)(%ebp),%esi; \
-	mov	$N(ccontext),%edi; \
-	mov	$cc_SIZE >> 2,%ecx; \
-	rep; \
+#define RESTORE_CCONTEXT                                \
+	lea	-(12 + cc_SIZE + cs_SIZE)(%ebp),%esi;   \
+	mov	$N(ccontext),%edi;                      \
+	mov	$cc_SIZE >> 2,%ecx;                     \
+	rep;                                            \
 	movsl
 
 /* Assumes call_stack entry address in edi */
-#define PUSH_CALL_STACK \
-	mov	$N(call_stack),%eax; \
-	mov	(%eax),%ebx; \
-	mov	%ebx,cs_next(%edi); \
-	movl	$call_compiled,cs_type(%edi); \
+#define PUSH_CALL_STACK                         \
+	mov	$N(call_stack),%eax;            \
+	mov	(%eax),%ebx;                    \
+	mov	%ebx,cs_next(%edi);             \
+	movl	$call_compiled,cs_type(%edi);   \
 	mov	%edi,(%eax)
 
 /* Assumes call_stack entry address in %esi */
-#define POP_CALL_STACK \
-	mov	cs_next(%esi),%ecx; \
+#define POP_CALL_STACK                          \
+	mov	cs_next(%esi),%ecx;             \
 	mov	%ecx,N(call_stack)
 
 /* Assumes %esi points to the vector. Leaves nargs in %eax */
-#define PUSH_VECTORARGS \
-	mov	object_size(%esi),%eax; \
-	sub	$object_offset,%eax; \
-	sub	%eax,%esp; \
-	sar	$2,%eax; \
-	mov	%eax,%ecx; \
-	add	$object_offset,%esi; \
-	mov	%esp,%edi; \
-	rep; \
+#define PUSH_VECTORARGS                         \
+	mov	object_size(%esi),%eax;         \
+	sub	$object_offset,%eax;            \
+	sub	%eax,%esp;                      \
+	sar	$2,%eax;                        \
+	mov	%eax,%ecx;                      \
+	add	$object_offset,%esi;            \
+	mov	%esp,%edi;                      \
+	rep;                                    \
 	movsl
 
-#define CALL_CLOSURE \
-	xor	globals, globals; \
-	xor	closure, closure; \
-	CLEAR_CALLER; \
-	mov	8(%ebp),closure_in; \
-	mov	object_offset(closure_in),%ecx; \
-	add	$object_offset+function_offset,%ecx; \
+#define CALL_CLOSURE                                    \
+	xor	globals, globals;                       \
+	xor	closure, closure;                       \
+	CLEAR_CALLER;                                   \
+	mov	8(%ebp),closure_in;                     \
+	mov	object_offset(closure_in),%ecx;         \
+	add	$object_offset+function_offset,%ecx;    \
 	call	*%ecx
 
 GFUNC(invoke0):
@@ -1030,13 +1076,40 @@ GFUNC(invoke):
 	 * taken)
 	 */
 
+GFUNC(bcall_error):
+	push    %ebp
+        mov     %esp,%ebp
+
+	END_PREVIOUS_FRAME_REG(%ecx)
+
+	/* these are here for handle_primitive_frame() in error.c */
+	push    $N(bcall_error)
+	push    closure_in      /* called function */
+	push    argcount        /* number of arguments */
+
+	push    closure         /* error number */
+	CCALL_LEAF(N(runtime_error))
+
+#define BCALLERRORSTUB(n)                       \
+bcall_ ## n:;                                   \
+        mov     $n,closure;                     \
+        jmp     N(bcall_error)
+
+BCALLERRORSTUB(error_bad_function)
+BCALLERRORSTUB(error_security_violation)
+BCALLERRORSTUB(error_wrong_parameters)
+
+berror:
+	push    %ebp
+	mov     %esp,%ebp
+	END_PREVIOUS_FRAME_REG(%ecx)
+	push	closure         /* error number */
+	CCALL_LEAF(N(runtime_error))
+
 #define ERRORSTUB(n)                            \
 GFUNC(b ## n):;                                 \
-	push    %ebp;                           \
-	mov     %esp,%ebp;                      \
-	END_PREVIOUS_FRAME;                     \
-	push	$n;                             \
-	CCALL_LEAF(N(runtime_error))
+	mov	$n,closure;                     \
+        jmp     berror
 
 ERRORSTUB(error_bad_function)
 ERRORSTUB(error_stack_underflow)
@@ -1055,15 +1128,19 @@ ERRORSTUB(error_no_match)
 ERRORSTUB(error_compile)
 ERRORSTUB(error_abort)
 
-/* argcount must be set correctly here */
-#define EARLYERRORSTUB(n)                               \
-GFUNC(bearly_ ## n):;                                   \
-	push    %ebp;                                   \
-	mov     %esp,%ebp;                              \
-	END_PREVIOUS_FRAME_REG(%ecx);                   \
-	push    argcount;                               \
-	push	$n;                                     \
+bearly_error:
+	push    %ebp
+	mov     %esp,%ebp
+	END_PREVIOUS_FRAME_REG(%ecx)
+	push    argcount
+	push	closure         /* error number */
 	CCALL_LEAF(N(compiled_early_runtime_error))
+
+/* argcount must be set correctly here */
+#define EARLYERRORSTUB(n)                       \
+GFUNC(bearly_ ## n):;                           \
+	mov     $n,closure;                     \
+        jmp     bearly_error
 
 EARLYERRORSTUB(error_loop)
 EARLYERRORSTUB(error_recurse)

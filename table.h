@@ -22,33 +22,54 @@
 #ifndef TABLE_H
 #define TABLE_H
 
-#include "types.h"
+#include <string.h>
+
+#include "mvalues.h"
 
 struct table *alloc_table(ulong size);
 /* Returns: A new symbol table, initially of size size.
    Requires: size be a power of 2, smaller or equal than 2^30.
 */
 
-int table_lookup(struct table *table, const char *name, struct symbol **sym);
-int table_lookup_len(struct table *table, const char *name, size_t nlength,
-                     struct symbol **sym);
+struct table *alloc_ctable(ulong size);
+/* Returns: A new case/accent-sensitive symbol table, initially of size size.
+   Requires: size be a power of 2, smaller or equal than 2^30.
+*/
+
+static inline bool is_ctable(struct table *t)
+{
+  return (long)t->used < 0;
+}
+
+struct symbol *table_lookup_len(struct table *table, const char *name,
+                                size_t len);
+struct symbol *table_mlookup(struct table *table, struct string *name);
+static inline struct symbol *table_lookup(struct table *table,
+                                          const char *name)
+{
+  return table_lookup_len(table, name, strlen(name));
+}
+
 /* Effects: Looks for name in the symbol table table (case insensitive).
    Returns: true if name is found. *pos is set to name's data.
-     Otherwise, returns false. table_add_fast can be called immediately
-     if you wish to add an entry to name to the symbol table (but no intervening
-     call to the module should be made).
-*/
+     Otherwise, returns false. table_add_fast can be called immediately if you
+     wish to add an entry to name to the symbol table (but no intervening call
+     to the module should be made). */
 
-int table_remove(struct table *table, const char *name);
-int table_remove_len(struct table *table, const char *name, size_t nlength);
+struct symbol *table_remove(struct table *table, const char *name);
+struct symbol *table_remove_len(struct table *table, const char *name,
+				size_t nlength);
 /* Effects: Removes table[name] from data. Rehashes nescessary values.
    Modifies: table
-   Returns: false if the entry wasn't found
+   Returns: The removed symbol, or NULL if not found.
 */
 
-int table_set(struct table *table, const char *name, value data);
-int table_set_len(struct table *table, const char *name, size_t nlength,
-                  value data);
+enum runtime_error safe_table_mset(struct table *table, struct string *s,
+                                   value *x);
+void table_mset(struct table *table, struct string *name, value data);
+bool table_set(struct table *table, const char *name, value data);
+bool table_set_len(struct table *table, const char *name, size_t nlength,
+                   value data);
 /* Effects: Sets table[name] to data, adds it if not already present
    Modifies: table
    Returns: false if entry name was readonly
@@ -84,12 +105,28 @@ struct list *table_prefix(struct table *table, struct string *prefix);
 void protect_table(struct table *table);
 void immutable_table(struct table *table);
 
+static inline ulong table_entries(struct table *table)
+{
+  long n = intval(table->used);
+  return n < 0 ? ~n : n;
+}
+
 struct symbol *table_exists(struct table *table,
                             bool (*check)(struct symbol *sym, void *data),
                             void *data);
 void table_foreach(struct table *table, void *data,
                    void (*action)(struct symbol *, void *));
-int table_entries(struct table *table);
+
+struct table *table_copy(struct table *table);
+struct table *table_shallow_copy(struct table *table);
+
+bool table_is_empty(struct table *table);
+struct table *table_resize(struct table *table);
+
+void rehash_table(struct table *table);
+
+ulong symbol_hash_len(const char *name, size_t len, ulong size);
+ulong case_symbol_hash_len(const char *name, size_t len, ulong size);
 
 #define DEF_TABLE_SIZE 8	/* Convenient initial size */
 

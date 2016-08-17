@@ -25,6 +25,7 @@
 /* The different types */
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "mudlle.h"
 
@@ -32,14 +33,8 @@
 #include <gmp.h>
 #endif
 
-#ifdef __sparc__
-#include <sys/types.h>
-#endif
-
 #ifndef HAVE_ULONG
-#ifndef __sparc__
 typedef unsigned long ulong;
-#endif
 #endif
 typedef signed short word;
 typedef unsigned short uword;
@@ -53,49 +48,67 @@ typedef unsigned char ubyte;
 enum garbage_type {
   garbage_string,		/* contains binary, non-GCed data */
   garbage_record,		/* container for other GCed data  */
-  garbage_code,			/* special for code 		  */
-  garbage_forwarded,		/* temporarily used during GCs 	  */
-  garbage_primitive,		/* primitives 			  */
-  garbage_temp,			/* container for C pointer 	  */
-  garbage_mcode,		/* special for mcode 		  */
-  garbage_static_string,        /* statically allocated string    */
-  garbage_types
+  garbage_code,			/* special for code		  */
+  garbage_forwarded,		/* temporarily used during GCs	  */
+  garbage_primitive,		/* primitives			  */
+  garbage_temp,			/* container for C pointer	  */
+  garbage_mcode,		/* special for mcode		  */
+  garbage_static_string,	/* statically allocated string	  */
+  /* insert new types here */
+  garbage_free			/* in the free lists		  */
 };
 
-typedef enum
+/* The values below MUST NEVER CHANGE. Stored data depends on them.
+   Add new types just before 'type_null'.
+   Also some generated code depends on the values. */
+#define FOR_PLAIN_TYPES(op, arg)					\
+  op(arg, code) op(arg, closure) op(arg, variable) op(arg, internal)	\
+  op(arg, primitive) op(arg, varargs) op(arg, secure)			\
+									\
+  op(arg, integer) op(arg, string) op(arg, vector) op(arg, pair)	\
+  op(arg, symbol) op(arg, table) op(arg, private)			\
+									\
+  op(arg, object) op(arg, character) op(arg, gone)			\
+									\
+  op(arg, oport) op(arg, mcode) op(arg, float) op(arg, bigint)		\
+  op(arg, reference)							\
+									\
+  op(arg, null)
+
+/* Synthetic types, not used in object representations but represent
+   a set of the previous types.
+   They can thus change */
+#define FOR_SYNTHETIC_TYPES(op, arg)				\
+  op(arg, none)	     /* no types */				\
+  op(arg, any)	     /* any types */				\
+  op(arg, function)  /* closure, primitive, varargs, secure */	\
+  op(arg, list)	     /* pair, null */
+
+#define FOR_MTYPE(op, name) op(type_ ## name)
+#define FOR_STYPE(op, name) op(stype_ ## name)
+
+#define FOR_MUDLLE_TYPES(op)					\
+  FOR_PLAIN_TYPES(FOR_MTYPE, op)				\
+  FOR_SYNTHETIC_TYPES(FOR_STYPE, op)
+
+#define DEF_MTYPE(t) t,
+
+enum mudlle_type
 {
-  /* The values below MUST NEVER CHANGE. Stored data depends on them.
-     Add new types just before 'type_null'.
-     Also some generated code depends on the values. */
-  type_code, type_closure, type_variable, type_internal,
-  type_primitive, type_varargs, type_secure,
+  FOR_MUDLLE_TYPES(DEF_MTYPE)
+  last_synthetic_type,
+  last_type = stype_none
+};
 
-  type_integer, type_string, type_vector, type_pair, type_symbol, type_table,
-  type_private,
-
-  type_object, type_character, type_gone,
-
-  type_outputport, type_mcode, type_float, type_bigint, type_reference,
-  type_null,
-
-  last_type,
-
-  /* Synthetic types, not used in object representations but represent
-     a set of the previous types.
-     They can thus change */
-  stype_none = last_type,	/* no type, the empty set */
-  stype_any,			/* All types */
-  stype_function,		/* { closure, primitive, varargs, secure } */
-  stype_list,			/* { pair, null } */
-  last_synthetic_type
-} mtype;
+#undef DEF_MTYPE
+#undef DEF_STYPE
 
 #define TYPESET_ANY ((1U << last_type) - 1)
 #define TYPESET_FUNCTION ((1U << type_closure) | (1U << type_primitive) \
                           | (1U << type_varargs) | (1U << type_secure))
 #define TYPESET_LIST ((1U << type_pair) | (1U << type_null))
 
-static inline unsigned type_typeset(mtype type)
+static inline unsigned type_typeset(enum mudlle_type type)
 {
   if (type < last_type)
     return 1U << type;
@@ -115,21 +128,28 @@ static inline unsigned type_typeset(mtype type)
     }
 }
 
-extern const char *const mtypenames[];
+extern const char *const mudlle_type_names[];
 
 /* The basic structure of all values */
 typedef void *value;
 
 struct obj
 {
-  ulong size;			/* Total size in bytes, including header */
+  ulong size;			/* total size in bytes */
   enum garbage_type garbage_type : 8;
-  mtype type : 8;
-  short flags;			/* Eg read-only */
+  enum mudlle_type type : 8;
+  uint16_t flags;		/* OBJ_xxx flags */
 #ifdef GCDEBUG
   ulong generation;
 #endif
 };
+
+#define pointerp(obj) ((obj) && ((long)(obj) & 1) == 0)
+#define integerp(obj) (((long)(obj) & 1) == 1)
+
+#define staticp(v) (!pointerp(v)				\
+		    || (((struct obj *)(v))->garbage_type	\
+			== garbage_static_string))
 
 #define TYPEOF(v)				\
   (integerp(v) ? type_integer			\
@@ -181,7 +201,7 @@ struct variable			/* Is a record */
 struct symbol			/* Is a record */
 {
   struct obj o;
-  struct string *name;
+  struct string *name;          /* must be readonly */
   value data;
 };
 
@@ -199,11 +219,7 @@ struct primitive_ext		/* The external structure */
 {
   const char *name;
   const char *help;
-#ifdef __cplusplus
-  value (*op)(...);
-#else
   value (*op)();
-#endif
   word nargs;
   uword flags;			/* Helps compiler select calling sequence */
   const char *const *type;	/* Pointer to a typing array */
@@ -238,10 +254,18 @@ struct primitive_ext		/* The external structure */
                                    Only useful for M-secure primitives, because
                                    the only valid seclevel info will be
                                    maxseclevel. */
+#define OP_TRACE       (1 << 9) /* Auto-creates a call stack entry with all the
+                                   arguments of the primitive, useful when
+                                   called by compiled mudlle. Needed (and
+                                   allowed) for plain primitives only. */
+#define OP_ACTOR       (1 << 10) /* Uses actor(); shows in call traces */
+
+/* flags that can change without requiring recompiling mudlle */
+#define COMPILER_SAFE_OP_FLAGS (OP_OPERATOR | OP_TRACE | OP_ACTOR)
 
 #define ALL_OP_FLAGS (OP_LEAF | OP_NOALLOC | OP_NOESCAPE                \
                       | OP_STR_READONLY | OP_CONST | OP_OPERATOR        \
-                      | OP_APPLY | OP_FASTSEC)
+                      | OP_APPLY | OP_FASTSEC | OP_TRACE | OP_ACTOR)
 
 #define CLF_COMPILED 1          /* This is a compiled closure */
 #define CLF_NOESCAPE 2          /* Does not write global or closure
@@ -272,23 +296,44 @@ struct object			/* Is a temporary external */
   struct obj_data *obj;
 };
 
-struct mjmpbuf {
+struct table			/* Is a record */
+{
   struct obj o;
-  value ptype;
-  struct catch_context *context;
+  value used;                   /* ~n for case/accent-sensitive tables */
+  struct vector *buckets;       /* vector_len() must be power of 2 */
 };
 
-struct static_obj {
+/* can be either a string or a record */
+struct mprivate
+{
+  struct obj o;
+  value ptype;                  /* makeint(enum mprivate_type) */
+};
+
+struct mjmpbuf                  /* a string */
+{
+  struct mprivate p;
+  struct catch_context *context; /* set to NULL when cannot be used anymore */
+  value *result;                /* where to store result on longjmp(); set to
+                                   NULL while being jumped to */
+};
+
+struct static_obj
+{
   ulong *static_data;
   struct obj o;
 };
 
-#define STATIC_STRING_T(size)                   \
-struct {                                        \
-  ulong *static_data;                           \
-  struct obj mobj;                              \
-  char str[size];                               \
-}
+struct static_string {
+  ulong *static_data;
+  struct obj mobj;
+  char str[];
+};
+
+CASSERT(static_string,
+        (offsetof(struct string, str)
+         == (offsetof(struct static_string, str)
+             - offsetof(struct static_string, mobj))));
 
 static inline ulong *static_data(struct obj *obj)
 {
@@ -315,11 +360,24 @@ struct character *alloc_character(struct char_data *ch);
 struct object *alloc_object(struct obj_data *obj);
 void check_bigint(struct bigint *bi);
 
-struct grecord *alloc_private(int id, ulong size);
+/* end mudlle consts */
+
+/* Private types which are visible to the mudlle programmer must be
+   records identified by their first element with one of the following
+   constants: */
+enum mprivate_type {
+  PRIVATE_MJMPBUF = 1,
+  PRIVATE_REGEXP  = 2,
+};
+
+struct mprivate *alloc_private(enum mprivate_type id, ulong size);
 
 #define string_len(str) ((str)->o.size - (sizeof(struct obj) + 1))
 #define vector_len(vec) (((vec)->o.size - sizeof(struct obj)) / sizeof(value))
 #define grecord_len(rec) vector_len(rec)
+
+#define grecord_fields(rec) ((sizeof (rec) - sizeof (struct obj))       \
+                             / sizeof (value))
 
 /* 0 is false, everything else is true */
 #define isfalse(v) ((value)(v) == makebool(false))
@@ -327,36 +385,21 @@ struct grecord *alloc_private(int id, ulong size);
 /* Make a mudlle boolean from a C boolean (1 or 0) */
 #define makebool(i) makeint(!!(i))
 
-#define LOCALSTR(local, from) do {		\
-  int __l = string_len(from) + 1;		\
-						\
-  local = alloca(__l);				\
-  memcpy(local, from->str, __l);		\
-} while (0)
-
+/* Safe vector assignment. 'v' must GCPROed, and 'val' is allowed to
+   GC allocate. */
 #define SET_VECTOR(v, idx, val)			\
 do {						\
   value __tmp = (val);				\
   (v)->data[idx] = __tmp;			\
-} while(0)
+} while (0)
 
 /*
- * Converts the string sp into an int i and returns 1.
- * On over/underflow or illegal characters, it returns 0.
+ * Converts the string sp into a long l and returns true.
+ * On over/underflow or illegal characters, it returns false.
  */
-bool mudlle_strtoint(const char *sp, int *i);
-bool mudlle_strtofloat(const char *sp, double *d);
-
-/* end mudlle consts */
-
-/* Private types which are visible to the mudlle programmer must be
-   records identified by their first element with one of the following
-   constants: */
-enum {
-  PRIVATE_CALL_IN = 1,
-  PRIVATE_MJMPBUF = 2,
-  PRIVATE_REGEXP  = 3
-};
+bool mudlle_strtolong(const char *sp, size_t len, long *l, int base);
+/* warning: sp[len] must be NUL */
+bool mudlle_strtofloat(const char *sp, size_t len, double *d);
 
 #define MAX_PRIMITIVE_ARGS 5
 

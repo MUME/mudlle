@@ -195,25 +195,22 @@ writes mc:lineno, mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 	  // ambiguous info is available from prior optimisation
 	  ambiguous_def = fn (local)
 	    [
-	      | nlocal, indirect |
+	      | nlocal |
 
 	      nlocal = local[mc:v_number];
-	      indirect = false;
 
-	      graph_nodes_apply
-		(fn (n)
-		   if (!indirect)
-		     mc:scan_ambiguous
-		       (fn (il, ambiguous, x)
-			[
-			  if (!indirect &&
-			      nlocal == il[mc:il_defined_var] &&
-			      bit_set?(ambiguous, nlocal))
-			    indirect = local[mc:v_indirect] = true
-			],
-			null, graph_node_get(n), mc:new_varset(ifn),
-                        mc:f_ambiguous_rw),
-		 cdr(ifn[mc:c_fvalue]));
+	      graph_nodes_exists?(fn (n) [
+                | indirect |
+                indirect = false;
+                mc:scan_ambiguous(fn (il, ambiguous, x) [
+                  if (!indirect &&
+                      nlocal == il[mc:il_defined_var] &&
+                      bit_set?(ambiguous, nlocal))
+                    indirect = local[mc:v_indirect] = true
+                ], null, graph_node_get(n), mc:new_varset(ifn),
+                                  mc:f_ambiguous_rw);
+                indirect
+              ], cdr(ifn[mc:c_fvalue]));
 	    ];
 
 	  lforeach(ambiguous_def, locals);

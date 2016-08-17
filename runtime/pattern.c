@@ -21,7 +21,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "pattern.h"
 #include "runtime.h"
+
 #include "../error.h"
 #include "../table.h"
 
@@ -52,9 +54,8 @@ static bool recurse_symbol(struct symbol *sym, void *_data)
     ++data->nentries;
 
   value val = NULL;
-  struct symbol *symval;
-  if (table_lookup_len(data->table, sym->name->str,
-                       string_len(sym->name), &symval))
+  struct symbol *symval = table_mlookup(data->table, sym->name);
+  if (symval)
     val = symval->data;
   return !recurse(sym->data, val, data->seen);
 }
@@ -91,7 +92,7 @@ static bool recurse(value lhs, value rhs, struct seen_values *seen)
 
   struct obj *lhsobj = lhs, *rhsobj = rhs;
 
-  mtype lhstype = lhsobj->type;
+  enum mudlle_type lhstype = lhsobj->type;
   if (lhstype != rhsobj->type)
     return false;
 
@@ -181,8 +182,8 @@ static bool recurse(value lhs, value rhs, struct seen_values *seen)
                        seen));
   case type_table:
     {
-      /* this will work even if the table's bucket vector has been seen already
-         as table_exists() doesn't look use its size */
+      if (is_ctable(lhs) != is_ctable(rhs))
+        return false;
       struct table_data tdata = { .seen = seen, .table = rhs };
       if (table_exists((struct table *)lhs, recurse_symbol, &tdata)
           || table_exists((struct table *)rhs, count_non_null_syms, &tdata))
@@ -200,10 +201,12 @@ TYPEDOP(equalp, "equal?",
         " recursively.\n"
         "All objects are considered equal to themselves.\n"
         "No objects of different types are considered equal. E.g., a float"
-        " is never considered equal to a bigint or an integer.\n"
+        " is never considered equal to a bigint or an integer."
+        " Also, a ctable is never considered equal to a table.\n"
         "Strings, bigints and floats are considered equal if `string_cmp,"
         " `bicmp, and `fcmp return zero, respectively.\n"
-        "Symbol name comparisons are case and accent insensitive.\n"
+        "Symbol name comparisons are case- and accent-insensitive, except"
+        " inside ctables.\n"
         "Table entries that are `null are considered equivalent to"
         " absent ones.\n"
         "The graph of the container objects (pairs, vectors, symbols, and"

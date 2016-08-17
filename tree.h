@@ -23,123 +23,128 @@
 #define TREE_H
 
 #include <stdio.h>
-#include "calloc.h"
+
 #include "types.h"
 #include "utils.h"
 
-extern block_t parser_memory;
+extern struct alloc_block *parser_memory;
 
-typedef struct _component *component;
-typedef struct _constant *constant;
-typedef struct _pattern *pattern;
-
-typedef struct {
+struct str_and_len {
   size_t len;
-  char *str;
-} str_and_len_t;
+  char *str;			/* not NUL-terminated */
+};
 
-typedef struct _vlist {
-  struct _vlist *next;
+struct vlist {
+  struct vlist *next;
   const char *var;
   unsigned typeset;
   bool was_read, was_written;
   int lineno;
-} *vlist;
+};
 
-typedef struct _clist {
-  struct _clist *next;
-  component c;
-} *clist;
+struct clist {
+  struct clist *next;
+  struct component *c;
+};
 
-typedef struct _cstlist {
-  struct _cstlist *next;
-  constant cst;
-} *cstlist;
+struct cstlist {
+  struct cstlist *next;
+  struct constant *cst;
+};
 
-typedef struct _cstpair {
-  constant cst1, cst2;
-} *cstpair;
+struct cstpair {
+  struct constant *cst1, *cst2;
+};
 
-typedef struct {
+struct function {
   unsigned typeset;		/* Return type(s) */
-  str_and_len_t help;
-  vlist args;			/* Stored in reverse order! */
+  struct str_and_len help;
+  struct vlist *args;           /* Stored in reverse order! */
   bool varargs;			/* true if accepts arg vector;
                                    implies vlength(vargs) == 1 */
-  component value;
+  struct component *value;
   int lineno;
   const char *filename;         /* Name on disk */
   const char *nicename;         /* Pretty-printed file name */
   const char *varname;		/* Name of variable in which function is
                                    stored */
-} *function;
+};
 
-typedef struct {
-  vlist locals;
-  clist sequence;
+struct block {
+  struct vlist *locals;
+  struct clist *sequence;
   const char *filename;
   const char *nicename;
   int lineno;
   bool statics;                 /* true if 'locals' are in fact statics */
-} *block;
+};
 
 enum constant_class {
   cst_int, cst_string, cst_list, cst_array, cst_float, cst_bigint, cst_table,
-  cst_symbol, cst_expression
+  cst_ctable, cst_symbol, cst_expression
 };
 
-struct _constant {
+struct bigint_const {
+  int base;
+  bool neg;
+  char str[];
+};
+
+struct constant {
   enum constant_class vclass;
   union {
-    int integer;
-    str_and_len_t string;
+    long integer;
+    struct str_and_len string;
     double mudlle_float;
-    const char *bigint_str;
-    cstlist constants;          /* stored in reverse order; tail element is
-                                   first for vclass cst_list */
-    cstpair constpair;
-    component expression;       /* not an actual constant at all */
+    struct bigint_const *bigint;
+    struct cstlist *constants;  /* stored in reverse order; tail element
+                                   is first for vclass cst_list */
+    struct cstpair *constpair;
+    struct component *expression; /* not an actual constant at all */
   } u;
 };
 
-typedef struct _patternlist {
-  struct _patternlist *next;
-  pattern pat;
-} *patternlist;
-
-enum pattern_class {
-  pat_const, pat_list, pat_array, pat_symbol, pat_sink,
-  pat_expr
+struct pattern_list {
+  struct pattern_list *next;
+  struct pattern *pat;
 };
 
-struct _pattern {
+enum pattern_class {
+  pat_const, pat_list, pat_array, pat_symbol, pat_variable, pat_sink, pat_expr
+};
+
+struct pattern {
   enum pattern_class vclass;
   int lineno;
   union {
-    constant constval;
-    component expr;
+    struct constant *constval;
+    struct component *expr;
     struct {
-      patternlist patlist;
+      struct pattern_list *patlist;
       bool ellipsis;
     } l;
     struct {
       const char *name;
-      mtype type;
+      enum mudlle_type type;
+    } var;
+    struct {
+      struct pattern *name;
+      struct pattern *val;
     } sym;
   } u;
 };
 
-typedef struct _matchnode {
+struct match_node {
   const char *filename;
   int lineno;
-  pattern pattern;
-  component expression, condition;
-} *matchnode;
+  struct pattern *pattern;
+  struct component *expression, *condition;
+};
 
-typedef struct _matchnodelist {
-  struct _matchnodelist *next;
-  matchnode match;
-} *matchnodelist;
+struct match_node_list {
+  struct match_node_list *next;
+  struct match_node *match;
+};
 
 enum builtin_op {
   b_invalid = -1,
@@ -167,7 +172,7 @@ enum component_class {
 };
 
 #define FOR_PARSER_MODULE_FIELDS(op)                            \
-  op(class) op(name) op(imports) op(defines) op(reads)          \
+  op(class) op(name) op(requires) op(defines) op(reads)         \
   op(writes) op(statics) op(body) op(filename) op(nicename)
 
 enum parser_module_field {
@@ -177,26 +182,26 @@ enum parser_module_field {
   parser_module_fields
 };
 
-struct _component {
+struct component {
   enum component_class vclass;
   int lineno;
   union {
     struct {
       const char *symbol;
-      component value;
+      struct component *value;
     } assign;
     const char *recall;
-    constant cst;
-    function closure;
-    clist execute;		/* 1st element is fn, rest are args */
+    struct constant *cst;
+    struct function *closure;
+    struct clist *execute;		/* 1st element is fn, rest are args */
     struct {
       enum builtin_op fn;
-      clist args;
+      struct clist *args;
     } builtin;
-    block blk;
+    struct block *blk;
     struct {
       const char *name;
-      component expression;
+      struct component *expression;
     } labeled; /* also for exit */
   } u;
 };
@@ -204,87 +209,125 @@ struct _component {
 /* these are manually exported to mudlle from support.c */
 enum file_class { f_plain, f_module, f_library };
 
-typedef struct {
+struct mfile {
   enum file_class vclass;
   const char *name;
-  vlist imports, defines, reads, writes, statics;
-  block body;
+  struct vlist *requires, *defines, *reads, *writes, *statics;
+  struct block *body;
   int lineno;
-} *mfile;
+};
 
-mfile new_file(block_t heap, enum file_class vclass, const char *name,
-	       vlist imports, vlist defines, vlist reads, vlist writes,
-               vlist statics, block body, int lineno);
-function new_function(block_t heap, unsigned typeset, str_and_len_t help,
-                      vlist args, component val, int lineno,
-                      const char *filename, const char *nicename);
-function new_vfunction(block_t heap, unsigned typeset, str_and_len_t help,
-		       const char *arg, component val,
-		       int lineno, const char *filename,
-                       const char *anicename);
-block new_codeblock(block_t heap, vlist locals, clist sequence,
-		    const char *filename, const char *nicename, int lineno);
-block new_toplevel_codeblock(block_t heap, vlist statics, block body);
-clist new_clist(block_t heap, component c, clist next);
-cstpair new_cstpair(block_t heap, constant cst1, constant cst2);
-cstlist new_cstlist(block_t heap, constant cst, cstlist next);
-str_and_len_t *cstlist_find_symbol(cstlist list, str_and_len_t needle);
-vlist new_vlist(block_t heap, const char *var, unsigned typeset, int lineno,
-                vlist next);
-constant new_constant(block_t heap, enum constant_class vclass, ...);
-component new_component(block_t heap, int lineno, enum component_class vclass,
-                        ...);
-component new_binop_component(block_t heap, int lineno, enum builtin_op op,
-                              component e1, component e2);
+struct mfile *new_file(struct alloc_block *heap, enum file_class vclass,
+                       const char *name,
+                       struct vlist *requires, struct vlist *defines,
+                       struct vlist *reads, struct vlist *writes,
+                       struct vlist *statics, struct block *body, int lineno);
+struct function *new_function(struct alloc_block *heap, unsigned typeset,
+                              struct str_and_len help, struct vlist *args,
+                              struct component *val, int lineno,
+                              const char *filename, const char *nicename);
+struct function *new_vfunction(struct alloc_block *heap, unsigned typeset,
+                               struct str_and_len help, const char *arg,
+                               struct component *val, int lineno,
+                               const char *filename, const char *anicename);
+struct block *new_codeblock(struct alloc_block *heap, struct vlist *locals,
+                            struct clist *sequence, const char *filename,
+                            const char *nicename, int lineno);
+struct block *new_toplevel_codeblock(struct alloc_block *heap,
+                                     struct vlist *statics,
+                                     struct block *body);
+struct clist *new_clist(struct alloc_block *heap, struct component *c,
+                        struct clist *next);
+struct cstpair *new_cstpair(struct alloc_block *heap, struct constant *cst1,
+                    struct constant *cst2);
+struct cstlist *new_cstlist(struct alloc_block *heap, struct constant *cst,
+                            struct cstlist *next);
+bool cstlist_find_symbol_clash(struct cstlist *list, bool ctable,
+                               struct str_and_len **s0,
+                               struct str_and_len **s1);
+bool cstlist_has_len(struct cstlist *list, ulong len);
+struct vlist *new_vlist(struct alloc_block *heap, const char *var,
+                        unsigned typeset, int lineno, struct vlist *next);
+struct constant *new_constant(struct alloc_block *heap,
+                              enum constant_class vclass, ...);
+struct constant *new_int_constant(struct alloc_block *heap, long l);
+struct component *new_component(struct alloc_block *heap, int lineno,
+                                enum component_class vclass, ...);
+struct component *new_binop_component(struct alloc_block *heap, int lineno,
+                                      enum builtin_op op, struct component *e1,
+                                      struct component *e2);
 
-component new_int_component(block_t heap, long n);
+struct component *new_int_component(struct alloc_block *heap, long n);
 
-component new_pattern_component(block_t heap, pattern pat, component e);
-pattern new_pattern_constant(block_t heap, constant c, int lineno);
-pattern new_pattern_expression(block_t heap, component c);
-pattern new_pattern_symbol(block_t heap, const char *sym, mtype type,
-                           int lineno);
-pattern new_pattern_compound(block_t heap, enum pattern_class class,
-			     patternlist list, bool ellipsis, int lineno);
-pattern new_pattern_sink(block_t heap);
-patternlist new_pattern_list(block_t heap, pattern pat, patternlist tail);
+struct component *new_pattern_component(struct alloc_block *heap,
+                                        struct pattern *pat,
+                                        struct component *e);
+struct pattern *new_pattern_constant(struct alloc_block *heap,
+                                     struct constant *c, int lineno);
+struct pattern *new_pattern_expression(struct alloc_block *heap,
+                                       struct component *c);
+struct pattern *new_pattern_variable(struct alloc_block *heap, const char *sym,
+                                     enum mudlle_type type, int lineno);
+struct pattern *new_pattern_symbol(struct alloc_block *heap,
+                                   struct pattern *name, struct pattern *val,
+                                   int lineno);
+struct pattern *new_pattern_compound(struct alloc_block *heap,
+                                     enum pattern_class class,
+                                     struct pattern_list *list, bool ellipsis,
+                                     int lineno);
+struct pattern *new_pattern_sink(struct alloc_block *heap);
+struct pattern_list *new_pattern_list(struct alloc_block *heap,
+                                      struct pattern *pat,
+                                      struct pattern_list *tail);
 
-component new_match_component(block_t heap, component e,
-			      matchnodelist matches);
-component new_for_component(block_t heap, vlist vars,
-                            component einit,
-                            component eexit,
-                            component eloop,
-                            component e,
-                            const char *filename, int lineno);
-matchnodelist new_match_list(block_t heap, matchnode node, matchnodelist tail);
-matchnode new_match_node(block_t heap, pattern pat, component cond,
-			 component e, const char *filename, int lineno);
+struct component *new_match_component(struct alloc_block *heap,
+                                      struct component *e,
+                                      struct match_node_list *matches);
+struct component *new_for_component(struct alloc_block *heap,
+                                    struct vlist *vars,
+                                    struct component *einit,
+                                    struct component *eexit,
+                                    struct component *eloop,
+                                    struct component *e,
+                                    const char *filename, int lineno);
+struct match_node_list *new_match_list(struct alloc_block *heap,
+                                       struct match_node *node,
+                                       struct match_node_list *tail);
+struct match_node *new_match_node(struct alloc_block *heap,
+                                  struct pattern *pat,
+                                  struct component *cond, struct component *e,
+                                  const char *filename, int lineno);
 
-component new_xor_component(block_t heap, int lineno, component e0,
-                            component e1);
-component new_reference(block_t heap, int lineno, component e);
-component new_dereference(block_t heap, int lineno, component e);
-component new_assign_expression(block_t heap, component e0, enum builtin_op op,
-                                component e1, bool postfix, int lineno);
+struct component *new_xor_component(struct alloc_block *heap, int lineno,
+                                    struct component *e0,
+                                    struct component *e1);
+struct component *new_reference(struct alloc_block *heap, int lineno,
+                                struct component *e);
+struct component *new_dereference(struct alloc_block *heap, int lineno,
+                                  struct component *e);
+struct component *new_assign_expression(struct alloc_block *heap,
+                                        struct component *e0,
+                                        enum builtin_op op,
+                                        struct component *e1, bool postfix,
+                                        int lineno);
 
-/* Creates a deep copy of src into dest. The str member is xmalloc()ed. */
-void str_and_len_dup(str_and_len_t *dest, const str_and_len_t *src);
+/* Creates a deep copy of src into dest. The str member is malloc()ed. */
+void str_and_len_dup(struct str_and_len *dest, const struct str_and_len *src);
 
 #ifdef PRINT_CODE
-void print_mudlle_file(FILE *out, mfile f);
+void print_mudlle_file(FILE *out, struct mfile *f);
 #endif
 
-static inline clist reverse_clist(clist l)
+static inline struct clist *reverse_clist(struct clist *l)
 {
-  return reverse_list(l, struct _clist);
+  return reverse_list(l, struct clist);
 }
 
-static inline cstlist reverse_cstlist(cstlist l)
+static inline struct cstlist *reverse_cstlist(struct cstlist *l)
 {
-  return reverse_list(l, struct _cstlist);
+  return reverse_list(l, struct cstlist);
 }
 
-value mudlle_parse(block_t heap, mfile f);
+value mudlle_parse(struct alloc_block *heap, struct mfile *f);
 
 #endif /* TREE_H */

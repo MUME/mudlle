@@ -1552,8 +1552,8 @@ If you have a function which looks for an object in a room (by
 name) and does something if it finds it, you can simply write it like
 this:
 
-fn () // Take an object called "glorf" in room 1010
- [ | obj | obj = find_object_in(actor, 1010, "glorf");
+fn () // Take an object called "glorf" from actor's room
+ [ | obj | obj = find(null, null, "glorf", FIND_OBJ_ROOM);
    move_object(obj, actor) ]
 
 Theoretically, you should check that obj is not FALSE (no object

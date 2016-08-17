@@ -58,14 +58,15 @@ context (in that case the current value is in global variable x).
 
 #include <setjmp.h>
 
-#include "types.h"
+#include "error.h"
 #include "mvalues.h"
 
 
 enum call_trace_mode {
-  call_trace_off,
-  call_trace_barrier,
-  call_trace_on
+  call_trace_off,               /* call trace completely suppressed */
+  call_trace_barrier,           /* call trace to muderr/observers up to here */
+  call_trace_on,                /* complete call traces to everyone  */
+  call_trace_no_err             /* no call trace to muderr; only to watchers */
 };
 
 /* Function context */
@@ -108,13 +109,6 @@ static inline void ccontext_frame(const struct ccontext *cc,
   *spp = sp;
 }
 
-#endif
-
-#ifdef sparc
-struct ccontext {
-  ulong *frame_start;
-  ulong *frame_end;
-};
 #endif
 
 #endif /* USE_CCONTEXT */
@@ -164,36 +158,42 @@ enum call_class {
   call_c,                       /* primitives */
   call_primop,                  /* primitive_ext; for displaying
                                    stack traces only */
-  call_string                   /* a string description; for displaying
+  call_string,                  /* a string description; for displaying
                                    stack traces only*/
+  call_session,                 /* a new session */
+  call_invalid                  /* invalid interpreter call */
 };
+
 
 struct call_stack
 {
   struct call_stack *next;
   enum call_class type;
+};
+
+struct call_stack_mudlle {      /* used for call_bytecode */
+  struct call_stack s;
+  struct closure *fn;           /* Actual function */
+  struct icode *code;           /* The function's code */
+  struct vector *locals;	/* Local vars */
+  int nargs;                    /* -1 = don't know yet */
+  int offset;                   /* Instr. offset called from */
+};
+
+struct call_stack_c_header {
+  struct call_stack s;
   union {
-    struct {
-      struct closure *fn;	/* Actual function */
-      struct icode *code;       /* The function's code */
-      struct vector *locals;	/* Local vars */
-      int nargs;		/* -1 = don't know yet */
-      int offset;		/* Instr. offset called from */
-    } mudlle;
-
-    struct {
-      union {
-        struct primitive *prim;         /* for call_c */
-        const struct primitive_ext *op; /* for call_primop */
-        const char *name;               /* for call_string */
-      } u;
-      value args[MAX_PRIMITIVE_ARGS];
-      int nargs;
-    } c;
-
-    /* Compiled code information is up to each backend.
-       (i386 finds it using the shallow-bound ccontext stuff) */
+    struct primitive *prim;         /* for call_c */
+    const struct primitive_ext *op; /* for call_primop */
+    const char *name;               /* for call_string */
+    value value;                    /* for call_invalid */
   } u;
+  int nargs;
+};
+
+struct call_stack_c {
+  struct call_stack_c_header c;
+  value args[];
 };
 
 extern struct call_stack *call_stack;
@@ -206,7 +206,7 @@ static inline struct ccontext *next_ccontext(const struct ccontext *cc)
      the non-union field of struct call_stack, parent ccontext, and then invoke
      arguments. */
   return (struct ccontext *)((char *)(cc->frame_start - 3)
-                             - offsetof(struct call_stack, u)
+                             - sizeof (struct call_stack)
                              - sizeof *cc);
 }
 
@@ -223,41 +223,43 @@ static inline ulong *ccontext_argsend(const struct ccontext *cc)
 
 struct catch_context
 {
+  struct catch_context *parent;
+
+  jmp_buf exception;            /* the return point */
+
   /* How should call traces be shown if errors occur in this context ? */
   enum call_trace_mode call_trace_mode;
 
-  /* "Private" ifnromation */
-  struct catch_context *parent;
-  jmp_buf exception;		/* The return point */
-
-  /* Save values of constant/local/preserved M variables, to be able to restore
-     them after a throw(). In an ideal world, everything would be in the
-     call_stack ... */
+  /* Save values of constant/local/preserved mudlle variables, to be able to
+     restore them after a throw(). In an ideal world, everything would be in
+     the call_stack. */
   struct call_stack *old_call_stack;
   int old_stack_depth;
   struct gcpro *old_gcpro;
-  uword old_seclevel;
-  value old_maxseclevel;
-#ifdef AMIGA
-  struct vector *old_activation_stack;
-  int old_registers_valid;
-#endif
-  struct ccontext occontext;	/* Old code context */
+  struct ccontext old_ccontext;
 
-  struct mjmpbuf *_mjmpbuf;
+  struct mjmpbuf *mjmpbuf;
 };
 
 extern struct catch_context *catch_context;
 
-extern long exception_signal;	/* Last exception that occured, 0 for none */
-extern value exception_value;
-extern struct catch_context *exception_context;
+struct mexception {
+  enum mudlle_signal sig;       /* last exception or SIGNAL_NONE */
+  enum runtime_error err;       /* set if .sig == SIGNAL_ERROR */
+};
+extern struct mexception mexception;
 
-int mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode);
+static inline bool has_pending_exception(void)
+{
+  return mexception.sig != SIGNAL_NONE;
+}
+
+bool mcatch(void (*fn)(void *x), void *x,
+            enum call_trace_mode call_trace_mode);
 /* Effects: Executes fn(x) with error protection in place.
    Returns: true if all went well, false otherwise.
      If false, information on the exeception that occurred is in
-       exception_signal/exception_value.
+       exception_signal/exception_error.
      The execution environment is protected by this function, i.e.:
         stack
 	GC protection lists
@@ -274,15 +276,15 @@ typedef void *muser_t;
 
 struct session_context
 {
+  struct call_stack s;
   struct session_context *parent;
   struct oport *_mudout, *_muderr;
   muser_t _muduser;
   uword old_minlevel;
   uword old_maxseclevel;
   ulong old_xcount;
-  ulong call_count;
   ulong recursion_count;
-#ifdef i386
+#if defined i386 || defined __x86_64__
   ulong old_stack_limit;
 #endif
   struct gcpro *old_gcpro;
@@ -298,7 +300,7 @@ extern struct session_context *session_context;
 extern ulong xcount;			/* Loop detection */
 extern uword minlevel;			/* Minimum security level */
 
-#ifdef i386
+#if defined i386 || defined __x86_64__
 extern ulong hard_mudlle_stack_limit, mudlle_stack_limit;
 #endif
 
@@ -337,7 +339,7 @@ extern struct list *mudcalltrace;
 void remove_call_trace(value v);
 void add_call_trace(value v, bool unhandled_only);
 
-value mjmpbuf(void);
+value mjmpbuf(value *result);
 bool is_mjmpbuf(value buf);
 
 #endif

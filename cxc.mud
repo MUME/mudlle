@@ -22,6 +22,7 @@
 // Load compiled x86 compiler
 // Bootstrap via interpreter (load minimum for linker)
 garbage_collect(700000);
+
 load("lib.mud") &&
 load("link.mud") &&
 load("interface.mud") &&
@@ -29,8 +30,8 @@ load("interface.mud") &&
 [
   load_library = fn (s)
     [
-      dformat("loading %s\n", s);
-      fload(s + ".obj")
+      silent == true || dformat("loading %s\n", s);
+      fload(s + ".obj");
     ];
 ] &&
 

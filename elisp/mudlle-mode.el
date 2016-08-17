@@ -17,6 +17,13 @@
 ;; along with GNU Emacs; see the file COPYING.  If not, write to
 ;; the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
 
+
+(if (>= emacs-major-version 24)
+    (require 'cl-lib)
+  (require 'cl)
+  (defalias 'cl-case 'case)
+  (defalias 'cl-destructuring-bind 'destructuring-bind))
+
 (require 'help-mode)
 (require 'newcomment)
 
@@ -219,13 +226,21 @@ and LIMIT for `font-lock-mode'."
       (when (< start (line-beginning-position))
 	(put-text-property start (point) 'font-lock-multiline t)))))
 
+(defconst mudlle-header-keywords
+  '("library" "module" "requires" "reads" "writes" "static" "defines")
+  "Keywords used in the mudlle file headers.")
+
+(defconst mudlle-bol-keyword-regexp
+  (concat "^\\s-*" (regexp-opt mudlle-header-keywords 'symbols))
+  "Regular expression matching the mudlle file header keywords
+that should be indented at the beginning of the line. Its first
+parenthesized expression is the keyword.")
+
 (defconst mudlle-font-lock-keywords
-  (let* ((kw (regexp-opt '("fn" "if" "else" "while" "for"
-                           "exit" "loop" "match") 'words))
-	 (bol-kw (regexp-opt '("library" "module" "requires" "reads"
-                               "writes" "static" "defines") 'words)))
+  (let ((kw (regexp-opt '("fn" "if" "else" "while" "for"
+                          "exit" "loop" "match") 'words)))
     `(,kw
-      (,(concat "^\\s-*" bol-kw) . 1)
+      (,mudlle-bol-keyword-regexp . 1)
       (mudlle-fontify-local-vars)
       (,(concat "<[[:space:]\n]*\\(" mudlle-symbol-regexp "\\)[[:space:]\n]*>")
        (1 font-lock-constant-face))
@@ -348,8 +363,10 @@ if that value is non-nil."
   (setq mode-name "mudlle")
   (setq local-abbrev-table mudlle-mode-abbrev-table)
   (set-syntax-table mudlle-mode-syntax-table)
-  (set (make-local-variable 'paragraph-start) (concat "^$\\|" page-delimiter))
-  (set (make-local-variable 'paragraph-separate) paragraph-start)
+  (set (make-local-variable 'paragraph-start)
+       (concat "\\[$\\|\f\\|[ \t]*\\(?:"
+               (regexp-opt mudlle-header-keywords) "\\)"))
+  (set (make-local-variable 'paragraph-separate) "[ \t]*$")
   (set (make-local-variable 'paragraph-ignore-fill-prefix) t)
   (set (make-local-variable 'indent-line-function) 'mudlle-indent-line)
   (set (make-local-variable 'require-final-newline) t)
@@ -535,7 +552,7 @@ Returns nil if line starts inside a string, t if in a comment."
       (cond ((or (nth 3 state) (nth 4 state))
 	     ;; return nil or t if should not change this line
 	     (nth 4 state))
-	    ((looking-at "^\\s-*\\(library\\|module\\|requires\\|defines\\|reads\\|writes\\)\\_>")
+	    ((looking-at mudlle-bol-keyword-regexp)
 	     0)
 	    ((null containing-sexp)
 	     ;; Line is at top level.  May be data or function definition,
@@ -775,8 +792,9 @@ the file specified by `mudlle-function-data-file'")
   (interactive "p")
   (mudlle-apropos-next (if arg (- arg) -1)))
 
-(defun mudlle-apropos (regexp)
-  "Search for mudlle functions"
+(defun mudlle-apropos (regexp &optional name-only)
+  "Search for mudlle symbols whose name or documentation matches REGEXP.
+If name-only is non-nil, only match the symbol names."
   (interactive "sApropos mudlle function (regexp): ")
   (switch-to-buffer (get-buffer-create "*mudlle-apropos*"))
   (toggle-read-only 0)
@@ -811,14 +829,14 @@ the file specified by `mudlle-function-data-file'")
   (cond ((numberp line)
          (goto-char (point-min))
          (forward-line (1- line)))
-        ((or (re-search-forward (concat "\\<"
-                                        (regexp-quote line)
-                                        "\\s-*=[^=]")
-                                nil t)
-             (re-search-forward (concat "\\<document\\s-*(\\s-*\""
-                                        (regexp-quote line)
-                                        "\"")
-                                nil t))
+        ((save-excursion
+           (goto-char (point-min))
+           (let ((line-re (regexp-quote line)))
+             (or (re-search-forward (concat "\\<" line-re "\\s-*=[^=]")
+                                    nil t)
+                 (re-search-forward (concat "\\<document\\s-*(\\s-*\""
+                                            line-re "\"")
+                                    nil t))))
          (goto-char (match-beginning 0)))))
 
 (if (< emacs-major-version 22)
@@ -836,7 +854,11 @@ the file specified by `mudlle-function-data-file'")
 
   (define-button-type 'mudlle-help
     :supertype 'help-xref
-    'help-function 'mudlle-help))
+    'help-function 'mudlle-help)
+
+  (define-button-type 'mudlle-apropos
+    :supertype 'help-xref
+    'help-function 'mudlle-apropos))
 
 (defun mudlle-symbol-at-point ()
   (let ((beg (mudlle-find-symbol-start)))
@@ -867,48 +889,59 @@ the file specified by `mudlle-function-data-file'")
   (let ((ahelp (or (assoc-string keyword mudlle-functions t)
                    (error "No help on `%s'" keyword))))
     (message "Formatting help text...")
+
+    (let ((help-xref-following t)
+          (buf (get-buffer "*Mudlle help*")))
+      (when buf
+        (with-current-buffer buf
+          (help-setup-xref (list 'mudlle-help keyword) (interactive-p)))))
+
     (with-output-to-temp-buffer "*Mudlle help*"
-      (let ((type (cddr ahelp)))
-        (princ (format "%s is a " (car ahelp)))
+      (set-buffer standard-output)
+      (cl-destructuring-bind ((name help type
+				    &optional file line library seclev)
+			      path)
+          (list ahelp mudlle-c-source-path)
+        (princ (format "%s is a " name))
 
-        (set-buffer standard-output)
+        (cl-destructuring-bind (typename is-primitive)
+            (cl-case type
+              (closure   (if (and mudlle-c-source-path
+                                   (string-match "^compiler/" file))
+                              (setq file (concat "mudlle/"
+                                                 (substring file 9)))
+                            (setq path mudlle-source-path))
+                          '("closure" nil))
+               (primitive '("primitive" t))
+               (varargs   '("vararg primitive" t))
+               (secure    `(,(format "secure %d primitive" seclev) t))
+               (variable  (setq line name
+                                path mudlle-source-path)
+                          '("variable" nil))
+               (t         '("something weird" nil)))
 
-        (let (typename
-              (path mudlle-c-source-path)
-              (file (cadr type))
-              (line (car (cddr type))))
-          (cond ((eq (car type) 'closure)
-                 (setq typename "closure")
-                 (if (and mudlle-c-source-path
-                          (string-match "^compiler/" file))
-                     (setq file (concat "mudlle/" (substring file 9)))
-                   (setq path mudlle-source-path))
-                 )
-                ((eq (car type) 'primitive)
-                 (setq typename "primitive"))
-                ((eq (car type) 'varargs)
-                 (setq typename "vararg primitive"))
-                ((eq (car type) 'secure)
-                 (setq typename (format "secure %s primitive"
-                                        (cadr (cddr type)))))
-                ((eq (car type) 'variable)
-                 (setq typename "variable"
-                       line (car ahelp)
-                       path mudlle-source-path))
-                (t
-                 (setq typename "something weird")))
-
-          (when (symbolp file)
-            (setq file (format "the %s module" file)
-                  path nil))
-
-          (princ typename)
-          (when file
-            (princ (format " in %s" file))
-            (when path
-              (save-excursion
-                (when (re-search-backward (regexp-quote file))
-                  (mudlle-find-file-button path file line))))))
+          (cl-destructuring-bind ((built-in prefix) (infix desc suffix))
+              (list (cond (is-primitive
+                           '("" ""))
+                          ((eq library t)
+                           `("built-in "
+                             ,(if (and (eq type 'variable) file)
+                                  " documented"
+                                "")))
+                          (t '("" "")))
+                    (if (stringp library)
+                        `("the " ,library " library")
+                      `("" ,file "")))
+            (princ built-in)
+            (princ typename)
+            (princ prefix)
+            (when desc
+              (princ (format " in %s%s" infix desc))
+              (when path
+                (save-excursion
+                  (when (re-search-backward (regexp-quote desc))
+                    (mudlle-find-file-button path file line))))
+              (princ suffix))))
 
         (princ "\n\n")
 
@@ -932,12 +965,23 @@ the file specified by `mudlle-function-data-file'")
               (delete-region start (point))
               (setq text (apply 'concat (nreverse text)))
 
-              (if (assoc-string text mudlle-functions t)
-                  (help-insert-xref-button text 'mudlle-help text)
-                (insert text)
-                (put-text-property start (point)
-                                   'face mudlle-help-highlight-face)))
-            (help-setup-xref (list 'mudlle-help keyword) (interactive-p)))
+              (cond ((assoc-string text mudlle-functions t)
+                     (help-insert-xref-button text 'mudlle-help text))
+                    ((let ((case-fold-search t))
+                       (when (string-match "\\`\\(.*\\)xxx\\'" text)
+                         (let ((prefix (match-string 1 text)))
+                           (when (assoc-if
+                                  (lambda (s) (string-prefix-p prefix s))
+                                  mudlle-functions)
+                             (help-insert-xref-button
+                              text
+                              'mudlle-apropos
+                              (concat "\\`" (regexp-quote prefix))
+                              t)
+                             t)))))
+                     (t (insert text)
+                       (put-text-property start (point)
+                                          'face mudlle-help-highlight-face)))))
 
           ;; line wrap
           (goto-char start)
@@ -967,7 +1011,8 @@ the file specified by `mudlle-function-data-file'")
                               (delete-char -1)
                               (insert-char ?\  1))))))
               (when c
-                (backward-char (- col word))
+                (when (> word tab)
+                  (backward-char (- col word)))
                 ;; remove trailing whitespace
                 (when (looking-back " +" nil t)
                   (delete-char (- (match-beginning 0) (match-end 0))))

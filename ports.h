@@ -35,6 +35,7 @@ struct oport_stat {
     oport_type_string,
     oport_type_file,
     oport_type_user,
+    oport_type_sink
   } type;
   size_t size;
 };
@@ -69,13 +70,17 @@ value make_file_oport(FILE *f);
      Also there is no report of any errors that may occur on f
 */
 
-typedef struct {
-  void (*write)(const char *str, size_t len, value data);
+struct line_oport_methods {
+  /* the contents of 'str' can mutate across calls to swrite() */
+  void (*swrite)(struct string *str, size_t len, value data);
   void (*stat)(struct oport_stat *buf, value data);
-} line_oport_methods_t;
-value make_line_oport(const line_oport_methods_t *methods, value data);
+};
+/* call pflush(oport) when done printing to a line oport */
+value make_line_oport(const struct line_oport_methods *methods, value data);
 
-struct string *port_string(struct oport *p);
+value make_sink_oport(void);
+
+struct string *port_string(struct oport *p, size_t maxlen);
 /* Returns: A mudlle string representing all the data send to port p.
    Requires: p be a string-type output port
 */
@@ -93,6 +98,8 @@ bool port_is_empty(struct oport *p);
 
 void empty_string_oport(struct oport *_p);
 
+void string_port_copy(char *s, struct oport *p, size_t maxlen);
+
 ssize_t string_port_search(struct oport *p, int c);
 
 void port_append(struct oport *p1, struct oport *p2);
@@ -109,9 +116,9 @@ void port_append_substring(struct oport *p1, struct oport *p2,
    Requires: p2 be a string-type output port */
 
 /* Call f(data, buf, len) for each data block in string port p, or
-   until f() returns false */
-void port_for_blocks(struct oport *p,
-                     bool (*f)(void *data, const char *buf, size_t len),
+   until f() returns false. Returns true iff all f() returned true. */
+bool port_for_blocks(struct oport *p,
+                     bool (*f)(void *data, struct string *str, size_t len),
                      void *data);
 
 void port_append_escape(struct oport *p1, struct oport *p2, int esc);
@@ -157,7 +164,7 @@ static inline void pputs(const char *s, struct oport *op)
 static inline void opstat(struct oport *op, struct oport_stat *buf)
 {
   const struct oport_methods *m = oport_methods(op);
-  if (m) m->stat(op, buf);
+  m->stat(op, buf);
 }
 
 static inline void pswrite_substring(struct oport *op, struct string *s,
@@ -190,18 +197,17 @@ struct string *msprintf(const char *s, ...)
 size_t string_port_length(struct oport *oport);
 bool is_string_port(struct oport *oport);
 
-/* integers are 31 bits long, in base 2 this makes 31 characters +
-   sign + null byte + 1 for luck */
-#define INTSTRSIZE 34
+/* integer bits + sign + null */
+#define INTSTRSIZE (CHAR_BIT * sizeof (ulong) + 1 + 1)
 
-char *int2str(char *str, int base, ulong n, bool is_signed);
-/* Requires: base in [2, 8, 10, 16]; str be have at least INTSTRSIZE characters
+char *inttostr(char str[static INTSTRSIZE], int base, ulong n, bool is_signed);
+/* Requires: base in [2, 8, 10, 16]; str to have at least INTSTRSIZE characters
    Effects: Prints the ASCII representation of n in base base to the
      string str.
      If is_signed is true, n is actually a signed long
    Returns: A pointer to the start of the result.
 */
-char *int2str_wide(char *str, ulong n, bool is_signed);
+char *inttostr_wide(char str[static INTSTRSIZE], ulong n, bool is_signed);
 
 void ports_init(void);
 

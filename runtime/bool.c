@@ -20,36 +20,41 @@
  */
 
 #include <string.h>
+
+#include "bool.h"
 #include "runtime.h"
 
-TYPEDOP(not, "!", "`b1 -> `b2. `b2 = !`b1", 1, (value v),
+TYPEDOP(not, "!", "`b1 -> `b2. Returns the logical negation of `b1.",
+        1, (value v),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(isfalse(v));
 }
 
-TYPEDOP(or, "||", "`b1 `b2 -> `b3. Returns `b1 || `b2", 2, (value v1, value v2),
+TYPEDOP(or, "||", "`b1 `b2 -> `b3. Returns `b1 logical or `b2.",
+        2, (value v1, value v2),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
   return makebool(istrue(v1) || istrue(v2));
 }
 
-TYPEDOP(and, "&&", "`b1 `b2 -> `b3. Returns `b1 && `b2",
+TYPEDOP(and, "&&", "`b1 `b2 -> `b3. Returns `b1 logical and `b2.",
         2, (value v1, value v2),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
   return makebool(istrue(v1) && istrue(v2));
 }
 
-TYPEDOP(equal, "==", "`x1 `x2 -> `b. TRUE if `x1 and x2 `are the same object",
+TYPEDOP(equal, "==", "`x1 `x2 -> `b. Returns true if `x1 and `x2"
+        " are both null, the same integer, or the same object.",
         2, (value v1, value v2),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {
   return makebool(v1 == v2);
 }
 
-TYPEDOP(not_equal, "!=", "`x1 `x2 -> `b. TRUE if `x1 and `x2 are different"
-        " objects",
+TYPEDOP(not_equal, "!=", "`x1 `x2 -> `b. Returns true unless `x1 and `x2"
+        " are both null, the same integer, or the same object.",
         2, (value v1, value v2),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "xx.n")
 {

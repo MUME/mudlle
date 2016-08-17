@@ -21,10 +21,11 @@
 
 #include <string.h>
 
+#include "alloc.h"
+#include "error.h"
 #include "objenv.h"
 #include "print.h"
-
-#include "runtime/runtime.h"
+#include "stack.h"
 
 #define STACK_SIZE 256
 #define LARGE_STACK 1024

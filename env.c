@@ -20,43 +20,52 @@
  */
 
 #include <string.h>
+
+#include "calloc.h"
+#include "code.h"
 #include "env.h"
 #include "global.h"
+#include "ins.h"
+#include "tree.h"
 
 struct locals_list
 {
   struct locals_list *next;
   uword index;
-  vlist locals;
+  struct vlist *locals;
   bool statics;
 };
 
 struct env_stack
 {
-  fncode fn;
+  struct fncode *fn;
   struct env_stack *next, *prev;
   struct locals_list *locals;
   uword size, max_size;		/* Current & max length of locals */
   uword loop_depth;             /* Counts loop layers */
-  varlist closure;
+  struct variable_list *closure;
 };
 
 static struct env_stack *env_stack;
 
-static varlist new_varlist(block_t heap, variable_class vclass,
-			   ulong offset, varlist next)
+static struct variable_list *new_varlist(struct alloc_block *heap,
+                                         enum variable_class vclass,
+                                         ulong offset,
+                                         struct variable_list *next)
 {
-  varlist newp = allocate(heap, sizeof *newp);
-
-  newp->next = next;
-  newp->vclass = vclass;
-  newp->offset = offset;
-
+  struct variable_list *newp = allocate(heap, sizeof *newp);
+  *newp = (struct variable_list){
+    .next   = next,
+    .vclass = vclass,
+    .offset = offset
+  };
   return newp;
 }
 
-static struct locals_list *new_locals_list(block_t heap, vlist vars, uword idx,
-					   struct locals_list *next, bool statics)
+static struct locals_list *new_locals_list(struct alloc_block *heap,
+                                           struct vlist *vars, uword idx,
+                                           struct locals_list *next,
+                                           bool statics)
 {
   struct locals_list *newp = allocate(heap, sizeof *newp);
 
@@ -68,7 +77,7 @@ static struct locals_list *new_locals_list(block_t heap, vlist vars, uword idx,
   return newp;
 }
 
-uword vlist_length(vlist scan)
+static uword vlist_length(struct vlist *scan)
 {
   uword nlocals = 0;
 
@@ -82,7 +91,7 @@ void env_reset(void)
   env_stack = NULL;
 }
 
-void env_push(vlist locals, fncode fn)
+void env_push(struct vlist *locals, struct fncode *fn)
 {
   struct env_stack *newp = allocate(fnmemory(fn), sizeof *newp);
 
@@ -100,9 +109,9 @@ void env_push(vlist locals, fncode fn)
   env_stack = newp;
 }
 
-varlist env_pop(uword *nb_locals)
+struct variable_list *env_pop(uword *nb_locals)
 {
-  varlist closure = env_stack->closure;
+  struct variable_list *closure = env_stack->closure;
 
   *nb_locals = env_stack->max_size;
   env_stack = env_stack->next;
@@ -110,7 +119,7 @@ varlist env_pop(uword *nb_locals)
   return closure;
 }
 
-void env_block_push(vlist locals, bool statics)
+void env_block_push(struct vlist *locals, bool statics)
 {
   /* Add locals */
   env_stack->locals = new_locals_list(fnmemory(env_stack->fn), locals,
@@ -150,31 +159,33 @@ void env_end_loop(void)
   --env_stack->loop_depth;
 }
 
-static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
+static enum variable_class env_close(struct env_stack *env, ulong pos,
+                                ulong *offset)
 /* Effects: Adds local variable pos of environment env to all closures
      below it in the env_stack.
-   Returns: local_var if env is the last environment on the stack,
-     closure_var otherwise.
+   Returns: vclass_local if env is the last environment on the stack,
+     vclass_closure otherwise.
      *offset is the offset in the closure or local variables at which
      the local variable <env,pos> can be found by the function whose
      environement is env_stack.
 */
 {
   struct env_stack *subenv;
-  variable_class vclass = local_var;
+  enum variable_class vclass = vclass_local;
 
   /* Add <env,pos> to all environments below env */
   for (subenv = env->prev; subenv; subenv = subenv->prev)
     {
-      varlist *closure;
+      struct variable_list **closure;
       ulong coffset;
       int found = false;
 
       /* Is <class,pos> already in closure ? */
       for (coffset = 0, closure = &subenv->closure; *closure;
 	   coffset++, closure = &(*closure)->next)
-	if (vclass == (*closure)->vclass && pos == (*closure)->offset) /* Yes ! */
+	if (vclass == (*closure)->vclass && pos == (*closure)->offset)
 	  {
+            /* Yes ! */
 	    found = true;
 	    break;
 	  }
@@ -184,16 +195,16 @@ static variable_class env_close(struct env_stack *env, ulong pos, ulong *offset)
 
       /* Copy reference to this closure position into <class,pos> */
       /* This is how the variable will be named in the next closure */
-      vclass = closure_var;
+      vclass = vclass_closure;
       pos = coffset;
     }
   *offset = pos;
   return vclass;
 }
 
-variable_class env_lookup(const char *name, ulong *offset,
-			  bool do_read, bool do_write,
-                          bool *is_static)
+enum variable_class env_lookup(const char *name, ulong *offset,
+                               bool do_read, bool do_write,
+                               bool *is_static)
 {
   *is_static = false;
   if (strncasecmp(name, GLOBAL_ENV_PREFIX, strlen(GLOBAL_ENV_PREFIX)) == 0)
@@ -207,7 +218,9 @@ variable_class env_lookup(const char *name, ulong *offset,
              scope = scope->next)
           {
             ulong pos = scope->index;
-            for (vlist vars = scope->locals; vars; pos++, vars = vars->next)
+            for (struct vlist *vars = scope->locals;
+                 vars;
+                 pos++, vars = vars->next)
               if (strcasecmp(name, vars->var) == 0)
                 {
                   if (do_read)
@@ -222,5 +235,5 @@ variable_class env_lookup(const char *name, ulong *offset,
 
   /* Not found, is global */
   *offset = global_lookup(name);
-  return global_var;
+  return vclass_global;
 }

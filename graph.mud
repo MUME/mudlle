@@ -23,7 +23,7 @@ library graph // A generic directed graph type, with support for typical graph a
 requires system, sequences
 defines new_graph, graph_add_node, graph_remove_node,
   graph_add_edge, graph_remove_edge, graph_nodes, graph_nodes_apply,
-  graph_node_graph, graph_node_get, graph_node_set!,
+  graph_nodes_exists?, graph_node_graph, graph_node_get, graph_node_set!,
   graph_edges_in, graph_edges_out, graph_edges_in_apply, graph_edges_out_apply,
   graph_edge_from, graph_edge_to, graph_edge_get, graph_edge_set!,
   graph_clear_all_marks, graph_mark_node, graph_unmark_node, graph_node_marked?,
@@ -121,16 +121,16 @@ graph_nodes = fn "graph -> `l. Returns list of nodes of `graph" (vector g)
     l
   ];
 
-graph_nodes_apply = fn "`f `graph -> `l. Applies `f to the of nodes of `graph" (function f, vector g)
-  [
-    | dl |
-    dl = g[0];
+graph_nodes_apply = fn "`f `graph -> . Applies `f(`node) to the of nodes of `graph" (function f, vector g)
+  for (| dl | dl = g[0]; dl; dl = dl[1])
+    f(dl);
 
-    while (dl)
-      [
-	f(dl);
-	dl = dl[1];
-      ];
+graph_nodes_exists? = fn "`f `graph -> `x. Returns the first node in `graph for which `f(`node) is true, or false" (function f, vector g)
+  [
+    for (| dl | dl = g[0]; dl; dl = dl[1])
+      if (f(dl))
+        exit<function> dl;
+    false
   ];
 
 graph_node_graph = fn "`node -> `graph. Returns `node's `graph" (vector n) n[2];

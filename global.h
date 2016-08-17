@@ -25,6 +25,10 @@
 #include "module.h"
 #include "objenv.h"
 
+/* if you change this, make sure to fix the lexer too */
+#define GLOBAL_ENV_PREFIX ":"
+#define MAX_VARIABLE_LENGTH 1024 /* max characters in a variable name */
+
 extern struct env *environment;
 extern struct vector *env_values;
 extern struct vector *mvars;
@@ -52,11 +56,6 @@ void global_init(void);
 /* Effects: Initialises the global environment before use.
 */
 
-struct list *global_list(void);
-/* Returns: List of symbols representing all the global variables.
-     The value cell of each symbol contains the variables number
-*/
-
 #define GVAR(offset) (env_values->data[(offset)])
 /* Returns: The global value at 'offset'
 */
@@ -73,7 +72,7 @@ struct list *global_list(void);
 */
 
 void check_global_read(ulong goffset);
-void check_global_write(ulong goffset);
+void check_global_write(ulong goffset, value val);
 /* Errors out if the calling code is not allowed to access that global.
    NB: adjust x86builtins.S if you change this declaration.
 */

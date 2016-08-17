@@ -22,10 +22,9 @@
 #ifndef ERROR_H
 #define ERROR_H
 
-#include <setjmp.h>
 #include "mudlle.h"
 
-typedef enum {
+enum runtime_error {
 /* end mudlle const */
   error_none = -1,
 /* start mudlle const */
@@ -46,42 +45,46 @@ typedef enum {
   error_compile,
   error_abort,
   last_runtime_error
-} runtime_errors;
+};
 
 /* end mudlle const */
-#define SIGNAL_ERROR   1
-#define SIGNAL_LONGJMP 2
-#define SIGNAL_RETURN  3
+enum mudlle_signal {
+  SIGNAL_NONE,
+  SIGNAL_ERROR,
+  SIGNAL_LONGJMP
+};
 
 extern const char *const mudlle_errors[];
 extern int suppress_extra_calltrace;
 
-void error_init(void);
-
-void interpreted_early_runtime_error(runtime_errors error) NORETURN;
+void interpreted_early_runtime_error(enum runtime_error error) NORETURN;
 /* Effects: Runtime error 'error' has occured. Dump the call_stack to
      mudout & throw back to the exception handler with SIGNAL_ERROR
-     and the error code in exception_value.
+     and the error code in exception_error.
      Call this function instead of runtime_error if the arguments of the
      function at the top of call_stack are still on the stack.
    Note: Never returns
 */
-void compiled_early_runtime_error(runtime_errors error, int nargs) NORETURN;
+void compiled_early_runtime_error(enum runtime_error error, int nargs)
+  NORETURN;
 /* As above, but there are nargs arguments on the native stack. */
 
-void runtime_error(runtime_errors error) NORETURN;
+void runtime_error(enum runtime_error error) NORETURN;
 /* Effects: Runtime error 'error' has occured in a primitive operation.
      Dump the call_stack (plus the primitive operation call) to
      mudout & throw back to the exception handler with SIGNAL_ERROR
-     and the error code in exception_value.
+     and the error code in exception_error.
 */
 
+void runtime_warning(const char *msg);
+
 struct primitive_ext;
-void primitive_runtime_error(runtime_errors error,
+void primitive_runtime_error(enum runtime_error error,
                              const struct primitive_ext *op,
                              int nargs, ...) NORETURN;
-
-void runtime_warning(const char *msg);
+void primitive_runtime_warning(const char *msg,
+                               const struct primitive_ext *op,
+                               int nargs, ...);
 
 struct vector *get_mudlle_call_trace(bool lines);
 

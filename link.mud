@@ -22,6 +22,7 @@
 library link // A linker.
 requires compiler, vars, system, sequences, misc
 defines mc:prelink, mc:display_as
+reads mc:describe_seclev
 writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 [
 
@@ -37,8 +38,10 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
     depend_immutable, depend_primitive, depend_type,
     depend_closure, depend_value, depend_vstatus, dependency,
     check_dependency, check_present, map, foreach, pmodule_protect,
+    pmodule_class, pmodule_reads,
     set_this_filenames,
-    prelinked_fns, myassq |
+    prelinked_fns, myassq,
+    describe_seclev |
 
   myassq = assq;
 
@@ -52,12 +55,12 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
   // the generated code, and updates the module's status.
 
   // prelinked module structure (similar to module):
-  // pmodule_class = 0;		// module class
+  pmodule_class = 0;		// module class
   pmodule_protect = 1;		// true if module should be protected
   pmodule_name = 2;		// module name (or false)
   pmodule_imports = 3;		// dependencies (details below)
   pmodule_defines = 4;		// defined symbols (list of string)
-  // pmodule_reads = 5;		// read symbols (list of string) -- unused
+  pmodule_reads = 5;		// read symbols (list of string)
   pmodule_writes = 6;		// written symbols (list of string)
   pmodule_body = 7;		// top-level function (prelinked function)
   prelinked_module_fields = 8;
@@ -110,6 +113,12 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
   append! = lappend!;
   map = lmap;
   foreach = lforeach;
+
+  describe_seclev = fn (int lev)
+    if (function?(mc:describe_seclev))
+      mc:describe_seclev(lev)
+    else
+      lev;
 
   mc:display_as = fn "`v -> . Displays GNU assembler corresponding to prelinked object file `v." (prelink)
     [
@@ -251,14 +260,14 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 
   // false - failed linking
   // null  - failed running
-  // true  - ok
+  // (true . result)  - ok
   mc:linkrun = fn (prelinked_module, seclev, reload)
     [
       | res, mname |
 
       mname = prelinked_module[pmodule_name];
       if (!reload && mname && module_status(mname) != module_unloaded)
-	exit<function> true;
+	exit<function> '(,true . ());
 
       res = false;
       mc:erred = false;
@@ -272,12 +281,18 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
               seen_code = null;
 	      code = make_code(prelinked_module[pmodule_body], seclev, true);
               seen_code = null;
-	      res = true;
-	      trap_error(code, fn (n) res = null, call_trace_barrier, true)
+              res = true;
+              | val |
+	      val = with_maxseclevel(
+                seclev,
+                fn() trap_error(code, fn (n) res = null,
+                                call_trace_barrier, true));
+              if (res == true)
+                res = true . val;
 	    ];
 
 	  if (mname)
-	    if (res == true && prelinked_module[pmodule_protect])
+	    if (pair?(res) && prelinked_module[pmodule_protect])
 	      [
 		module_set!(mname, module_protected, seclev);
 		// check immutability, otherwise dependencies on immutable
@@ -286,7 +301,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	      ]
 	    else
 	      module_set!(mname,
-			  if (res == true) module_loaded else module_error,
+			  if (pair?(res)) module_loaded else module_error,
 			  seclev);
 	];
 
@@ -320,7 +335,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
           || vlength(m[pmodule_body]) != prelinked_function_fields
           || !vector?(m[pmodule_body][pfn_arg_typesets]))
         [
-          dformat("%s: object file has bad version%n", m[pmodule_name]);
+          dformat("%s: object file has bad version\n", m[pmodule_name]);
           exit<function> false;
         ];
 
@@ -333,14 +348,35 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	  // unload it
 	  if (module_seclevel(mname) > seclev)
 	    [
-	      dformat("cannot unload module %s (seclevel %s vs %s)%n",
-                      mname, module_seclevel(mname), seclev);
+	      dformat("cannot unload module %s (seclevel %s > %s)\n",
+                      mname, describe_seclev(module_seclevel(mname)),
+                      describe_seclev(seclev));
 	      exit<function> false;
 	    ];
 	  if (!module_unload(mname))
-	    exit<function> false; // can't unload, stop
+            [
+              dformat("cannot unload protected module %s\n", mname);
+              exit<function> false;
+            ];
 	  module_set!(mname, module_loading, seclev);
 	];
+
+      if (seclev < SECLEVEL_GLOBALS)
+        [
+          if (m[pmodule_class] == mc:m_plain)
+            mc_error("cannot create 'plain' modules at seclevel %s"
+                     +" (use a module or lib instead)",
+                     describe_seclev(seclev));
+
+          if (m[pmodule_writes] != null)
+            mc_error("cannot write globals at seclevel %s",
+                     describe_seclev(seclev));
+
+          if (m[pmodule_reads] != null)
+            mc_error("cannot read globals at seclevel %s",
+                     describe_seclev(seclev));
+        ];
+
 
       // load & check imported modules
       table_foreach
@@ -524,7 +560,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       vector(mod[mc:m_class],
              !!protect,
              mod[mc:m_name],
-             dependencies(mod[mc:m_imports]),
+             dependencies(mod[mc:m_requires]),
              lmap(fn (v) v[mc:mv_name], mod[mc:m_defines]),
              lmap(fn (v) v[mc:mv_name], mod[mc:m_reads]),
              lmap(fn (v) v[mc:mv_name], mod[mc:m_writes]),
@@ -657,7 +693,8 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       if (type == type_primitive || type == type_varargs
           || type == type_secure)
 	vector(name, depend_primitive, type, primitive_nargs(val),
-               primitive_flags(val), primitive_type(val))
+               primitive_flags(val) & ~COMPILER_SAFE_OP_FLAGS,
+	       primitive_type(val))
       else if (type == type_closure)
         vector(name,
                depend_closure | immutable_flag,
@@ -706,7 +743,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	[
 	  if (typeof(val) != d[2] ||
 	      primitive_nargs(val) != d[3] ||
-	      d[4] & ~primitive_flags(val) ||
+	      d[4] & ~COMPILER_SAFE_OP_FLAGS & ~primitive_flags(val) ||
               !equal?(d[5], primitive_type(val)))
 	    mc_error("primitive %s has suffered an incompatible change", name);
 	]

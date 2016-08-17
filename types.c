@@ -19,26 +19,31 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <string.h>
 #include <ctype.h>
-#include <stdlib.h>
 #include <errno.h>
 #include <math.h>
-#include "alloc.h"
+#include <stdlib.h>
+#include <string.h>
 
-const char *const mtypenames[] = {
+#include "alloc.h"
+#ifdef ALLOC_STATS
+#include "context.h"
+#endif
+#include "error.h"
+#include "mvalues.h"
+#include "types.h"
+
+
+const char *const mudlle_type_names[] = {
   "code",   "closure", "variable", "internal",  "primitive", "varargs",
   "secure", "integer", "string",   "vector",    "pair",      "symbol",
   "table",  "private", "object",   "character", "gone",      "oport",
   "mcode",  "float",   "bigint",   "reference", "null",
   "none",   "any",     "function", "list"
 };
-CASSERT_VLEN(mtypenames, last_synthetic_type);
+CASSERT_VLEN(mudlle_type_names, last_synthetic_type);
 
 #ifdef ALLOC_STATS
-
-#define ALLOC_PAIR_STATS
-#define ALLOC_VARIABLE_STATS
 
 struct file_line
 {
@@ -56,9 +61,7 @@ struct file_line_stats
   struct file_line **slots;
 };
 
-static struct file_line_stats closure_alloc_stats;
-static struct file_line_stats pair_alloc_stats;
-static struct file_line_stats variable_alloc_stats;
+static struct file_line_stats type_alloc_stats[last_type];
 
 static unsigned str_int_hash(const char *str, int line)
 {
@@ -71,50 +74,36 @@ static unsigned str_int_hash(const char *str, int line)
   return key;
 }
 
-struct vector *file_line_stat_vector(struct file_line_stats *stats)
+struct vector *get_alloc_stats(void)
 {
-  struct vector *res = alloc_vector(stats->used);
+  int entries = 0;
+  for (enum mudlle_type t = 0; t < last_type; ++t)
+    entries += type_alloc_stats[t].used;
+
+  struct vector *res = alloc_vector(entries);
   struct vector *vec = NULL;
 
   int used = 0;
 
   GCPRO2(res, vec);
-  for (int i = 0; i < stats->size; ++i) {
-    struct file_line *fl;
+  for (enum mudlle_type t = 0; t < last_type; ++t)
+    for (int i = 0; i < type_alloc_stats[t].size; ++i)
+      for (struct file_line *fl = type_alloc_stats[t].slots[i];
+           fl; fl = fl->next)
+        {
+          vec = alloc_vector(5);
+          SET_VECTOR(vec, 0, alloc_string(fl->file));
+          vec->data[1] = makeint(fl->line);
+          vec->data[2] = makeint(t);
+          vec->data[3] = makeint(fl->count);
+          vec->data[4] = makeint(fl->size);
+          fl->count = fl->size = 0;
 
-    for (fl = stats->slots[i]; fl; fl = fl->next)
-      {
-	struct string *str;
-
-	vec = alloc_vector(4);
-	str = alloc_string(fl->file);
-	vec->data[0] = str;
-	vec->data[1] = makeint(fl->line);
-	vec->data[2] = makeint(fl->count);
-	vec->data[3] = makeint(fl->size);
-
-	fl->count = fl->size = 0;
-
-	res->data[used++] = vec;
-      }
-  }
+          res->data[used++] = vec;
+        }
+  UNGCPRO();
 
   return res;
-}
-
-struct vector *get_closure_alloc_stats(void)
-{
-  return file_line_stat_vector(&closure_alloc_stats);
-}
-
-struct vector *get_pair_alloc_stats(void)
-{
-  return file_line_stat_vector(&pair_alloc_stats);
-}
-
-struct vector *get_variable_alloc_stats(void)
-{
-  return file_line_stat_vector(&variable_alloc_stats);
 }
 
 static struct file_line *file_line_stat_lookup(struct file_line_stats *stats,
@@ -140,120 +129,102 @@ static void inc_file_line(struct file_line_stats *stats, const char *file,
 {
   struct file_line *data = file_line_stat_lookup(stats, file, line);
 
-  if (data == NULL)
+  if (data != NULL)
     {
-      unsigned key = str_int_hash(file, line);
-
-      if (stats->used * 3 >= stats->size * 2)
-	{
-	  struct file_line **new;
-	  int i, osize = stats->size;
-
-	  stats->size = osize ? osize * 2 : 16;
-	  new = malloc(sizeof *new * stats->size);
-	  memset(new, 0, sizeof *new * stats->size);
-
-	  for (i = 0; i < osize; ++i)
-	    {
-	      struct file_line *fl = stats->slots[i];
-	      while (fl)
-		{
-		  struct file_line *next = fl->next;
-
-		  fl->next = new[fl->key % stats->size];
-		  new[fl->key % stats->size] = fl;
-
-		  fl = next;
-		}
-	    }
-
-	  free(stats->slots);
-	  stats->slots = new;
-	}
-
-      data = malloc(sizeof *data);
-      data->key = key;
-      data->file = strdup(file);
-      data->line = line;
-      data->count = 1;
-      data->size = size;
-
-      data->next = stats->slots[key % stats->size];
-      stats->slots[key % stats->size] = data;
-
-      ++stats->used;
-
+      ++data->count;
+      data->size += size;
       return;
     }
 
-  ++data->count;
-  data->size += size;
+  unsigned key = str_int_hash(file, line);
+
+  if (stats->used * 3 >= stats->size * 2)
+    {
+      int osize = stats->size;
+      stats->size = osize ? osize * 2 : 16;
+      struct file_line **new = calloc(stats->size, sizeof *new);
+
+      for (int i = 0; i < osize; ++i)
+        {
+          for (struct file_line *fl = stats->slots[i], *next;
+               fl; fl = next)
+            {
+              next = fl->next;
+              int slot = fl->key % stats->size;
+              fl->next = new[slot];
+              new[slot] = fl;
+            }
+        }
+
+      free(stats->slots);
+      stats->slots = new;
+    }
+
+  data = malloc(sizeof *data);
+  data->key = key;
+  data->file = strdup(file);
+  data->line = line;
+  data->count = 1;
+  data->size = size;
+
+  data->next = stats->slots[key % stats->size];
+  stats->slots[key % stats->size] = data;
+
+  ++stats->used;
 }
 
-static void record_allocation(struct file_line_stats *stats, long size)
+void record_allocation(enum mudlle_type type, long size)
 {
-  struct call_stack *cs = call_stack;
+  const char *filename = "<nowhere>";
+  int line = 0;;
 
+  struct call_stack *cs = call_stack;
   if (cs == NULL)
+    goto done;
+
+  while (cs->next)
     {
-      inc_file_line(stats,
-		    "<nowhere>", 0,
-		    size);
-      return;
+      switch (cs->type) {
+      case call_c:
+      case call_compiled:
+      case call_primop:
+      case call_invalid:
+        break;
+      case call_string:
+        goto done;
+      case call_bytecode:
+        {
+          struct call_stack_mudlle *mcs = (struct call_stack_mudlle *)cs;
+          filename = mcs->fn->code->filename->str;
+          line = mcs->fn->code->lineno;
+          goto done;
+        }
+      }
+      cs = cs->next;
     }
 
-  while (cs->next && cs->type == call_c)
-    cs = cs->next;
-
-  switch (cs->type) {
-  case call_bytecode:
-    inc_file_line(stats,
-		  cs->u.mudlle.fn->code->filename->str,
-		  cs->u.mudlle.fn->code->lineno,
-		  size);
-    break;
-  case call_c:
-    inc_file_line(stats,
-		  cs->u.c.op->name,
-		  -1,
-		  size);
-    break;
-  case call_compiled:
-    inc_file_line(stats,
-		  "<compiled>",
-		  0,
-		  size);
-    break;
-  default:
-    assert(0);
-  }
+ done:
+  inc_file_line(&type_alloc_stats[type], filename, line, size);
 }
 
 #endif /* ALLOC_STATS */
 
 struct closure *unsafe_alloc_closure(ulong nb_variables)
 {
-  struct closure *newp;
-
-#ifdef ALLOC_CLOSURE_STATS
-  record_allocation(&closure_alloc_stats,
-                    sizeof(struct obj) + (nb_variables + 1) * sizeof(value));
-#endif
-
-  newp = (struct closure *)unsafe_allocate_record(type_closure,
-                                                  nb_variables + 1);
-  return make_readonly(newp);
+  ulong fields = nb_variables + grecord_fields(struct closure);
+  return make_readonly(UNSAFE_ALLOCATE_RECORD(closure, fields));
 }
 
 struct closure *alloc_closure0(struct code *code)
 {
   GCPRO1(code);
 
-#ifdef ALLOC_CLOSURE_STATS
-  record_allocation(&closure_alloc_stats, sizeof(struct obj) + sizeof(value));
+#ifdef ALLOC_STATS
+  record_allocation(type_closure, sizeof(struct obj) + sizeof(value));
 #endif
 
-  struct closure *newp = (struct closure *)allocate_record(type_closure, 1);
+  struct closure *newp = (struct closure *)allocate_record(
+    type_closure, grecord_fields(*newp));
   newp->code = code;
   assert(immutablep(code));
   newp->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
@@ -282,10 +253,9 @@ struct string *alloc_string(const char *s)
 
 struct string *alloc_string_length(const char *str, size_t len)
 {
-  if (!str)
+  if (str == NULL && len > 0)
     {
-      str = "(null)";
-      len = 6;
+      abort();
     }
 
   struct string *newp = alloc_empty_string(len);
@@ -319,13 +289,9 @@ struct string *safe_alloc_string(const char *s)
 
 struct variable *alloc_variable(value val)
 {
-  struct variable *newp;
   GCCHECK(val);
   GCPRO1(val);
-#ifdef ALLOC_VARIABLE_STATS
-  record_allocation(&variable_alloc_stats, sizeof(struct obj) + sizeof(value));
-#endif
-  newp = (struct variable *)unsafe_allocate_record(type_variable, 1);
+  struct variable *newp = UNSAFE_ALLOCATE_RECORD(variable, 1);
   newp->vvalue = val;
   UNGCPRO();
 
@@ -378,9 +344,9 @@ struct symbol *alloc_symbol(struct string *name, value data)
 {
   GCCHECK(name);
   GCCHECK(data);
+  assert(obj_readonlyp(&name->o));
   GCPRO2(name, data);
-  struct symbol *newp
-    = (struct symbol *)unsafe_allocate_record(type_symbol, 2);
+  struct symbol *newp = UNSAFE_ALLOCATE_RECORD(symbol, 2);
   newp->name = name;
   newp->data = data;
   UNGCPRO();
@@ -390,9 +356,7 @@ struct symbol *alloc_symbol(struct string *name, value data)
 
 struct vector *alloc_vector(ulong size)
 {
-  struct vector *newp = (struct vector *)allocate_record(type_vector, size);
-
-  return newp;
+  return (struct vector *)allocate_record(type_vector, size);
 }
 
 struct list *alloc_list(value car, value cdr)
@@ -400,10 +364,8 @@ struct list *alloc_list(value car, value cdr)
   GCCHECK(car);
   GCCHECK(cdr);
   GCPRO2(car, cdr);
-#ifdef ALLOC_PAIR_STATS
-  record_allocation(&pair_alloc_stats, sizeof(struct list));
-#endif
-  struct list *newp = (struct list *)unsafe_allocate_record(type_pair, 2);
+  struct list *newp = (struct list *)unsafe_allocate_record(
+    type_pair, grecord_fields(*newp));
   newp->car = car;
   newp->cdr = cdr;
   UNGCPRO();
@@ -421,87 +383,134 @@ struct object *alloc_object(struct obj_data *obj)
   return (struct object *)allocate_temp(type_object, obj);
 }
 
-struct grecord *alloc_private(int id, ulong size)
+struct mprivate *alloc_private(enum mprivate_type type, ulong size)
 {
-  struct grecord *p = allocate_record(type_private, size + 1);
-
-  p->data[0] = makeint(id);
+  struct mprivate *p = (struct mprivate *)allocate_record(
+    type_private, grecord_fields(*p) + size);
+  p->ptype = makeint(type);
   return p;
 }
 
 /*
- * Converts the string sp into an int i and returns true.
+ * Converts the string sp or length len into an int i and returns true.
  * On over/underflow or illegal characters, it returns false.
  */
-bool mudlle_strtoint(const char *sp, int *i)
+bool mudlle_strtolong(const char *sp, size_t len, long *l, int base)
 {
-  int n = 0;
-  int lim, limrad;
-  int sign, radix;
+  const char *const end = sp + len;
 
-  while (isspace(*(unsigned char *)sp))
+  assert(base == 0 || (base >= 2 && base <= 36));
+
+  while (sp < end && isspace(*(unsigned char *)sp))
     ++sp;
 
-  if (*sp == '+' || *sp == '-')
-    sign = *(sp++) == '-' ? -1 : 1;
+  if (sp == end)
+    return false;
+
+  int sign;
+  if (*sp == '+')
+    {
+      sign = 1;
+      ++sp;
+    }
+  else if (*sp == '-')
+    {
+      sign = -1;
+      ++sp;
+    }
   else
     sign = 0;
 
-  /* only allow the sign bit to be set if no + or - and radix != 10 */
+  if (sp == end)
+    return false;
 
-  lim = (!sign ? (MAX_TAGGED_INT << 1) + 1 :
-	 sign == -1 ? -MIN_TAGGED_INT : MAX_TAGGED_INT);
-
-  if (*sp == '0' && *(sp + 1) == 'x')
+  if (*sp == '0')
     {
-      radix = 16;
-      sp += 2;
+      unsigned char t = sp[1];
+      t = tolower(t);
+      if (t == 'x')
+        {
+          if (base != 0 && base != 16)
+            return false;
+          base = 16;
+          sp += 2;
+        }
+      else if (t == 'b')
+        {
+          if (base != 0 && base != 2)
+            return false;
+          base = 2;
+          sp += 2;
+        }
+      else
+        {
+          ++sp;
+          if (sp == end)
+            {
+              /* optimize for common case */
+              *l = 0;
+              return true;
+            }
+          if (base == 0)
+            base = 8;
+          goto skip_empty_check;
+        }
     }
-  else
-    {
-      radix = 10;
-      if (!sign)
-	lim = MAX_TAGGED_INT;
-    }
+  else if (base == 0)
+    base = 10;
 
-  if (!*sp)
-    return 0;
+  if (sp == end)
+    return false;
 
-  limrad = lim / radix;
+ skip_empty_check:;
 
+  /* only allow the sign bit to be set if no + or - and base != 10 */
+  long lim = (!sign && base != 10
+              ? (MAX_TAGGED_INT << 1) + 1
+              : (sign == -1
+                 ? -MIN_TAGGED_INT
+                 : MAX_TAGGED_INT));
+
+  long limrad = lim / base;
+  long n = 0;
   for (;;)
     {
-      char c = toupper(*(sp++));
+      unsigned char c = *sp++;
 
-      if (!c)
+      int d;
+      if (isdigit(c))
+	d = c - '0';
+      else if (isalpha(c))
+        d = toupper(c) - 'A' + 10;
+      else
+	return false;
+
+      if (d >= base)
+        return false;
+
+      n = n * base + d;
+      if (n > lim)
+	return false;
+
+      if (sp == end)
 	{
-	  if (!sign && n & (MAX_TAGGED_INT + 1))
-	    n |= 0x80000000;          /* have to extend the sign bit here */
-	  *i = sign == - 1 ? -n : n;
-	  return 1;
+	  if (!sign)
+            n = (n << 1) >> 1;  /* extend sign bit */
+	  *l = sign == -1 ? -n : n;
+	  return true;
 	}
 
       if (n > limrad)
-	return 0;
-
-      n *= radix;
-      if (c >= '0' && c <= '9')
-	n += c - '0';
-      else if (c >= 'A' && c < 'A' - 10 + radix)
-	n += c - 'A' + 10;
-      else
-	return 0;
-
-      if (n > lim)
-	return 0;
+	return false;
     }
 
 }
 
-/* returns true on success */
-bool mudlle_strtofloat(const char *sp, double *d)
+/* returns true on success; sp[len] must be NUL */
+bool mudlle_strtofloat(const char *sp, size_t len, double *d)
 {
+  assert(sp[len] == 0);         /* could make a copy to handle this case */
   char *endp;
   *d = strtod(sp, &endp);
-  return *sp && !*endp;
+  return *sp && endp == sp + len;
 }

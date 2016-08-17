@@ -52,6 +52,7 @@ bool str_is8bit(const char *str);
 int str8icmp(const char *s1, const char *s2);
 int mem8icmp(const void *_s1, const void *_s2, size_t n);
 int str8nicmp(const char *s1, const char *s2, int n);
+void *mem8ichr(const void *_s, int _c, size_t n);
 void strto7print(char *str);
 void str8lwr(char *str);
 void str7lwr(char *str);

@@ -31,10 +31,9 @@
 #include "../ports.h"
 #include "../table.h"
 
+#include "mudlle-xml.h"
 #include "runtime.h"
-#include "xml.h"
-
-static struct vector *zero_vector;
+#include "vector.h"
 
 static xmlCharEncodingHandlerPtr xml_utf16_encoder;
 
@@ -119,27 +118,19 @@ static struct vector *reverse_siblings(struct vector *node)
 }
 
 SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
-      " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
+       " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
        " an error string. `t is the name table, or NULL.",
-      3, (struct string *mfilename, value mflags,
-           struct table *name_table), LVL_IMPLEMENTOR, 0,
+       3, (struct string *mfilename, value mflags, struct table *name_table),
+       LVL_IMPLEMENTOR, 0,
        "sn[tu].[vs]")
 {
-  struct vector *xmlstack = NULL, *node = NULL;
-  const char *error = NULL;
-  char *filename;
-  int flags;
-  int result;
-
-  xmlTextReaderPtr reader;
-
   TYPEIS(mfilename, type_string);
-  flags = GETINT(mflags);
+  int flags = GETRANGE(mflags, INT_MIN, INT_MAX);
 
-  LOCALSTR(filename, mfilename);
+  char *filename;
+  ALLOCA_PATH(filename, mfilename);
 
-  reader = xmlReaderForFile(filename, NULL, flags);
-
+  xmlTextReaderPtr reader = xmlReaderForFile(filename, NULL, flags);
   if (reader == NULL)
     return msprintf("cannot open '%s'", filename);
 
@@ -150,37 +141,33 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
   else
     TYPEIS(name_table, type_table);
 
+  struct vector *node = NULL, *xmlstack = NULL;
   GCPRO3(xmlstack, node, name_table);
+  int result;
   while ((result = xmlTextReaderRead(reader)) == 1)
     {
       value mdepth = makeint(xmlTextReaderDepth(reader));
       int node_type = xmlTextReaderNodeType(reader);
-      int nattrs;
-      char *name;
-      struct symbol *name_symbol;
 
       node = alloc_vector(xmlnode_entries);
 
       node->data[xmlnode_depth] = mdepth;
       node->data[xmlnode_type] = makeint(node_type);
 
-      name = strdup_utf8(xmlTextReaderConstName(reader));
+      char *name = strdup_utf8(xmlTextReaderConstName(reader));
 
-      if (!table_lookup(name_table, name, &name_symbol))
+      struct symbol *name_symbol = table_lookup(name_table, name);
+      if (name_symbol == NULL)
         {
-          struct string *mstr;
-
-          if (((struct obj *)name_table)->flags & OBJ_READONLY)
+          if (obj_readonlyp(&name_table->o))
             {
               free(name);
               xmlFreeTextReader(reader);
               runtime_error(error_value_read_only);
             }
 
-          mstr = alloc_string(name);
-          name_symbol = table_add_fast(name_table,
-                                       mstr,
-                                       NULL);
+          struct string *mstr = make_readonly(alloc_string(name));
+          name_symbol = table_add_fast(name_table, mstr, NULL);
         }
       free(name);
       SET_VECTOR(node, xmlnode_name, name_symbol);
@@ -188,9 +175,9 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
       SET_VECTOR(node, xmlnode_value,
                  alloc_utf8(xmlTextReaderConstValue(reader)));
 
-      nattrs = xmlTextReaderAttributeCount(reader);
+      int nattrs = xmlTextReaderAttributeCount(reader);
       SET_VECTOR(node, xmlnode_attributes,
-                 nattrs ? alloc_vector(nattrs) : zero_vector);
+                 nattrs ? alloc_vector(nattrs) : empty_vector);
       for (int i = 0; i < nattrs; ++i)
         {
           struct list *pair = alloc_list(NULL, NULL);
@@ -256,6 +243,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
 
   /* will probably not happen without the "real" error strings being
      set; better safe than sorry! */
+  const char *error = NULL;
   if (result == -1)
     error = "does not parse";
 
@@ -323,9 +311,6 @@ void xml_init(void)
   DEFINE_INT(XML_READER_TYPE_END_ELEMENT);
   DEFINE_INT(XML_READER_TYPE_END_ENTITY);
   DEFINE_INT(XML_READER_TYPE_XML_DECLARATION);
-
-  zero_vector = alloc_vector(0);
-  staticpro(&zero_vector);
 }
 
 #else  /* ! USE_XML */

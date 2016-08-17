@@ -19,98 +19,119 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "alloc.h"
+#include "calloc.h"
+#include "mvalgrind.h"
 #include "utils.h"
 
 /* Module: calloc
    Date: 14 Feb 92
    Purpose: Fast & easy memory allocator for the mudlle compiler
-     Based on the concept of blocks: you allocate memory from a block,
-       and can free the whole block at one go.
-       Individual deallocations are not possible.
+   Based on the concept of blocks: you allocate memory from a block,
+   and can free the whole block at one go.
+   Individual deallocations are not possible.
 */
-
-#define BLOCK_SIZE 10000	/* Should probably be chosen w/ respect to
-				   malloc implementation */
 
 struct memblock
 {
-    char *pos;			/* Where next to allocate from */
-    char *end;			/* End of block */
-    struct memblock *previous;
-    char data[BLOCK_SIZE];
+  struct memblock *previous;
+  char *pos;			/* Where next to allocate from */
+  char *end;			/* End of block */
+  char data[];
 };
 
-static struct memblock *make_block(void)
+struct alloc_block {
+  struct memblock *memblock;
+};
+
+#define DFLT_BLOCK_SIZE (16384 - sizeof (struct memblock))
+
+static struct memblock *make_block(size_t size)
 {
-    struct memblock *newp = malloc(sizeof(struct memblock));
-
-    if (!newp)
+  if (size < DFLT_BLOCK_SIZE)
+    size = DFLT_BLOCK_SIZE;
+  struct memblock *newp = malloc(sizeof *newp + size);
+  if (newp == NULL)
     {
-	fprintf(stderr, "No memory left\n");
-	exit(1);
+      fprintf(stderr, "No memory left\n");
+      abort();
     }
-    newp->pos = newp->data;
-    newp->end = newp->data + BLOCK_SIZE;
-    newp->previous = 0;
 
-    return newp;
+  VALGRIND_CREATE_MEMPOOL(newp, 0, 0);
+  VALGRIND_MAKE_MEM_NOACCESS(newp->data, size);
+
+  newp->pos = newp->data;
+  newp->end = newp->data + size;
+  newp->previous = 0;
+
+  return newp;
 }
 
-block_t new_block(void)
+struct alloc_block *new_block(void)
 /* Return: A new block from which to allocate some memory.
-*/
+ */
 {
-    block_t newp = xmalloc(sizeof *newp);
-
-    *newp = make_block();
-    return newp;
+  struct alloc_block *newp = xmalloc(sizeof *newp);
+  newp->memblock = make_block(DFLT_BLOCK_SIZE);
+  return newp;
 }
 
-void free_block(block_t b)
+void free_block(struct alloc_block *b)
 /* Effect: Free all memory allocated in block b.
-*/
+ */
 {
-    struct memblock *blk = *b;
+  struct memblock *blk = b->memblock;
 
-    while (blk)
+  while (blk)
     {
-	struct memblock *prev = blk->previous;
-
-	free(blk);
-	blk = prev;
+      struct memblock *prev = blk->previous;
+      VALGRIND_DESTROY_MEMPOOL(blk);
+      free(blk);
+      blk = prev;
     }
-    free(b);
+  free(b);
 }
 
-void *allocate(block_t b, unsigned long size)
+void *allocate(struct alloc_block *b, unsigned long size)
 /* Effects: Allocates size bytes from block b. The result is aligned
-     correctly for all types.
+   correctly for all types.
    Returns: A pointer to the start of the block.
    Note: In this implementation, 12 + average(size)/2 bytes will be wasted
-     for every BLOCK_SIZE bytes allocated.
+   for every BLOCK_SIZE bytes allocated.
 */
 {
-    struct memblock *blk = *b;
-    void *result;
+  if (size == 0)
+    return NULL;
 
-    /* This could depend on the machine */
-    size = MUDLLE_ALIGN(size, sizeof(long));
+  struct memblock *blk = b->memblock;
 
-    result = blk->pos;
-    if ((blk->pos += size) >= blk->end)
+  /* This could depend on the machine */
+  unsigned long asize = MUDLLE_ALIGN(size, sizeof (long));
+
+  void *result = blk->pos;
+  blk->pos += asize;
+  if (blk->pos > blk->end)
     {
-	/* Block full, get new one */
-	struct memblock *newp = make_block();
-
-	assert(size < BLOCK_SIZE);
-	newp->previous = blk;
-	*b = newp;
-	result = newp->pos;
-	newp->pos += size;
+      /* Block full, get new one */
+      struct memblock *newp = make_block(asize);
+      newp->previous = blk;
+      b->memblock = newp;
+      result = newp->pos;
+      newp->pos += asize;
+      blk = newp;
     }
-    return result;
+  VALGRIND_MEMPOOL_ALLOC(blk, result, size);
+  return result;
+}
+
+const char *heap_allocate_string(struct alloc_block *heap, const char *s)
+{
+  size_t n = strlen(s) + 1;
+  char *r = allocate(heap, n);
+  memcpy(r, s, n);
+  return r;
 }

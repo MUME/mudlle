@@ -21,7 +21,8 @@
 
 library optimise // The actual optimisations
 requires compiler, vars, flow, ins3, phase2, graph, dlist, sequences, misc
-defines mc:optimise_functions, mc:recompute_vars, mc:fold_branch
+defines mc:optimise_functions, mc:recompute_vars, mc:fold_branch,
+  mc:register_noreturn_variant
 reads mc:verbose
 writes mc:lineno, mc:this_function
 [
@@ -238,7 +239,10 @@ writes mc:lineno, mc:this_function
           toins = toil[mc:il_ins];
 	  // remove label's edge
 	  graph_edges_out_apply(
-            fn (e) if (graph_edge_to(e) == tonode) graph_remove_edge(e),
+            fn (e) if (!graph_edge_get(e)) [
+              assert(graph_edge_to(e) == tonode);
+              graph_remove_edge(e)
+            ],
             il[mc:il_node]);
 	];
       ins[mc:i_bargs] = null;
@@ -431,19 +435,26 @@ writes mc:lineno, mc:this_function
                 [
                   mc:warning("call to %s() causes %s error",
                              function_name(fun), error_messages[got_error]);
-                  ins = mc:make_trap_ins(mc:trap_always, got_error, null);
-                ]
-              else
-                [
-                  result = check_immutable(result);
-                  if (mc:verbose >= 3)
-                    mc:warning("fold const call %s() -> %w",
-                               function_name(fun), result);
-                  assert(immutable?(result) && readonly?(result));
-                  ins = mc:make_compute_ins(
-                    mc:b_assign, ins[mc:i_cdest],
-                    list(mc:var_make_constant(result)));
+                  exit<function> null;
                 ];
+              if (!immutable?(result = check_immutable(result)))
+                [
+                  mc:warning("result from %s() is not immutable",
+                             function_name(fun));
+                  exit<function> null;
+                ];
+              if (!readonly?(result))
+                [
+                  mc:warning("result from %s() is not read-only",
+                             function_name(fun));
+                  exit<function> null;
+                ];
+              if (mc:verbose >= 3)
+                mc:warning("fold const call %s() -> %w",
+                           function_name(fun), result);
+              ins = mc:make_compute_ins(
+                mc:b_assign, ins[mc:i_cdest],
+                list(mc:var_make_constant(result)));
               mc:lineno = prevline;
               il[mc:il_ins] = ins;
               change = true
@@ -565,7 +576,15 @@ writes mc:lineno, mc:this_function
               if (pair?(ins[mc:i_cfunction]))
                 set_car!(ins[mc:i_cfunction], repvar)
               else
-                ins[mc:i_cfunction] = repvar;
+                [
+                  ins[mc:i_cfunction] = repvar;
+                  if (vector?(repvar) && repvar[mc:c_fclosure] == null)
+                    [
+                      set_car!(ins[mc:i_cargs],
+                               mc:var_make_function(repvar));
+                      exit<function> !lfind?(dvar, cdr(ins[mc:i_cargs]));
+                    ];
+                ];
             ]
           else if (fvar[mc:v_class] == mc:v_global_constant
                    && (any_primitive?(fun = global_value(fvar[mc:v_goffset]))
@@ -876,15 +895,39 @@ writes mc:lineno, mc:this_function
       change = true
     ];
 
+  | noreturn_fns |
+
+  mc:register_noreturn_variant = fn "`s0 `s1 -> . Registers `s1 as a replacement function to call for function `s0 if its return value is unused." (string from, string to)
+    [
+      assert(minlevel() >= seclevel());
+      | g, gs |
+      g = global_lookup(from);
+      gs = module_vstatus(g);
+      assert(string?(gs) && module_status(gs) == module_protected);
+      noreturn_fns = '((,g . ,(mc:make_kglobal(to))) . ,noreturn_fns);
+      null
+    ];
+
   // Checks if "ins" has to be replaced by a type trap if removed by
   // the optimiser. If so, (maybe) changes the instruction and returns true.
   check_compute_trap = fn (il)
     [
-      | ttype, cargs, op, ins |
+      | ttype, cargs, op, ins, class |
 
       ins = il[mc:il_ins];
+      class = ins[mc:i_class];
 
-      if (ins[mc:i_class] != mc:i_compute || lfind?(ins, really_useless))
+      if (class == mc:i_call)
+        [
+          | f, newf |
+          f = car(ins[mc:i_cargs]);
+          if (f[mc:v_class] == mc:v_global_constant
+              && (newf = assq(f[mc:v_goffset], noreturn_fns)))
+            set_car!(ins[mc:i_cargs], cdr(newf));
+          exit<function> true;
+        ];
+
+      if (class != mc:i_compute || lfind?(ins, really_useless))
         exit<function> false;
 
       op = ins[mc:i_aop];
@@ -1001,6 +1044,7 @@ writes mc:lineno, mc:this_function
 
 		   (class == mc:i_compute ||
                     class == mc:i_closure ||
+                    class == mc:i_call ||
 		    class == mc:i_memory && ins[mc:i_mop] == mc:memory_read) &&
 		   bit_clear?(local_uses, ndvar) &&
 		   (bit_set?(defined, ndvar) || !assq(vmap[ndvar], uses)))
@@ -1119,10 +1163,10 @@ writes mc:lineno, mc:this_function
 	[
 	  if (mc:verbose >= 3)
 	    [
-	      dformat("USELESS %s\n",
-                      concat_words(lmap(fn (i) itoa(dget(i)[mc:il_number]),
-                                        useless),
-                                   " "));
+              display("USELESS");
+              lforeach(fn (i) dformat(" %d", dget(i)[mc:il_number]),
+                       useless);
+              newline();
 	    ];
 	  change = true;
 	];
@@ -1136,9 +1180,11 @@ writes mc:lineno, mc:this_function
 		 change = true;
 		 if (mc:verbose >= 3)
 		   [
-		     display("UNREACHABLE\n");
+		     dformat(
+                       "UNREACHABLE BLOCK %d\n",
+                       dget(graph_node_get(n)[mc:f_ilist])[mc:il_number]);
 		   ];
-		 lforeach(fn (e) graph_remove_edge(e), graph_edges_out(n));
+		 lforeach(graph_remove_edge, graph_edges_out(n));
 		 graph_remove_node(n)
 	       ], graph_nodes(fg));
 

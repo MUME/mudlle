@@ -28,6 +28,7 @@
 #include "lexer.h"
 #include "ports.h"
 #include "strbuf.h"
+#include "tree.h"
 #include "utils.h"
 
 bool use_nicename;
@@ -36,7 +37,7 @@ bool erred;
 static void vlog_message(const char *fname, const char *nname, int line,
                          bool is_warning, const char *msg, va_list va)
 {
-  strbuf_t sb = SBNULL;
+  struct strbuf sb = SBNULL;
 
   if (fname != NULL)
     {
@@ -65,7 +66,7 @@ void log_error(const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
-  block body = this_mfile ? this_mfile->body : NULL;
+  struct block *body = this_mfile ? this_mfile->body : NULL;
   vlog_message(body ? body->filename : NULL,
                body ? body->nicename : NULL,
                yylineno, false, msg, args);

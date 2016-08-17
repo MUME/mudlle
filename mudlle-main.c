@@ -40,33 +40,12 @@
 
 #include "runtime/runtime.h"
 
-extern FILE *yyin;
-int debug_level = 0;
-
-int load_file(const char *fullname, const char *filename,
-              const char *nicename, int seclev, bool reload)
-{
-  FILE *f = fopen(fullname, "r");
-  if (f == NULL)
-    runtime_error(error_bad_value);
-
-  struct reader_state rstate;
-  save_reader_state(&rstate);
-  read_from_file(f, filename, nicename);
-  value result;
-  int ok = interpret(&result, seclev, reload);
-  fclose(f);
-  restore_reader_state(&rstate);
-
-  return ok;
-}
-
 static void execute(const char *line, bool show_result)
 {
   const char *const lines[] = { line, NULL };
   struct reader_state rstate;
   save_reader_state(&rstate);
-  read_from_strings(lines, NULL, NULL);
+  read_from_strings(lines, NULL, NULL, false);
 
   value result;
   if (interpret(&result, 1, true) && show_result)

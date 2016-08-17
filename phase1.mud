@@ -65,7 +65,7 @@ writes mc:this_function, mc:lineno
     env_add_block, env_lookup, env_enter_function, env_leave_function,
     env_enter_block, env_leave_block, mstart, mcleanup, mlookup, imported?,
     all_readable, all_writable, readable, writable, definable, statics,
-    imported_modules, import, system_import, env_toplevel?, import_protected,
+    required_modules, import, system_import, env_toplevel?, import_protected,
     env_global_prefix, assv, warn_bad_module_variables,
     ksymbol_get, kget_static, kmake_variable_ref, ksymbol_set!,
     kmake_symbol_ref,
@@ -298,7 +298,7 @@ writes mc:this_function, mc:lineno
   mstart = fn (m, int seclev)
     // Types: m : module
     // Effects: Does module-entry checks
-    // Modifies: this_module, imported_modules, readable, writable,
+    // Modifies: this_module, required_modules, readable, writable,
     //  definable, all_writable, all_readable
     [
       | all_loaded, mname |
@@ -310,7 +310,7 @@ writes mc:this_function, mc:lineno
       // business of executing code.
 
       all_loaded = true;
-      imported_modules = make_table();
+      required_modules = make_table();
       lforeach
 	(fn (required)
 	 [
@@ -324,9 +324,9 @@ writes mc:this_function, mc:lineno
 	       mc:error("%s not loaded", name);
 	       all_loaded = false
 	     ];
-	   imported_modules[name] = vector(s, mc:lineno, null);
+	   required_modules[name] = vector(s, mc:lineno, null);
 	 ],
-	 m[mc:m_imports]);
+	 m[mc:m_requires]);
 
       all_writable = m[mc:m_class] == mc:m_plain;
       all_readable = m[mc:m_class] == mc:m_plain || !all_loaded;
@@ -429,7 +429,7 @@ writes mc:this_function, mc:lineno
                 "read" . readable));
       ], statics);
 
-      m[mc:m_imports] = imported_modules;
+      m[mc:m_requires] = required_modules;
       m[mc:m_defines] = definable;
       m[mc:m_writes] = writable;
       m[mc:m_reads] = readable;
@@ -438,12 +438,12 @@ writes mc:this_function, mc:lineno
 
   mcleanup = fn ()
     // Effects: Clean up module variables
-    readable = definable = writable = imported_modules = null;
+    readable = definable = writable = required_modules = null;
 
   imported? = fn (mod)
-    // Returns: status of mod if it is in imported_modules, false otherwise
-    // Modifies: imported_modules
-    match (imported_modules[mod])
+    // Returns: status of mod if it is in required_modules, false otherwise
+    // Modifies: required_modules
+    match (required_modules[mod])
       [
         [m _ _] => m;
         () => false;
@@ -452,15 +452,15 @@ writes mc:this_function, mc:lineno
 
   import = fn (vector v, string mod)
     // Effects: Marks v as being imported from mod
-    // Modifies: imported_modules
+    // Modifies: required_modules
     // Returns: v
     [
       | m |
 
-      m = imported_modules[mod];
+      m = required_modules[mod];
       if (m == null)
 	// implicitly import m
-	imported_modules[mod] = vector(module_status(mod), -1,  v . null)
+	required_modules[mod] = vector(module_status(mod), -1,  v . null)
       else if (!memq(v, m[2]))
 	m[2] = v . m[2];
       v
@@ -744,7 +744,7 @@ writes mc:this_function, mc:lineno
         if (syms == null)
           mc:warning("symbols from required module %s were never used",
                      symbol_name(imp));
-      ], imported_modules);
+      ], required_modules);
     ];
 
   mc:phase1 = fn (m, int seclev)

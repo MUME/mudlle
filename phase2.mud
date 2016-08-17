@@ -20,7 +20,7 @@
  */
 
 library phase2 // Phase 2: 3-address (not really) generation
-requires system, sequences, misc, compiler, vars, ins3
+requires system, sequences, misc, compiler, vars, ins3, dlist
 defines mc:phase2, mc:inline_builtin_call, mc:reset_closure_count
 reads mc:this_module, mc:verbose
 writes mc:this_function, mc:lineno
@@ -48,8 +48,10 @@ writes mc:this_function, mc:lineno
     make_btype, gen_abs_comp, gen_list, gen_vector, gen_set_mem!, vlist,
     vplist, vvector, vsequence, gen_const, ins_typeset_trap, verror, gen_error,
     gen_fail, gen_scopy, vassert, gen_assert, gen_builtin, fold_add,
-    vstring_equal?, vstring_iequal?, vstring_cmp, vstring_icmp |
+    vstring_equal?, vstring_iequal?, vstring_cmp, vstring_icmp,
+    vconcat_strings |
 
+  vconcat_strings = mc:make_kglobal("concat_strings");
   verror          = mc:make_kglobal("error");
   vlist           = mc:make_kglobal("list");
   vplist          = mc:make_kglobal("plist");
@@ -411,12 +413,14 @@ writes mc:this_function, mc:lineno
   // elements); if partial?, the top-level add will never be folded
   fold_add = fn (fcode, args, partial?)
     [
-      | terms, recurse, oline |
+      | terms, recurse, oline, add_ils, add_leaves, concat? |
 
       // terms contains terms to be added; one of
       //   null
       //   arg1 . null
       //   arg2 . (lineno . arg1)
+
+      concat? = false;
 
       // updates terms with the remaining terms to be added
       recurse = fn (args, partial?, lineno)
@@ -437,13 +441,17 @@ writes mc:this_function, mc:lineno
               if (!(partial? && cdr(terms) == null)
                   && r[mc:v_class] == mc:v_constant)
                 [
-                  | r2 |
+                  | r2, v |
+                  v = r[mc:v_kvalue];
+                  if (string?(v))
+                    concat? = true;
                   r2 = car(terms);
                   if (r2[mc:v_class] == mc:v_constant)
                     [
-                      | v, v2 |
-                      v = r[mc:v_kvalue];
+                      | v2 |
                       v2 = r2[mc:v_kvalue];
+                      if (string?(v2))
+                        concat? = true;
                       if (integer?(v) && integer?(v2)
                           || string?(v) && string?(v2))
                         [
@@ -453,9 +461,10 @@ writes mc:this_function, mc:lineno
                                     else mc:lineno,
                                     if (string?(v)) "STR" else "INT",
                                     if (partial?) " (partial)" else "");
-                          exit<function>
-                            terms = mc:var_make_constant(v2 + v)
-                              . cdr(terms)
+                          | sum |
+                          sum = mc:var_make_constant(protect(v2 + v));
+                          add_leaves = sum . cdr(add_leaves);
+                          exit<function> terms = sum . cdr(terms)
                         ]
                     ]
                 ];
@@ -467,11 +476,13 @@ writes mc:this_function, mc:lineno
                     mc:lineno = cadr(terms);
                   terms = gen_builtin(fcode, mc:b_add,
                                       list(cddr(terms), car(terms)))
-                    . null
+                    . null;
+                  add_ils = dprev(fcode[0]) . add_ils;
                 ]
             ];
           if (terms != null)
             terms = lineno . car(terms);
+          add_leaves = r . add_leaves;
           terms = r . terms;
         ], args);
 
@@ -479,17 +490,36 @@ writes mc:this_function, mc:lineno
       recurse(args, partial?, mc:lineno);
       mc:lineno = oline;
 
+      | result |
       if (cdr(terms) == null)
-        car(terms)
+        result = car(terms)
       else
         [
-          | result |
           if (cadr(terms) > 0)
             mc:lineno = cadr(terms);
           result = gen_builtin(fcode, mc:b_add, list(cddr(terms), car(terms)));
+          add_ils = dprev(fcode[0]) . add_ils;
           mc:lineno = oline;
-          result
-        ]
+        ];
+
+      if (concat? && llength(add_leaves) > 2)
+        [
+          // replace multiple string adds with one call to concat_strings()
+          lforeach(fn (il) [
+            | ins |
+            ins = dget(il)[mc:il_ins];
+            assert(ins[mc:i_class] == mc:i_compute
+                   && ins[mc:i_aop] == mc:b_add);
+            // replace previous add with 0+0
+            ins[mc:i_aargs] = list(mc:var_make_constant(0),
+                                   mc:var_make_constant(0));
+          ], add_ils);
+          result = mc:new_local(fcode);
+          add_leaves = lreverse!(add_leaves);
+          mc:ins_call(fcode, result, vconcat_strings . add_leaves)
+        ];
+
+      result
     ];
 
   gen_assert = fn (fcode, result, arg)
@@ -521,17 +551,26 @@ writes mc:this_function, mc:lineno
 
       result = if (class == mc:c_assign)
 	[
-	  | var |
+	  | var, val |
 	  var = c[mc:c_asymbol];
+
+          val = gen_clist(fcode, c[mc:c_avalue]);
 
 	  // check global writes (except top-level defines and system-mutable)
 	  if (var[mc:v_class] == mc:v_global
               && module_vstatus(var[mc:v_goffset]) != var_system_mutable
               && !lexists?(fn (v) v[mc:mv_gidx] == var[mc:v_goffset],
                            mc:this_module[mc:m_defines]))
-            mc:ins_trap(fcode, mc:trap_global_write, 0, list(var));
+            [
+              // use named local to prevent the global aliasing the temporary
+              | tvar |
+              tvar = mc:var_make_local("$tmp");
+              mc:ins_assign(fcode, tvar, val);
+              mc:ins_trap(fcode, mc:trap_global_write, 0, list(var, tvar));
+              val = tvar
+            ];
 
-	  mc:ins_assign(fcode, var, gen_clist(fcode, c[mc:c_avalue]));
+	  mc:ins_assign(fcode, var, val);
 	  var
 	]
       else if (class == mc:c_recall)
@@ -631,10 +670,7 @@ writes mc:this_function, mc:lineno
 	  else if (op == mc:b_sc_and || op == mc:b_sc_or)
 	    gen_if(fcode, c . null, comp_true . null, comp_false . null)
 	  else if (op == mc:b_while)
-	    [
-	      gen_while(fcode, car(args), cadr(args));
-	      cundefined
-	    ]
+            gen_while(fcode, car(args), cadr(args))
 	  else if (op == mc:b_loop)
 	    [
 	      | looplab |
@@ -721,6 +757,7 @@ writes mc:this_function, mc:lineno
       exitlab = mc:new_label(fcode);
       endlab = mc:new_label(fcode);
 
+      mc:start_block(fcode, null);
       mc:ins_label(fcode, looplab);
       gen_condition(fcode, condition,
 		    mainlab, fn () [
@@ -734,6 +771,7 @@ writes mc:this_function, mc:lineno
 		      mc:ins_branch(fcode, mc:branch_always, endlab, null);
 		    ]);
       mc:ins_label(fcode, endlab);
+      mc:end_block(fcode, cundefined)
     ];
 
   gen_condition = fn (fcode, condition, slab, success, flab, failure)

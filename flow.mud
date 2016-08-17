@@ -1223,8 +1223,33 @@ mc:rscan_live = fn (f, x, block)
 		     llength(graph_nodes(cdr(fg))));
       lforeach(fn (node)
 	       [
-		 mc:flow_display(graph_node_get(node));
+                 if (mc:verbose > 4)
+                   mc:flow_display(graph_node_get(node));
+
+                 if (mc:verbose > 3)
+                   [
+                     display("  from ins");
+                     graph_edges_in_apply(fn (edge) [
+                       | fnode |
+                       fnode = graph_edge_from(edge);
+                       dformat(" %d", dget(dprev(graph_node_get(fnode)[mc:f_ilist]))[mc:il_number]);
+                     ], node);
+                     newline();
+                   ];
+
 		 mc:ins_list1(graph_node_get(node)[mc:f_ilist]);
+
+                 if (mc:verbose > 3)
+                   [
+                     display("  to ins");
+                     graph_edges_out_apply(fn (edge) [
+                       | tnode |
+                       tnode = graph_edge_to(edge);
+                       dformat(" %d", dget(graph_node_get(tnode)[mc:f_ilist])[mc:il_number]);
+                     ], node);
+                     newline();
+                   ];
+
 		 newline();
 	       ], order_nodes(car(fg), cdr(fg)));
       newline();

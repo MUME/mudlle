@@ -32,43 +32,64 @@ USE_READLINE  := yes
 # USE_LPSOLVE   := yes
 # LPSOLVE_HEADER := LPKIT_LPKIT_H     # for <lpkit/lpkit.h>
 # LPSOLVE_HEADER := LP_SOLVE_LPKIT_H  # for <lp_solve/lpkit.h>
+# USE_VALGRIND  := yes
 
-export USE_XML USE_GMP USE_READLINE USE_PCRE USE_MINGW USE_LPSOLVE
+# USE_CPP_STEP := t
+
+export USE_XML USE_GMP USE_READLINE USE_PCRE USE_MINGW USE_LPSOLVE USE_CPP_STEP
 
 PRIMITIVE_CFLAGS := -mstackrealign
 export PRIMITIVE_CFLAGS
 
-ifeq ($(shell uname -m),sun4u)
-BUILTINS=builtins.o
+ARCH := i386
+ifeq ($(ARCH),x86_64)
+override ARCH := amd64
+endif
+
+ifneq ($(filter i386 amd64,$(ARCH)),$(ARCH))
+$(error Unsupported ARCH=$(ARCH); expected i386 or amd64)
+endif
+
+ifeq ($(ARCH),i386)
+BUILTINS := x86builtins.o
+BUILTINDEPS := x86consts.h
+ARCHFLAG := -m32
+INSTALLFLAGS := -y
+INSTALLDEPS := compiler
 else
-BUILTINS=x86builtins.o
-BUILTINDEPS=x86consts.h
+ifeq ($(ARCH),amd64)
+ARCHFLAG := -m64
+INSTALLFLAGS := -y -c
+INSTALLDEPS := 
+endif
 endif
 
 OBJS= $(BUILTINS) alloc.o call.o calloc.o charset.o compile.o	\
 	context.o env.o error.o global.o ins.o interpret.o	\
 	lexer.o mcompile.o module.o mudlle-main.o mudlle.o		\
-	objenv.o parser.o ports.o print.o stack.o strbuf.o	\
-	table.o tree.o types.o utils.o valuelist.o
+	objenv.o parser.tab.o ports.o print.o stack.o strbuf.o	\
+	table.o tree.o types.o utils.o
 
 alloc.o error.o: CFLAGS+=$(PRIMITIVE_CFLAGS)
 
 SRC = $(filter-out x86builtins.c, $(OBJS:%.o=%.c))
 
 CC=gcc
-CFLAGS := -g -std=gnu99 -O0 -Wall -Wshadow -Wwrite-strings	\
-          -Wnested-externs -Wunused
-CPPFLAGS := -m32
-LDFLAGS := -m32 -fno-pie
+CFLAGS := -g3 -std=gnu99 -O2 -Wall -Wshadow -Wwrite-strings	\
+          -Wnested-externs -Wunused-macros
+CPPFLAGS := $(ARCHFLAG)
+LDFLAGS := $(ARCHFLAG) -fno-pie
 LIBS := -lm
+MAKEDEPEND=$(CC) -MM
+PERL:=perl
+
 ifeq ($(shell uname -s),Darwin)
 CPPFLAGS += -isystem /opt/local/include
 LDFLAGS += -L/opt/local/lib
 LIBS += -liconv
-endif
-MAKEDEPEND=gcc -MM
+endif # Darwin
 
-export CC CFLAGS CPPFLAGS LDFLAGS MAKEDEPEND
+export CC CFLAGS CPPFLAGS LDFLAGS MAKEDEPEND PERL
 
 ifneq ($(USE_XML),)
 CPPFLAGS  += -DUSE_XML
@@ -95,8 +116,19 @@ CPPFLAGS += -DHAVE_LIB_LPK -DHAVE_$(LPSOLVE_HEADER)
 LIBS += -llpk -lfl -lm
 endif
 
+ifneq ($(USE_VALGRIND),)
+CPPFLAGS += -DHAVE_VALGRIND_MEMCHECK_H
+endif
+
 ifneq ($(USE_MINGW),)
 LIBS += -lwsock32
+endif
+
+clang:=$(shell : | $(CC) $(CPPFLAGS) $(CFLAGS) -E -dM - \
+	| grep '^\#define __clang__\b')
+ifneq ($(clang),)
+NO_UNUSED_MACROS:=x86builtins.o
+charset.o: CFLAGS:=-Wno-invalid-source-encoding $(CFLAGS)
 endif
 
 LIBRUN := runtime/librun.a
@@ -126,30 +158,33 @@ clean:
 	rm -f *.o lexer.c tokens.h parser.c .depend genconst \
 		genconstdefs.h mudlle parser.output x86consts.h
 
+ifeq (,$(USE_CPP_STEP))
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
+else
+%.o: %-mpp.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 
-lexer.o: tokens.h
+.PRECIOUS: %-mpp.c
+%-mpp.c: %.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | indent > $@
+endif
+
+.depend parser.tab.o lexer.o $(NO_UNUSED_MACROS): \
+	CFLAGS:=$(filter-out -Wunused-macros,$(CFLAGS))
+
+lexer.o: parser.tab.h
 
 lexer.c: lexer.l
-	flex -F -8 lexer.l
-	mv lex.yy.c lexer.c
+	flex -CFe -8 -o $@ $<
 
-tokens.h: parser.c
-parser.c: parser.y
-	bison -dtv parser.y
-	mv parser.tab.h tokens.h
-	perl -pi -e 's!parser\.tab\.h!tokens\.h!g' tokens.h
-	mv parser.tab.c parser.c
-	perl -pi -e 's!parser\.tab\.c!parser\.c!g' parser.c
-
-builtins.o: builtins.S
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+%.tab.c %.tab.h: %.y
+	bison -dtv $<
 
 x86builtins.o: x86builtins.S $(BUILTINDEPS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-x86consts.h: genconst
+x86consts.h: genconst Makefile
 	./genconst > $@
 
 genconst: genconst.o Makefile
@@ -159,9 +194,8 @@ genconst.o: genconstdefs.h
 
 CONSTH := types.h mvalues.h context.h error.h
 
-genconstdefs.h: $(CONSTH) runtime/consts.pl Makefile
-	perl runtime/consts.pl $(CONSTH) | grep '^ *\(/\*\|DEF\)' \
-		| sed 's/,$$/;/g' > $@
+genconstdefs.h: runtime/consts.pl $(CONSTH) Makefile
+	$(PERL) $< -d -o $@ -- $(CONSTH)
 
 .PHONY: dep depend
 dep depend: .depend
@@ -197,8 +231,8 @@ $(eval $(call PASS,icxc2,icxc,comp_icxc))
 compiler: comp_icxc2
 
 .PHONY: install
-install: install-compiler.sh compiler
-	/bin/sh $< $(IDIR)
+install: install-compiler.sh $(INSTALLDEPS)
+	/bin/sh $< $(INSTALLFLAGS) $(IDIR)
 
 depfile:=.depend
 

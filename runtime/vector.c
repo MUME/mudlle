@@ -22,6 +22,8 @@
 #include "runtime.h"
 #include "vector.h"
 
+struct vector *empty_vector;
+
 TYPEDOP(vectorp, "vector?", "`x -> `b. TRUE if `x is a vector", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
@@ -32,9 +34,7 @@ TYPEDOP(make_vector, 0, "`n -> `v. Create an all-null vector of length `n,"
         " where 0 <= `n <= `MAX_VECTOR_SIZE.", 1, (value msize),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
-  long size = GETINT(msize);
-  if (size < 0 || size > MAX_VECTOR_SIZE)
-    runtime_error(error_bad_value);
+  long size = GETRANGE(msize, 0, MAX_VECTOR_SIZE);
   return alloc_vector(size);
 }
 
@@ -46,81 +46,29 @@ TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector",
   return makeint(vector_len(vec));
 }
 
-TYPEDOP(sequence_copy, 0, "`v -> `v. Returns a readonly copy of vector `v",
-        1, (struct vector *vec),
-	OP_LEAF | OP_NOESCAPE, "v.v")
-{
-  struct vector *result;
-  long len;
-
-  TYPEIS(vec, type_vector);
-  len = vector_len(vec);
-
-  GCPRO1(vec);
-  result = alloc_vector(len);
-  UNGCPRO();
-
-  memcpy(result->data, vec->data, len * sizeof *vec->data);
-
-  return make_readonly(result);
-}
-
 TYPEDOP(vector_fill, "vector_fill!",
         "`v `x -> `v. Set all elements of `v to `x",
 	2, (struct vector *vec, value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vx.1")
 {
-  value *fill;
-  ulong len;
-
   TYPEIS(vec, type_vector);
 
-  if (vec->o.flags & OBJ_READONLY)
+  ulong len = vector_len(vec);
+  /* allow readonly for empty vector */
+  if (len == 0)
+    return vec;
+
+  if (obj_readonlyp(&vec->o))
     runtime_error(error_value_read_only);
 
-  len = vector_len(vec);
-  for (fill = vec->data; len; fill++, len--) *fill = x;
+  while (len-- > 0)
+    vec->data[len] = x;
 
   return vec;
 }
 
-TYPEDOP(vector_shift, "vector_shift!", "`v `n0 `n1 `n2 -> `v."
-        " Moves `n1 elements starting at index `n0 `n2 slots",
-	4, (struct vector *vec, value mstart, value msize, value mdist),
-	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnnn.1")
-{
-  long start = GETINT(mstart), size = GETINT(msize), dist = GETINT(mdist);
-  long len;
-  int i;
-
-  TYPEIS(vec, type_vector);
-
-  len = vector_len(vec);
-  if (start < 0)
-    start += len;
-
-  if (start < 0 || start >= len)
-    runtime_error(error_bad_value);
-  if (size < 0 || start + size > len)
-    runtime_error(error_bad_value);
-
-  if (vec->o.flags & OBJ_READONLY)
-    runtime_error(error_value_read_only);
-
-  if (dist)
-    for (i = 0; i < size; ++i)
-      {
-	int idx = dist < 0 ? start + i : start + size - 1 - i;
-	int tidx = idx + dist;
-	if (tidx >= 0 && tidx < len)
-	  vec->data[tidx] = vec->data[idx];
-	vec->data[idx] = NULL;
-      }
-
-  return vec;
-}
-
-EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v",
+EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v.\n"
+            "Negative `n are counted from the end of `v.",
 	    2, (struct vector *vec, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
 {
@@ -137,12 +85,13 @@ EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v",
 }
 
 EXT_TYPEDOP(vector_set, "vector_set!",
-            "`v `n `x -> `x. Set the `n'th element of `v to `x",
+            "`v `n `x -> `x. Set the `n'th element of `v to `x.\n"
+            "Negative `n are counted from the end of `v.\n",
 	    3, (struct vector *vec, value i, value c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.3")
 {
   TYPEIS(vec, type_vector);
-  if (vec->o.flags & OBJ_READONLY)
+  if (obj_readonlyp(&vec->o))
     primitive_runtime_error(error_value_read_only, &op_vector_set, 3,
                             vec, i, c);
   if (!integerp(i))
@@ -158,6 +107,29 @@ EXT_TYPEDOP(vector_set, "vector_set!",
   vec->data[idx] = c;
 
   return c;
+}
+
+TYPEDOP(vswap, "vswap!",
+        "`v `n0 `n1 -> `v. Swaps elements `n0 and `n1 in the vector `v.",
+        3, (struct vector *v, value n0, value n1),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnn.v")
+{
+  TYPEIS(v, type_vector);
+  long a = GETINT(n0), b = GETINT(n1);
+  if (obj_readonlyp(&v->o))
+    runtime_error(error_value_read_only);
+
+  long vlen = vector_len(v);
+  if (a < 0)
+    a += vlen;
+  if (b < 0)
+    b += vlen;
+  if (a < 0 || a >= vlen || b < 0 || b >= vlen)
+    runtime_error(error_bad_index);
+  value e = v->data[a];
+  v->data[a] = v->data[b];
+  v->data[b] = e;
+  return v;
 }
 
 static const typing vector_tset = { "x*.v", NULL };
@@ -181,6 +153,9 @@ FULLOP(sequence, 0,
 
 void vector_init(void)
 {
+  empty_vector = alloc_vector(0);
+  staticpro(&empty_vector);
+
   DEFINE(vectorp);
   DEFINE(make_vector);
   DEFINE(vector_length);
@@ -189,8 +164,7 @@ void vector_init(void)
   DEFINE(vector_set);
   DEFINE(vector);
   DEFINE(sequence);
-  DEFINE(sequence_copy);
-  DEFINE(vector_shift);
+  DEFINE(vswap);
 
   system_define("MAX_VECTOR_SIZE", makeint(MAX_VECTOR_SIZE));
 }

@@ -19,30 +19,30 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 #include <utime.h>
+
 #ifdef WIN32
 #  include <io.h>
-#endif
-#include <dirent.h>
-
-#ifndef WIN32
+#else
 #  include <grp.h>
 #  include <pwd.h>
 #  include <glob.h>
 #endif
 
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/statvfs.h>
+
 #include "../call.h"
-#include "../context.h"
+#include "../compile.h"
 #include "../interpret.h"
 #include "../mparser.h"
 #include "../ports.h"
@@ -56,12 +56,11 @@
 
 
 TYPEDOP(load, 0, "`s -> `b. Loads file `s. Returns true if successful",
-        1, (struct string *name), OP_STR_READONLY, "s.n")
+        1, (struct string *name), OP_STR_READONLY | OP_TRACE, "s.n")
 {
-  char *fname;
-
   TYPEIS(name, type_string);
-  LOCALSTR(fname, name);
+  char *fname;
+  ALLOCA_PATH(fname, name);
   return makebool(load_file(fname, fname, fname, 1, true));
 }
 
@@ -94,27 +93,23 @@ UNSAFETOP(directory_files, 0, "`s -> `l. List all files of directory `s"
           1, (struct string *dir),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[ln]")
 {
-  DIR *d;
-
   TYPEIS(dir, type_string);
 
-  if ((d = opendir(dir->str)))
+  DIR *d = opendir(dir->str);
+  if (d == NULL)
+    return makebool(false);
+
+  struct list *files = NULL;
+  GCPRO1(files);
+  for (struct dirent *entry; (entry = readdir(d)); )
     {
-      struct dirent *entry;
-      struct list *files = NULL;
-      GCPRO1(files);
-      while ((entry = readdir(d)))
-	{
-	  struct string *fname = alloc_string(entry->d_name);
-
-	  files = alloc_list(fname, files);
-	}
-      UNGCPRO();
-      closedir(d);
-
-      return files;
+      struct string *fname = alloc_string(entry->d_name);
+      files = alloc_list(fname, files);
     }
-  return makebool(false);
+  UNGCPRO();
+  closedir(d);
+
+  return files;
 }
 
 #ifndef WIN32
@@ -272,19 +267,26 @@ TYPEDOP(file_system_stat, 0, "`s -> `v. Returns file system statistics"
 
   struct vector *v = alloc_vector(FILE_SYSTEM_STAT_FIELDS);
   GCPRO1(v);
-  SET_VECTOR(v, FSYS_BSIZE,   make_int_or_bigint(sb.f_bsize));
-  SET_VECTOR(v, FSYS_FRSIZE,  make_int_or_bigint(sb.f_frsize));
+
+#define SETVFS(FIELD, field) \
+  SET_VECTOR(v, FSYS_ ## FIELD, make_unsigned_int_or_bigint(sb.f_ ## field))
+
+  SETVFS(BSIZE,   bsize);
+  SETVFS(FRSIZE,  frsize);
   CASSERT_EXPR((fsblkcnt_t)-1 > 0 && (fsblkcnt_t)-1 <= ULONG_MAX);
-  SET_VECTOR(v, FSYS_BLOCKS,  make_int_or_bigint(sb.f_blocks));
-  SET_VECTOR(v, FSYS_BFREE,   make_int_or_bigint(sb.f_bfree));
-  SET_VECTOR(v, FSYS_BAVAIL,  make_int_or_bigint(sb.f_bavail));
+  SETVFS(BLOCKS,  blocks);
+  SETVFS(BFREE,   bfree);
+  SETVFS(BAVAIL,  bavail);
   CASSERT_EXPR((fsfilcnt_t)-1 > 0 && (fsfilcnt_t)-1 <= ULONG_MAX);
-  SET_VECTOR(v, FSYS_FILES,   make_int_or_bigint(sb.f_files));
-  SET_VECTOR(v, FSYS_FFREE,   make_int_or_bigint(sb.f_ffree));
-  SET_VECTOR(v, FSYS_FAVAIL,  make_int_or_bigint(sb.f_favail));
-  SET_VECTOR(v, FSYS_FSID,    make_int_or_bigint(sb.f_fsid));
-  SET_VECTOR(v, FSYS_FLAG,    make_int_or_bigint(sb.f_flag));
-  SET_VECTOR(v, FSYS_NAMEMAX, make_int_or_bigint(sb.f_namemax));
+  SETVFS(FILES,   files);
+  SETVFS(FFREE,   ffree);
+  SETVFS(FAVAIL,  favail);
+  SETVFS(FSID,    fsid);
+  SETVFS(FLAG,    flag);
+  SETVFS(NAMEMAX, namemax);
+
+#undef SETVFS
+
   UNGCPRO();
   return v;
 }
@@ -352,32 +354,45 @@ UNSAFETOP(readlink, 0,
           "for failure", 1, (struct string *lname),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
 {
-  struct stat sb;
   TYPEIS(lname, type_string);
-  if (lstat(lname->str, &sb) ||
-      !S_ISLNK(sb.st_mode))
+
+  struct stat sb;
+  if (lstat(lname->str, &sb) || !S_ISLNK(sb.st_mode))
     return makebool(false);
 
-  GCPRO1(lname);
-  struct string *res = alloc_empty_string(sb.st_size);
-  UNGCPRO();
-
-  if (readlink(lname->str, res->str, sb.st_size) < 0)
+  if (sb.st_size > MAX_STRING_SIZE)
     return makebool(false);
 
+  char buf[sb.st_size ? sb.st_size : PATH_MAX];
+
+  ssize_t r = readlink(lname->str, buf, sizeof buf);
+  if (r < 0)
+    return makebool(false);
+
+  struct string *res = alloc_empty_string(r);
+  memcpy(res->str, buf, r);
   return res;
 }
 #endif /* ! WIN32 */
 
 UNSAFETOP(file_regularp, "file_regular?",
-          "`s -> `b. Returns TRUE if `s is a regular file",
+          "`s -> `b. Returns TRUE if `s is a regular file.",
           1, (struct string *fname),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
   TYPEIS(fname, type_string);
   struct stat sb;
-  return makebool(stat(fname->str, &sb) == 0
-                  && S_ISREG(sb.st_mode));
+  return makebool(stat(fname->str, &sb) == 0 && S_ISREG(sb.st_mode));
+}
+
+UNSAFETOP(directoryp, "directory?",
+          "`s -> `b. Returns TRUE if `s is a directory.",
+          1, (struct string *dname),
+          OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
+{
+  TYPEIS(dname, type_string);
+  struct stat sb;
+  return makebool(stat(dname->str, &sb) == 0 && S_ISDIR(sb.st_mode));
 }
 
 UNSAFETOP(remove, 0, "`s -> `n. Removes file `s. Returns the Unix error"
@@ -431,7 +446,8 @@ TYPEDOP(strerror, 0, "`n -> `s. Returns an error string corresponding to"
 
 TYPEDOP(getenv, 0, "`s0 -> `s1|false. Return the value of the environment"
         " variable `s0, or false if no match.",
-        1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
+        1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
+        "s.[sz]")
 {
   TYPEIS(s, type_string);
   char *r = getenv(s->str);
@@ -561,89 +577,123 @@ UNSAFETOP(print_file, 0,
 }
 
 UNSAFETOP(file_read, 0,
-          "`s1 -> `s2. Reads file `s1 and returns its contents (or"
-          " the Unix errno value)",
+          "`s1 -> `s2|`n. Reads and returns at most `MAX_STRING_SIZE"
+          " characters from file `s1. Returns a Unix errno value on error.",
 	  1, (struct string *name),
 	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.S")
 {
-  int fd;
-
   TYPEIS(name, type_string);
 
-  if ((fd = open(name->str, O_RDONLY)) >= 0)
+  int fd = open(name->str, O_RDONLY);
+  if (fd < 0)
+    return makeint(errno);
+
+  off_t size = lseek(fd, 0, SEEK_END);
+  if (size < 0)
+    goto got_error;
+
+  if (lseek(fd, 0, SEEK_SET) < 0)
+    goto got_error;
+
+  if (size > MAX_STRING_SIZE)
+    size = MAX_STRING_SIZE;
+
+  struct string *s = alloc_empty_string(size);
+  ssize_t n = read(fd, s->str, size);
+  if (n < 0)
+    goto got_error;
+
+  close(fd);
+
+  if (n != size)
     {
-      off_t size = lseek(fd, 0, SEEK_END);
-
-      if (size >= 0)
-	{
-	  struct string *s = alloc_empty_string(size);
-
-	  if (lseek(fd, 0, SEEK_SET) == 0 && read(fd, s->str, size) == size)
-	    {
-	      close(fd);
-	      return s;
-	    }
-	}
-      close(fd);
+      GCPRO1(s);
+      struct string *ns = alloc_empty_string(n);
+      memcpy(ns->str, s->str, n);
+      UNGCPRO();
+      s = ns;
     }
-  return makeint(errno);
+
+  return s;
+
+ got_error: ;
+  int r = errno;
+  close(fd);
+  return makeint(r);
+}
+
+static bool write_block(void *data, struct string *mstr, size_t len)
+{
+  const char *str = mstr->str;
+  int fd = (long)data;
+  while (len > 0)
+    {
+      ssize_t n = write(fd, str, len);
+      if (n < 0)
+        {
+          if (errno == EINTR)
+            continue;
+          return false;
+        }
+      len -= n;
+      str += n;
+    }
+  return true;
+}
+
+static value file_write(struct string *file, value data, bool do_append)
+{
+  TYPEIS(file, type_string);
+  if (!TYPE(data, type_string))
+    check_string_port(data);
+
+  int m = O_WRONLY | O_CREAT | (do_append ? O_APPEND : O_TRUNC);
+  int fd = open(file->str, m, 0666);
+  if (fd < 0)
+    return makeint(errno);
+
+  if (!(TYPE(data, type_string)
+        ? write_block((void *)(long)fd, data,
+                      string_len((struct string *)data))
+        : port_for_blocks(data, write_block, (void *)(long)fd)))
+    goto got_error;
+
+  close(fd);
+  return makeint(0);
+
+ got_error: ;
+  int r = errno;
+  close(fd);
+  return makeint(r);
 }
 
 UNSAFETOP(file_write, 0,
-          "`s1 `s2 -> `n. Writes `s2 to file `s1. Creates `s1 if it "
-          "doesn't exist. Returns the Unix return code (0 for success)",
-          2, (struct string *file, struct string *data),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.n")
+          "`s1 `s2|`p -> `n. Writes string `s2 (or contents of string"
+          " oport `p) to file `s1.\n"
+          "Creates the file if does not exist.\n"
+          "Returns a Unix error number for failure or 0 for success.\n"
+          "On failure, partial data may have been written.",
+          2, (struct string *file, value data),
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s[so].n")
 {
-  int fd;
-  TYPEIS(file, type_string);
-  TYPEIS(data, type_string);
-
-  fd = open(file->str, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (fd != -1)
-    {
-      size_t len = string_len(data);
-      size_t res = write(fd, data->str, len);
-      close(fd);
-      if (res == len)
-	return makeint(0);
-    }
-
-  return makeint(errno);
+  return file_write(file, data, false);
 }
 
 UNSAFETOP(file_append, 0,
-          "`s1 `s2 -> `n. Appends string `s2 to file `s1. Creates `s1 "
-          "if nonexistent. Returns the Unix error number for failure, 0 for "
-          "success.",
-          2, (struct string *file, struct string *val),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.n")
+          "`s1 `s2|`p -> `n. Appends string `s2 (or contents of string"
+          " oport `p) to file `s1.\n"
+          "Creates the file if does not exist.\n"
+          "Returns a Unix error number for failure or 0 for success.\n"
+          "On failure, partial data may have been written.",
+          2, (struct string *file, value data),
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s[so].n")
 {
-  int fd;
-  unsigned long size;
-
-  TYPEIS(file, type_string);
-  TYPEIS(val, type_string);
-
-  fd = open(file->str, O_WRONLY | O_CREAT | O_APPEND, 0666);
-  if (fd != -1)
-    {
-#ifndef WIN32
-      fchmod(fd, 0666);   /* ### What's the point of this? - finnag */
-#endif
-      int len;
-      size = string_len(val);
-      len = write(fd, val->str, size);
-      close(fd);
-      if (len == size)
-        return makeint(0);
-    }
-  return makeint(errno);
+  return file_write(file, data, true);
 }
 
 #ifndef WIN32
 SECTOP(passwd_file_entries, 0,
-       " -> `l. Returns a list of [ `pw_name `pw_uid "
+       "-> `l. Returns a list of [ `pw_name `pw_uid "
        "`pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of "
        "/etc/passwd. Cf. `getpwent(3)",
        0, (void),
@@ -692,7 +742,7 @@ SECTOP(passwd_file_entries, 0,
 }
 
 SECTOP(group_file_entries, 0,
-       " -> `l. Returns a list of [ `gr_name `gr_gid "
+       "-> `l. Returns a list of [ `gr_name `gr_gid "
        "( `gr_mem ... ) ] from the contents of /etc/group."
        " Cf. `getgrent(3)",
        0, (void),
@@ -804,6 +854,8 @@ void files_init(void)
   DEFINE(chmod);
 
   DEFINE(file_regularp);
+  DEFINE(directoryp);
+
   DEFINE(remove);
   DEFINE(rename);
 
