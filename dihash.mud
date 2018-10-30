@@ -21,11 +21,11 @@
 
 library dihash
 requires misc, sequences
-defines make_dihash, dihash_ref, dihash_get, dihash_set!, dihash_resize!,
-  dihash_foreach, dihash_filter!, dihash_remove!, dihash_map!,
-  dihash_entries, dihash_resize, dihash_list, dihash_size,
-  dihash_map, ihash_to_dihash, dihash_vector, dihash?, dihash_empty!,
-  dihash_reduce, dihash_exists?, make_dihash_ref, dihash_keys
+defines dihash?, dihash_empty!, dihash_entries, dihash_exists?, dihash_filter!,
+  dihash_foreach, dihash_get, dihash_keys, dihash_list, dihash_map,
+  dihash_map!, dihash_reduce, dihash_ref, dihash_remove!, dihash_resize,
+  dihash_resize!, dihash_set!, dihash_size, dihash_sorted_vector,
+  dihash_vector, ihash_to_dihash, make_dihash, make_dihash_ref
 [
   | div_used, div_data, vslot_next, vslot_key, vslot_data, next_size,
     good_size, get_entry |
@@ -178,11 +178,7 @@ defines make_dihash, dihash_ref, dihash_get, dihash_set!, dihash_resize!,
   [
     | fns |
     fns = sequence(
-      fn (x) [
-        | key |
-        @[_ key _] = x;
-        format("dihash_ref(d, %d)", key)
-      ],
+      "dihash",
       fn (x) [
         | hash, key, entry |
         @[hash key entry] = x;
@@ -330,10 +326,8 @@ defines make_dihash, dihash_ref, dihash_get, dihash_set!, dihash_resize!,
     [
       | new |
       new = make_dihash(good_size(hash[div_used]));
-      dihash_reduce(fn (key, value, nhash) [
-        dihash_set!(nhash, key, value);
-        nhash
-      ], new, hash);
+      dihash_foreach(fn (key, value) dihash_set!(new, key, func(key, value)),
+                     hash);
       new
     ];
 
@@ -349,7 +343,8 @@ defines make_dihash, dihash_ref, dihash_get, dihash_set!, dihash_resize!,
   dihash_list = list fn "`d -> `l. Returns a list of (`key . `value) of the entries in dihash `d" (vector hash)
     dihash_reduce(fn (k, e, x) (k . e) . x, null, hash);
 
-  dihash_vector = fn "`d -> `v. Returns a vector of (`key . `value) of the entries in dihash `d" (vector hash)
+  | internal_dihash_vector |
+  internal_dihash_vector = fn (hash)
     [
       | res, i |
       res = make_vector(hash[div_used]);
@@ -359,6 +354,12 @@ defines make_dihash, dihash_ref, dihash_get, dihash_set!, dihash_resize!,
       ], hash);
       res
     ];
+
+  dihash_vector = fn "`d -> `v. Returns a vector of (`key . `value) of the entries in dihash `d" (vector hash)
+    internal_dihash_vector(hash);
+
+  dihash_sorted_vector = fn "`d -> `v. Returns a vector of (`key . `value) of the entries in dihash `d, ordered by lowest keys first." (vector hash)
+    vqsort!(fn (a, b) car(a) < car(b), internal_dihash_vector(hash));
 
   dihash_exists? = fn "`c `d -> `x. Returns (`key . `value) for the first entry in dihash `d, for which `c(`key, `value) is true" (function func, vector hash)
     [

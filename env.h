@@ -22,7 +22,6 @@
 #ifndef ENV_H
 #define ENV_H
 
-#include "mudlle.h"
 #include "types.h"
 
 struct fncode;
@@ -56,7 +55,7 @@ void env_push(struct vlist *locals, struct fncode *fn);
      variables 'locals' in function 'fn'.
 */
 
-void env_block_push(struct vlist *locals, bool statics);
+bool env_block_push(struct vlist *locals, bool statics);
 /* Effects: We have entered a local scope of the environment at the top
      of the stack. Add locals to the list of variables for this scope,
      and initialise them to null if necessary.
@@ -66,9 +65,9 @@ void env_block_pop(void);
 /* Effects: Pop a local scope
 */
 
-struct variable_list *env_pop(uword *nb_locals);
+struct variable_list *env_pop(uint16_t *nb_locals);
 /* Effects: Pop an environement, returning the variables that it needs
-     it it's closure as well as the number of local variables it uses.
+     in its closure as well as the number of local variables it uses.
 */
 
 enum variable_class env_lookup(const char *name, ulong *offset,

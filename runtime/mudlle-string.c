@@ -19,7 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "../mudlle.h"
+#include "../mudlle-config.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -33,7 +33,8 @@
 #include "../charset.h"
 #include "../print.h"
 
-#include "runtime.h"
+#include "check-types.h"
+#include "prims.h"
 #include "mudlle-string.h"
 
 
@@ -65,17 +66,32 @@ struct mregexp {
   struct string *re;
 };
 
-bool is_regexp(value _re)
+static bool is_regexp(value _re)
 {
   struct mregexp *re = _re;
-  return (TYPE(re, type_private)
+  return (TYPE(re, private)
           && re->p.ptype == makeint(PRIVATE_REGEXP));
+}
+
+enum runtime_error ct_string_index(long idx, const char **errmsg,
+                                   struct string *str, bool beyond,
+                                   long *dst)
+{
+  if (idx < 0)
+    idx += string_len(str);
+  if (idx < 0 || idx >= string_len(str) + beyond)
+    {
+      *errmsg = "string index out of range";
+      return error_bad_index;
+    }
+  *dst = idx;
+  return error_none;
 }
 
 TYPEDOP(stringp, "string?", "`x -> `b. TRUE if `x is a string", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "x.n")
 {
-  return makebool(TYPE(v, type_string));
+  return makebool(TYPE(v, string));
 }
 
 TYPEDOP(make_string, 0, "`n -> `s. Create an all-zero string of length `n,"
@@ -95,7 +111,7 @@ TYPEDOP(string_length, 0, "`s -> `n. Return length of string",
         1, (struct string *str),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
-  TYPEIS(str, type_string);
+  CHECK_TYPES(str, string);
   return makeint(string_len(str));
 }
 
@@ -112,12 +128,13 @@ DEF_MEM_TRANS(mem8upr, TO_8UPPER);
 DEF_MEM_TRANS(mem7prt, TO_7PRINT);
 
 static value string_translate(struct string *src,
-                              void (*f)(char *, const char *, size_t))
+                              void (*f)(char *, const char *, size_t),
+                              const struct prim_op *op)
 {
-  TYPEIS(src, type_string);
+  CHECK_TYPES_OP(op, src, string);
   long l = string_len(src);
 
-  GCPRO1(src);
+  GCPRO(src);
   struct string *dst = alloc_empty_string(l);
   UNGCPRO();
 
@@ -130,7 +147,7 @@ TYPEDOP(string_downcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
-  return string_translate(s, mem8lwr);
+  return string_translate(s, mem8lwr, THIS_OP);
 }
 
 TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
@@ -138,7 +155,7 @@ TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
-  return string_translate(s, mem8upr);
+  return string_translate(s, mem8upr, THIS_OP);
 }
 
 TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
@@ -146,7 +163,7 @@ TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
-  return string_translate(s, mem7prt);
+  return string_translate(s, mem7prt, THIS_OP);
 }
 
 
@@ -191,18 +208,17 @@ static value string_cspan(const char *start, const char *end,
 static value string_xspan(struct string *s, value mofs, value mmax,
                           struct string *filter,
                           value (*func)(const char *, const char *,
-                                        const char *, long))
+                                        const char *, long),
+                          const struct prim_op *op)
 {
-  TYPEIS(s, type_string);
-  TYPEIS(filter, type_string);
-  long slen = string_len(s);
-  long ofs = GETINT(mofs);
-  if (ofs < 0)
-    ofs += slen;
-  if (ofs < 0 || ofs > slen)
-    runtime_error(error_bad_value);
-  long max = GETRANGE(mmax, 0, LONG_MAX);
+  long ofs, max;
+  CHECK_TYPES_OP(op,
+                 s,      string,
+                 mofs,   CT_STR_IDX(ofs, s, true),
+                 mmax,   CT_RANGE(max, 0, LONG_MAX),
+                 filter, string);
   const char *start = s->str + ofs;
+  long slen = string_len(s);
   max += ofs;
   if (max > slen)
     max = slen;
@@ -211,13 +227,13 @@ static value string_xspan(struct string *s, value mofs, value mmax,
 }
 
 TYPEDOP(string_span, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
-        " characters, but at most `n1, in string `s0,starting at offset `n0,"
+        " characters, but at most `n1, in string `s0, starting at offset `n0,"
         " that consist entirely of characters in `s1.\n"
         "See also `string_cspan().",
         4, (struct string *s, value mofs, value mmax, struct string *accept),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "snns.n")
 {
-  return string_xspan(s, mofs, mmax, accept, string_span);
+  return string_xspan(s, mofs, mmax, accept, string_span, THIS_OP);
 }
 
 TYPEDOP(string_cspan, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
@@ -227,34 +243,57 @@ TYPEDOP(string_cspan, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
         4, (struct string *s, value mofs, value mmax, struct string *reject),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "snns.n")
 {
-  return string_xspan(s, mofs, mmax, reject, string_cspan);
+  return string_xspan(s, mofs, mmax, reject, string_cspan, THIS_OP);
+}
+
+TYPEDOP(sdelete, "sdelete", "`n `s0 -> `s1. Return a copy of `s0 without any"
+        " occurrence of character `n.",
+        2, (value mch, struct string *src),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "ns.s")
+{
+  unsigned char c;
+  CHECK_TYPES(mch, CT_RANGE(c, SCHAR_MIN, UCHAR_MAX),
+              src, string);
+  long slen = string_len(src);
+
+  long count = 0;
+  for (const char *sp = src->str, *const send = sp + slen;
+       (sp = memchr(sp, c, send - sp));
+       ++sp)
+    ++count;
+
+  /* count is now the number of occurrences of c */
+  GCPRO(src);
+  struct string *dst = alloc_empty_string(slen - count);
+  UNGCPRO();
+
+  char *dp = dst->str;
+  for (const char *sp = src->str, *const send = sp + slen; sp < send; ++sp)
+    {
+      unsigned char x = *sp;
+      if (x != c)
+        *dp++ = x;
+    }
+  return dst;
 }
 
 TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
         " character `n",
-	2, (struct string *str, value c),
+	2, (struct string *str, value mc),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.1")
 {
-  enum runtime_error error;
-  if (!TYPE(str, type_string) || !integerp(c))
-    {
-      error = error_bad_type;
-      goto got_error;
-    }
+  unsigned char c;
+  CHECK_TYPES(str, string,
+              mc,  CT_RANGE(c, SCHAR_MIN, UCHAR_MAX));
+
   ulong len = string_len(str);
   /* allow readonly for empty string */
   if (len == 0)
     return str;
   if (obj_readonlyp(&str->o))
-    {
-      error = error_value_read_only;
-      goto got_error;
-    }
-  memset(str->str, intval(c), len);
+    RUNTIME_ERROR(error_value_read_only, NULL);
+  memset(str->str, c, len);
   return str;
-
- got_error:
-    primitive_runtime_error(error, &op_string_fill, 2, str, c);
 }
 
 TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
@@ -263,7 +302,7 @@ TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
 	1, (struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
-  TYPEIS(s, type_string);
+  CHECK_TYPES(s, string);
   long l = string_len(s);
   long want = l;
   const char *s1 = s->str;
@@ -281,7 +320,7 @@ TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
   if (want > MAX_STRING_SIZE)
     runtime_error(error_bad_value);
 
-  GCPRO1(s);
+  GCPRO(s);
   struct string *newp = alloc_empty_string(want);
   UNGCPRO();
 
@@ -319,9 +358,9 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
         2, (struct string *s, value mmode),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.s")
 {
-  TYPEIS(s, type_string);
-
-  long mode = GETINT(mmode);
+  int mode;
+  CHECK_TYPES(s,     string,
+              mmode, CT_RANGE(mode, 0, 3));
   const char *toenc = NULL;
   switch (mode)
     {
@@ -334,10 +373,10 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
 
   iconv_t cd = iconv_open(toenc, "UTF-8");
   if (cd == (iconv_t)-1)
-    runtime_error(error_bad_value);
+    RUNTIME_ERROR(error_bad_value, NULL);
 
   struct oport *op = NULL;
-  GCPRO2(op, s);
+  GCPRO(op, s);
 
   struct string *result;
 
@@ -381,7 +420,7 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
       opwrite(op, buf, oused);
       if (inlen == 0)
         {
-          result = port_string(op, (size_t)-1);
+          result = port_string(op, SIZE_MAX);
           break;
         }
     }
@@ -392,17 +431,12 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
 
 EXT_TYPEDOP(string_ref, 0, "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
             " character of `s. Negative `n1 are counted from the end of `s.",
-	    2, (struct string *str, value c),
+	    2, (struct string *str, value c), (str, c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
-  TYPEIS(str, type_string);
-  if (!integerp(c))
-    primitive_runtime_error(error_bad_type, &op_string_ref, 2, str, c);
-  long idx = intval(c);
-  if (idx < 0)
-    idx += string_len(str);
-  if (idx < 0 || idx >= string_len(str))
-    primitive_runtime_error(error_bad_index, &op_string_ref, 2, str, c);
+  long idx;
+  CHECK_TYPES(str, string,
+              c,   CT_STR_IDX(idx, str, false));
   return makeint((unsigned char)str->str[idx]);
 }
 
@@ -411,30 +445,28 @@ EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n3. Set the `n1'th"
             "Negative `n1 are counted from the end of `s.\n"
             "The return value is the actual stored value, which is"
             " `n2 & 255.",
-	    3, (struct string *str, value i, value mc),
+	    3, (struct string *str, value i, value mc), (str, i, mc),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "snn.n")
 {
-  TYPEIS(str, type_string);
+  long idx;
+  long c;
+  CHECK_TYPES(str, string,
+              i,   CT_STR_IDX(idx, str, false),
+              mc,  CT_INT(c));
   if (obj_readonlyp(&str->o))
-    primitive_runtime_error(error_value_read_only, &op_string_set, 3,
-                            str, i, mc);
-  if (!integerp(i) || !integerp(mc))
-    primitive_runtime_error(error_bad_type, &op_string_set, 3,
-                            str, i, mc);
-  long idx = intval(i);
-  long c = intval(mc);
-  if (idx < 0)
-    idx += string_len(str);
-  if (idx < 0 || idx >= string_len(str))
-    primitive_runtime_error(error_bad_index, &op_string_set, 3,
-                            str, i, mc);
-
+    RUNTIME_ERROR(error_value_read_only, NULL);
   return makeint((unsigned char)(str->str[idx] = c));
 }
 
 static inline int canon_sign(long l)
 {
   return l < 0 ? -1 : l > 0;
+}
+
+static void check_string_binop(struct string *s1, struct string *s2,
+                               const struct prim_op *op)
+{
+  CHECK_TYPES_OP(op, s1, string, s2, string);
 }
 
 #define STRING_CMP(type, desc, canon)                                   \
@@ -474,12 +506,11 @@ TYPEDOP(string_n ## type ## cmp, 0, "`s1 `s2 `n0 -> `n1. Compare at"    \
         | OP_STR_READONLY | OP_CONST,                                   \
         "ssn.n")                                                        \
 {                                                                       \
-  if (!TYPE(s1, type_string) || !TYPE(s2, type_string)                  \
-      || !integerp(nmax))                                               \
-    primitive_runtime_error(error_bad_type,                             \
-                            &op_string_n ## type ## cmp,                \
-                            3, s1, s2, nmax);                           \
-  return string_n ## type ## cmp(s1, s2, intval(nmax));                 \
+  long lmax;                                                            \
+  CHECK_TYPES(s1, string,                                               \
+              s2, string,                                               \
+              nmax, CT_INT(lmax));                                      \
+  return string_n ## type ## cmp(s1, s2, lmax);                         \
 }                                                                       \
                                                                         \
 TYPEDOP(string_ ## type ## cmp, 0, "`s1 `s2 -> `n. Compare two"         \
@@ -490,9 +521,7 @@ TYPEDOP(string_ ## type ## cmp, 0, "`s1 `s2 -> `n. Compare two"         \
         | OP_STR_READONLY | OP_CONST,                                   \
         "ss.n")                                                         \
 {                                                                       \
-  if (!TYPE(s1, type_string) || !TYPE(s2, type_string))                 \
-    primitive_runtime_error(error_bad_type, &op_string_ ## type ## cmp, \
-                            2, s1, s2);                                 \
+  check_string_binop(s1, s2, THIS_OP);                                  \
   return string_n ## type ## cmp(s1, s2, LONG_MAX);                     \
 }                                                                       \
                                                                         \
@@ -503,15 +532,7 @@ TYPEDOP(string_ ## type ## equalp, "string_" #type "equal?",            \
         | OP_STR_READONLY | OP_CONST,                                   \
         "ss.n")                                                         \
 {                                                                       \
-  if (!TYPE(s1, type_string) || !TYPE(s2, type_string))                 \
-    primitive_runtime_error(error_bad_type,                             \
-                            &op_string_ ## type ## equalp,              \
-                            2, s1, s2);                                 \
-  long len = string_len(s1);                                            \
-  if (len != string_len(s2))                                            \
-    return makebool(false);                                             \
-  if ((#type)[0] == 0)                                                  \
-    return makebool(memcmp(s1->str, s2->str, len) == 0);                \
+  check_string_binop(s1, s2, THIS_OP);                                  \
   return makebool(string_n ## type ## cmp(s1, s2, LONG_MAX)             \
                   == makeint(0));                                       \
 }
@@ -536,10 +557,10 @@ TYPEDOP(string_index, 0,
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "sn.n")
 {
-  if (!TYPE(haystack, type_string) || !integerp(mneedle))
-    primitive_runtime_error(error_bad_type, &op_string_index, 2,
-                            haystack, mneedle);
-  return string_index(haystack, intval(mneedle), 0);
+  long needle;
+  CHECK_TYPES(haystack, string,
+              mneedle,  CT_INT(needle));
+  return string_index(haystack, needle, 0);
 }
 
 TYPEDOP(string_index_offset, 0,
@@ -549,27 +570,11 @@ TYPEDOP(string_index_offset, 0,
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "snn.n")
 {
-  enum runtime_error error;
-  if (!TYPE(haystack, type_string)
-      || !integerp(mneedle)
-      || !integerp(mofs))
-    {
-      error = error_bad_type;
-      goto got_error;
-    }
-  long ofs = intval(mofs);
-  if (ofs < 0)
-    ofs += string_len(haystack);
-  if (ofs < 0 || ofs > string_len(haystack))
-    {
-      error = error_bad_value;
-      goto got_error;
-    }
-  return string_index(haystack, intval(mneedle), ofs);
-
- got_error:
-  primitive_runtime_error(error, &op_string_index_offset, 3,
-                          haystack, mneedle, mofs);
+  long ofs, needle;
+  CHECK_TYPES(haystack, string,
+              mneedle,  CT_INT(needle),
+              mofs,     CT_STR_IDX(ofs, haystack, true));
+  return string_index(haystack, needle, ofs);
 }
 
 /* find distance from the last character to its previous occurrence
@@ -645,8 +650,6 @@ static value string_msearch(struct string *s1, struct string *s2,
                             void *(*chrfn)(const void *, int, size_t),
                             size_t (*stepfn)(const char *, size_t))
 {
-  TYPEIS(s1, type_string);
-  TYPEIS(s2, type_string);
   return makeint(string_search(s1, s2, ofs, cmpfn, chrfn, stepfn));
 }
 
@@ -659,6 +662,8 @@ TYPEDOP(string_ ## infix ## search, 0,                                  \
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, \
         "ss.n")                                                         \
 {                                                                       \
+  CHECK_TYPES(s1, string,                                               \
+              s2, string);                                              \
   return string_msearch(s1, s2, 0, cmpfn, chrfn, stepfn);               \
 }
 
@@ -671,11 +676,15 @@ TYPEDOP(string_isearch_offset, 0,
         " `n0, for string `s2 (case- and accentuation-insensitive)."
         " Returns the first index in `s1 where `s2 was found,"
         " or -1 if not found.",
-	3, (struct string *s1, value ofs, struct string *s2),
+	3, (struct string *s1, value mofs, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "sns.n")
 {
-  return string_msearch(s1, s2, GETINT(ofs), mem8icmp, mem8ichr, step8ilen);
+  long ofs;
+  CHECK_TYPES(s1, string,
+              mofs, CT_INT(ofs),
+              s2, string);
+  return string_msearch(s1, s2, ofs, mem8icmp, mem8ichr, step8ilen);
 }
 
 TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
@@ -683,37 +692,24 @@ TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
 	3, (struct string *s, value start, value length),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "snn.s")
 {
-  enum runtime_error error;
-  if (!TYPE(s, type_string) || !integerp(start) || !integerp(length))
-    {
-      error = error_bad_type;
-      goto got_error;
-    }
+  long first, size;
+  CHECK_TYPES(s,      string,
+              start,  CT_STR_IDX(first, s, true),
+              length, CT_RANGE(size, 0, LONG_MAX));
+  if (first + size > string_len(s))
+    RUNTIME_ERROR(error_bad_index, NULL);
 
-  long first = intval(start);
-  if (first < 0)
-    first += string_len(s);
-  long size = intval(length);
-  if (first < 0 || size < 0 || first + size > string_len(s))
-    {
-      error = error_bad_index;
-      goto got_error;
-    }
-
-  GCPRO1(s);
+  GCPRO(s);
   struct string *newp = alloc_empty_string(size);
-  memcpy(newp->str, s->str + first, size);
   UNGCPRO();
+  memcpy(newp->str, s->str + first, size);
 
   return newp;
-
- got_error:
-  primitive_runtime_error(error, &op_substring, 3, s, start, length);
 }
 
 bool string_equalp(struct string *a, struct string *b)
 {
-  assert(TYPE(a, type_string) && TYPE(b, type_string));
+  assert(TYPE(a, string) && TYPE(b, string));
   long la = string_len(a);
   return la == string_len(b) && memcmp(a->str, b->str, la) == 0;
 }
@@ -725,12 +721,12 @@ VARTOP(concat_strings, 0, "`s0 `s1 ... -> `s. Returns the concatenated"
   long size = 0;
   for (int n = 0; n < nargs; ++n)
     {
-      TYPEIS(args->data[n], type_string);
+      TYPEIS(args->data[n], string);
       size += string_len((struct string *)(args->data[n]));
     }
   if (size > MAX_STRING_SIZE)
     runtime_error(error_bad_value);
-  GCPRO1(args);
+  GCPRO(args);
   struct string *res = alloc_empty_string(size);
   UNGCPRO();
   char *dest = res->str;
@@ -749,7 +745,7 @@ value concat_strings(struct string **strings, int count)
   long size = 0;
   for (int n = 0; n < count; ++n)
     {
-      if (!TYPE(strings[n], type_string))
+      if (!TYPE(strings[n], string))
         goto got_error;
       size += string_len(strings[n]);
     }
@@ -776,7 +772,7 @@ value concat_strings(struct string **strings, int count)
 }
 
 value string_append(struct string *s1, struct string *s2,
-                    const struct primitive_ext *op)
+                    const struct prim_op *op)
 {
   long l1 = string_len(s1);
   long l2 = string_len(s2);
@@ -785,7 +781,7 @@ value string_append(struct string *s1, struct string *s2,
   if (nl > MAX_STRING_SIZE)
     primitive_runtime_error(error_bad_value, op, 2, s1, s2);
 
-  GCPRO2(s1, s2);
+  GCPRO(s1, s2);
   struct string *newp = alloc_empty_string(nl);
   UNGCPRO();
   memcpy(newp->str, s1->str, l1);
@@ -794,28 +790,28 @@ value string_append(struct string *s1, struct string *s2,
   return newp;
 }
 
-EXT_TYPEDOP(string_append, 0, "`s1 `s2 -> `s. Concatenate `s1 and `s2."
-            " The resulting string must not have more than `MAX_STRING_SIZE"
-            " characters.",
-	    2, (struct string *s1, struct string *s2),
-	    OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.s")
+TYPEDOP(string_append, 0, "`s1 `s2 -> `s. Concatenate `s1 and `s2."
+        " The resulting string must not have more than `MAX_STRING_SIZE"
+        " characters.",
+        2, (struct string *s1, struct string *s2),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.s")
 {
-  TYPEIS(s1, type_string);
-  TYPEIS(s2, type_string);
-  return string_append(s1, s2, &op_string_append);
+  CHECK_TYPES(s1, string,
+              s2, string);
+  return string_append(s1, s2, THIS_OP);
 }
 
-TYPEDOP(split_words, 0, "`s -> `l. Split string `s into a list of words."
-        " Single- or double-quoted sequences of words are kept together.",
+TYPEDOP(split_words, 0, "`s -> `l. Split string `s into a list of"
+        " space-separated words.\n"
+        "Single- or double-quoted sequences of words are kept together.",
         1, (struct string *s),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.l")
 {
-  struct list *l = NULL, *last = NULL;
+  CHECK_TYPES(s, string);
 
-  TYPEIS(s, type_string);
   long slen = string_len(s);
-
-  GCPRO3(l, last, s);
+  struct list *l = NULL, *last = NULL;
+  GCPRO(l, last, s);
 
   int idx = 0;
 
@@ -827,7 +823,7 @@ TYPEDOP(split_words, 0, "`s -> `l. Split string `s into a list of words."
       if (idx == slen)
         break;
 
-      char *endp;
+      const char *endp;
       int end;
       if ((s->str[idx] == '\'' || s->str[idx] == '"') /* quoted words */
           && (endp = memchr(s->str + idx + 1, s->str[idx], slen - idx - 1)))
@@ -866,15 +862,12 @@ TYPEDOP(atoi, 0, "`s -> `n|`s. Converts the string `s into an integer.\n"
         "Equivalent to `atoi_base(`s, 0).",
 	1, (struct string *s),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
-        "s.S")
+        "s.[sn]")
 {
-  if (!TYPE(s, type_string))
-    primitive_runtime_error(error_bad_type, &op_atoi, 1, s);
-
+  CHECK_TYPES(s, string);
   long n;
-  if (!mudlle_strtolong(s->str, string_len(s), &n, 0))
+  if (!mudlle_strtolong(s->str, string_len(s), &n, 0, false))
     return s;
-
   return makeint(n);
 }
 
@@ -893,41 +886,30 @@ TYPEDOP(atoi_base, 0, "`s `n0 -> `n1|`s. Converts the string `s into an"
         "Returns `s if the conversion failed.",
 	2, (struct string *s, value mbase),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
-        "sn.S")
+        "sn.[sn]")
 {
-  enum runtime_error error;
-  if (!TYPE(s, type_string) || !integerp(mbase))
-    {
-      error = error_bad_type;
-      goto got_error;
-    }
-
-  long base = intval(mbase);
+  long base;
+  CHECK_TYPES(s, string,
+              mbase, CT_INT(base));
   if (base != 0 && (base < 2 || base > 26))
-    {
-      error = error_bad_value;
-      goto got_error;
-    }
+    RUNTIME_ERROR(error_bad_value, "base must be 0 or [2..25]");
 
   long n;
-  if (!mudlle_strtolong(s->str, string_len(s), &n, base))
+  if (!mudlle_strtolong(s->str, string_len(s), &n, base, false))
     return s;
   return makeint(n);
-
- got_error:
-  primitive_runtime_error(error, &op_atoi_base, 2, s, mbase);
 }
 
-TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value n),
+TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value mn),
         OP_LEAF | OP_NOESCAPE | OP_CONST, "n.s")
 {
-  if (!integerp(n))
-    primitive_runtime_error(error_bad_type, &op_itoa, 1, n);
+  long n;
+  CHECK_TYPES(mn, CT_INT(n));
 
   /* conservative limit: 3 bits per decimal digit, round up, one sign
      character, one zero character */
   char buf[(TAGGED_INT_BITS - 1 + 2) / 3 + 1 + 1];
-  int c = sprintf(buf, "%ld", intval(n));
+  int c = sprintf(buf, "%ld", n);
   assert(c < sizeof buf);
   return make_readonly(alloc_string(buf));
 }
@@ -1057,11 +1039,12 @@ TYPEDOP(fnmatch, 0, "`s0 `s1 `n -> `b. Returns true if the glob pattern `s0"
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "ssn.n")
 {
-  TYPEIS(pat, type_string);
-  TYPEIS(str, type_string);
-  long flags = GETINT(mflags);
+  long flags;
+  CHECK_TYPES(pat, string,
+              str, string,
+              mflags, CT_INT(flags));
   if (flags & ~(FNM_NOESCAPE | FNM_PATHNAME | FNM_PERIOD))
-    runtime_error(error_bad_value);
+    RUNTIME_ERROR(error_bad_value, "invalid flags");
 
   /* zero bytes cannot match or be matched */
   if (string_len(pat) != strlen(pat->str)
@@ -1094,7 +1077,7 @@ static void regexp_free(void *p)
    * in the documentation of pcre) that pcre_free is called at most once,
    * and only after pcre_malloc has been called.
    */
-  assert(TYPE(regexp_str, type_string) && regexp_str->str == p);
+  assert(TYPE(regexp_str, string) && regexp_str->str == p);
   regexp_str = NULL;
 }
 
@@ -1117,14 +1100,16 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
 	2, (struct string *pat, value mflags),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.[ok]")
 {
+  long flags;
+  CHECK_TYPES(pat, string,
+              mflags, CT_INT(flags));
+
   pcre *p;
   const char *errstr;
   int errofs;
   void *(*old_malloc)(size_t) = pcre_malloc;
   void (*old_free)(void *) = pcre_free;
 
-  long flags = GETINT(mflags);
-  TYPEIS(pat, type_string);
   char *lpat = mudlle_string_dup(pat);
   size_t zpos = strlen(lpat);
   if (zpos != string_len(pat))
@@ -1140,7 +1125,7 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
       flags &= ~PCRE_7BIT;
     }
   regexp_str = NULL;
-  GCPRO1(regexp_str);
+  GCPRO(regexp_str);
 
   const unsigned char *table = get_iso88591_pcre_table();
   pcre_malloc = regexp_malloc;
@@ -1171,10 +1156,9 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
 static const pcre *get_regexp(value x)
 {
   if (!is_regexp(x))
-    runtime_error(error_bad_type);
-
+    runtime_error_message(error_bad_type, "expected regexp");
   struct mregexp *re = x;
-  assert(TYPE(re->re, type_string));
+  assert(TYPE(re->re, string));
   return (const pcre *)re->re->str;
 }
 
@@ -1199,18 +1183,15 @@ TYPEDOP(regexp_exec, 0,
 	"  \t`PCRE_NOTBOL    \t`s is not the beginning of a line\n"
 	"  \t`PCRE_NOTEMPTY  \tan empty string is not a valid match\n"
 	"  \t`PCRE_NOTEOL    \t`s is not the end of a line",
-        4, (struct string *mre, struct string *str, value msofs, value mflags),
+        4, (value mre, struct string *str, value msofs, value mflags),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "osnn.[vn]")
 {
-  long flags = GETINT(mflags);
+  long flags, sofs;
+  CHECK_TYPES(mre,    any,
+              str,    string,
+              msofs,  CT_STR_IDX(sofs, str, true),
+              mflags, CT_INT(flags));
   const pcre *re = get_regexp(mre);
-  TYPEIS(str, type_string);
-
-  size_t slen = string_len(str);
-
-  long sofs = GETINT(msofs);
-  if (sofs < 0 || sofs > slen)
-    runtime_error(error_bad_index);
 
   int nsub;
   /* this should probably be an assertion */
@@ -1227,6 +1208,7 @@ TYPEDOP(regexp_exec, 0,
 
   {
     const char *haystack = str->str;
+    size_t slen = string_len(str);
     char *lstr = NULL;
 
     if (flags & PCRE_7BIT)
@@ -1252,8 +1234,9 @@ TYPEDOP(regexp_exec, 0,
       return makebool(true);
   }
 
-  struct vector *v = alloc_vector(nsub + 1);
-  GCPRO1(v);
+  struct vector *v = NULL;
+  GCPRO(v, str);
+  v = alloc_vector(nsub + 1);
 
   for (int i = 0; i <= nsub; ++i)
     {
@@ -1284,8 +1267,8 @@ TYPEDOP(crypt, 0, "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
 	2, (struct string *s, struct string *salt),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.s")
 {
-  TYPEIS(s, type_string);
-  TYPEIS(salt, type_string);
+  CHECK_TYPES(s,    string,
+              salt, string);
 
   /* Use all the characters in the string, rather than the first 8. */
   char buffer[9] = { 0 };
@@ -1304,7 +1287,7 @@ TYPEDOP(crypt, 0, "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
 static void define_strings(void)
 {
   const char host_type[] =
-#ifdef i386
+#ifdef __i386__
     "i386"
 #elif defined __x86_64__
     "x86_64"
@@ -1343,6 +1326,7 @@ void string_init(void)
   DEFINE(string_index_offset);
   DEFINE(string_span);
   DEFINE(string_cspan);
+  DEFINE(sdelete);
   DEFINE(substring);
   DEFINE(concat_strings);
   DEFINE(string_append);

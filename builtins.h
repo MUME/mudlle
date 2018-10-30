@@ -22,38 +22,85 @@
 #ifndef BUILTINS_H
 #define BUILTINS_H
 
+#include "mudlle-macro.h"
+
 /* machine code primitives */
 
 void interpreter_invoke(void);
 /* Enter the interpreter from a machine code function */
 
 /* Compiler support builtins (machine specific) */
-#ifdef i386
+#if defined __i386__ || defined __x86_64__
 
-void badd(), bdivide(), bmultiply(), bremainder(), bshift_left(),
-  bshift_right(), btypeof(),
+#ifdef __x86_64__
+ #define __IS_X86_64 1
+#else
+ #define __IS_X86_64 0
+#endif
 
-  balloc_closure(), balloc_cons(), balloc_variable(), balloc_vector(),
-  bconcat(),
+#define X86_BUILTINS_FOREACH(v)                 \
+  v(badd)                                       \
+  v(balloc_closure)                             \
+  v(balloc_variable)                            \
+  v(balloc_vector)                              \
+  v(bapply_varargs)                             \
+  v(bbitref)                                    \
+  v(bcall)                                      \
+  IF(__IS_X86_64)(v(bcall_prim),)               \
+  IF(__IS_X86_64)(v(bcall_prim_noalloc),)       \
+  v(bcall_secure)                               \
+  v(bcall_varargs)                              \
+  v(bcleargc)                                   \
+  v(bcleargc0)                                  \
+  v(bcleargc1)                                  \
+  v(bcleargc2)                                  \
+  v(bcleargc3)                                  \
+  v(bcleargc4)                                  \
+  v(bconcat)                                    \
+  v(bcons)                                      \
+  v(bdivide)                                    \
+  v(bearly_error_wrong_parameters)              \
+  v(berror_abort)                               \
+  v(berror_bad_function)                        \
+  v(berror_bad_index)                           \
+  v(berror_bad_type)                            \
+  v(berror_bad_value)                           \
+  v(berror_compile)                             \
+  v(berror_divide_by_zero)                      \
+  v(berror_loop)                                \
+  v(berror_no_match)                            \
+  v(berror_recurse)                             \
+  v(berror_security_violation)                  \
+  v(berror_stack_underflow)                     \
+  v(berror_user_interrupt)                      \
+  v(berror_value_read_only)                     \
+  v(berror_variable_read_only)                  \
+  v(berror_wrong_parameters)                    \
+  v(bmultiply)                                  \
+  v(bpcons)                                     \
+  v(bref)                                       \
+  v(bremainder)                                 \
+  IF(__IS_X86_64)(,v(brestore_caller))          \
+  v(brglobal)                                   \
+  IF(__IS_X86_64)(,v(bsave_caller))             \
+  IF(__IS_X86_64)(,v(bsave_caller_noalloc))     \
+  v(bset)                                       \
+  v(bshift_left)                                \
+  v(bshift_right)                               \
+  v(bsymbol_ref)                                \
+  v(btype_error)                                \
+  v(btypeof)                                    \
+  v(bvarargs)                                   \
+  v(bwglobal)
 
-  bapply_varargs(), bcall(), bcall_error(), bcall_primitive_tail(),
-  bcall_secure(), bcall_varargs(), bsave_caller(), bsave_caller_noalloc(),
-  brestore_caller(),
+#define DECL_PROTO(name) extern void name();
+X86_BUILTINS_FOREACH(DECL_PROTO)
+#undef DECL_PROTO
 
-  bvarargs(), bcleargc(), bcleargc0(), bcleargc1(), bcleargc2(), bcleargc3(),
-  bcleargc4(),
+/* these aren't accessible via builtin_find() */
+extern void bcall_primitive_tail();
+extern void builtin_start(), builtin_end();
 
-  bearly_error_wrong_parameters(), berror_abort(), berror_bad_function(),
-  berror_bad_index(), berror_bad_type(), berror_bad_value(), berror_compile(),
-  berror_divide_by_zero(), berror_loop(), berror_no_match(), berror_recurse(),
-  berror_security_violation(), berror_stack_underflow(),
-  berror_user_interrupt(), berror_value_read_only(),
-  berror_variable_read_only(), berror_wrong_parameters(),
-
-  bref(), bset(),
-
-  brglobal(), bwglobal();
-
-#endif  /* i386 */
+#endif  /* __i386__ || __x86_64__ */
 
 #endif  /* BUILTINS_H */

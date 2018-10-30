@@ -25,7 +25,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-extern int yylineno;
 extern const char *lexer_filename;
 extern const char *lexer_nicename;
 
@@ -44,5 +43,7 @@ void save_reader_state(struct reader_state *state);
 void restore_reader_state(const struct reader_state *state);
 
 bool allow_comma_expression(void);
+
+const struct loc *lexer_location(void);
 
 #endif

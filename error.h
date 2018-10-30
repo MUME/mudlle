@@ -22,7 +22,7 @@
 #ifndef ERROR_H
 #define ERROR_H
 
-#include "mudlle.h"
+#include "types.h"
 
 enum runtime_error {
 /* end mudlle const */
@@ -57,7 +57,7 @@ enum mudlle_signal {
 extern const char *const mudlle_errors[];
 extern int suppress_extra_calltrace;
 
-void interpreted_early_runtime_error(enum runtime_error error) NORETURN;
+noreturn void interpreted_early_runtime_error(enum runtime_error error);
 /* Effects: Runtime error 'error' has occured. Dump the call_stack to
      mudout & throw back to the exception handler with SIGNAL_ERROR
      and the error code in exception_error.
@@ -65,11 +65,12 @@ void interpreted_early_runtime_error(enum runtime_error error) NORETURN;
      function at the top of call_stack are still on the stack.
    Note: Never returns
 */
-void compiled_early_runtime_error(enum runtime_error error, int nargs)
-  NORETURN;
+noreturn void compiled_early_runtime_error(enum runtime_error error,
+                                           int nargs);
 /* As above, but there are nargs arguments on the native stack. */
 
-void runtime_error(enum runtime_error error) NORETURN;
+noreturn void runtime_error_message(enum runtime_error error, const char *msg);
+noreturn void runtime_error(enum runtime_error error);
 /* Effects: Runtime error 'error' has occured in a primitive operation.
      Dump the call_stack (plus the primitive operation call) to
      mudout & throw back to the exception handler with SIGNAL_ERROR
@@ -78,13 +79,33 @@ void runtime_error(enum runtime_error error) NORETURN;
 
 void runtime_warning(const char *msg);
 
-struct primitive_ext;
-void primitive_runtime_error(enum runtime_error error,
-                             const struct primitive_ext *op,
-                             int nargs, ...) NORETURN;
+const char *out_of_range_message(long v, long minval, long maxval);
+const char *not_callable_message(int nargs);
+
+struct prim_op;
+noreturn void primitive_runtime_error(enum runtime_error error,
+                                      const struct prim_op *op,
+                                      int nargs, ...);
+noreturn void primitive_runtime_error_msg(enum runtime_error error,
+                                          const char *msg,
+                                          const struct prim_op *op,
+                                          int nargs, ...);
+noreturn void primitive_bad_typeset_error(value v, unsigned expected,
+                                          const struct prim_op *op,
+                                          int nargs, ...);
+noreturn void primitive_bad_type_error(value v, enum mudlle_type expected,
+                                       const struct prim_op *op,
+                                       int nargs, ...);
+
 void primitive_runtime_warning(const char *msg,
-                               const struct primitive_ext *op,
+                               const struct prim_op *op,
                                int nargs, ...);
+
+noreturn void bad_call_error(enum runtime_error error, value callee,
+                             int nargs, value *argp);
+noreturn void bad_type_error(value v, enum mudlle_type expected);
+noreturn void bad_typeset_error(value v, unsigned expected);
+noreturn void out_of_range_error(long v, long minval, long maxval);
 
 struct vector *get_mudlle_call_trace(bool lines);
 

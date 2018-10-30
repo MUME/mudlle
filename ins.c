@@ -19,6 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "mudlle-config.h"
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,10 +29,14 @@
 #include "builtins.h"
 #include "calloc.h"
 #include "code.h"
+#include "dwarf.h"
 #include "ins.h"
 #include "lexer.h"
 #include "mvalues.h"
+#include "tree.h"
 #include "utils.h"
+
+#include "runtime/mudlle-string.h"
 
 /* Instruction lists are stored in reverse order, to simplify creation.
    They are reversed before use ...
@@ -51,17 +57,17 @@ struct blocks
 {
   struct blocks *next;
   const char *name;
-  struct label *exitlab;		/* Label for block exit */
-  word stack_depth;		/* Stack depth at block entry */
+  struct label *exitlab;        /* Label for block exit */
+  int stack_depth;		/* Stack depth at block entry */
 };
 
 struct fncode {
   struct ilist *instructions;
-  word current_depth, max_depth; /* This tracks the stack depth as
-				    determined by the instructions */
+  int current_depth, max_depth; /* This tracks the stack depth as
+                                   determined by the instructions */
   struct label *next_label;	/* For the 'label' function */
   struct dynpro csts;           /* Mudlle list of constants */
-  uword cstindex;		/* Index of next constant */
+  uint16_t cstindex;		/* Index of next constant */
   struct blocks *blks;		/* Stack of named blocks */
   bool toplevel;
   struct alloc_block *memory;
@@ -77,12 +83,12 @@ struct label			/* A pointer to an instruction */
 
 static int bc_length; /* For statistical purposes */
 
-static void add_ins(ubyte ins, struct fncode *fn)
+static void add_ins(uint8_t ins, struct fncode *fn)
 {
   struct ilist *newp = allocate(fnmemory(fn), sizeof *newp);
   *newp = (struct ilist){
     .next   = fn->instructions,
-    .ins    = (union instruction)ins,
+    .ins.op = ins,
     .lab    = fn->next_label,
     .lineno = fn->lineno
   };
@@ -96,11 +102,11 @@ static void add_ins(ubyte ins, struct fncode *fn)
 
 void set_lineno(int line, struct fncode *fn)
 {
-  if (line)
-    yylineno = fn->lineno = line;
+  if (line > 0)
+    fn->lineno = line;
 }
 
-void adjust_depth(int by, struct fncode *fn)
+int adjust_depth(int by, struct fncode *fn)
 /* Effects: Adjusts the current static stack depth of fn by the given
      amount. This is necessary for structures such as 'if' (which have
      code to compute 2 values, but which leave one on the stack).
@@ -108,7 +114,9 @@ void adjust_depth(int by, struct fncode *fn)
 */
 {
   fn->current_depth += by;
-  if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
+  if (by > 0 && fn->current_depth > fn->max_depth)
+    fn->max_depth = fn->current_depth;
+  return fn->current_depth;
 }
 
 struct fncode *new_fncode(bool toplevel)
@@ -120,7 +128,8 @@ struct fncode *new_fncode(bool toplevel)
   struct fncode *newp = allocate(afnmemory, sizeof *newp);
   *newp = (struct fncode){
     .toplevel = toplevel,
-    .memory   = afnmemory
+    .memory   = afnmemory,
+    .lineno   = 1
   };
   dynpro(&newp->csts, NULL);
 
@@ -149,7 +158,7 @@ bool fntoplevel(struct fncode *fn)
   return fn->toplevel;
 }
 
-uword add_constant(value cst, struct fncode *fn)
+uint16_t add_constant(value cst, struct fncode *fn)
 /* Effects: Adds a constant to code of 'fn'.
    Returns: The index where this constant is stored.
 */
@@ -163,7 +172,7 @@ void ins_constant(value cst, struct fncode *fn)
    Modifies: fn
 */
 {
-  uword aindex;
+  uint16_t aindex;
 
   if (integerp(cst))
     {
@@ -182,8 +191,10 @@ void ins_constant(value cst, struct fncode *fn)
     }
 
   aindex = add_constant(cst, fn);
-  if (aindex < ARG1_MAX) ins1(op_constant1, aindex, fn);
-  else ins2(op_constant2, aindex, fn);
+  if (aindex <= ARG1_MAX)
+    ins1(op_constant1, aindex, fn);
+  else
+    ins2(op_constant2, aindex, fn);
 }
 
 void ins0(enum operator op, struct fncode *fn)
@@ -197,23 +208,18 @@ void ins0(enum operator op, struct fncode *fn)
     case op_builtin_le: case op_builtin_lt: case op_builtin_ge:
     case op_builtin_gt: case op_builtin_ref: case op_builtin_add:
     case op_builtin_sub: case op_builtin_bitand: case op_builtin_bitor:
-      fn->current_depth--;
+      adjust_depth(-1, fn);
       break;
     case op_builtin_set:
-      fn->current_depth -= 2;
-      break;
-    case op_dup:
-      fn->current_depth++;
+      adjust_depth(-2, fn);
       break;
     default:
       break;
     }
-  if (fn->current_depth > fn->max_depth)
-    fn->max_depth = fn->current_depth;
   add_ins(op, fn);
 }
 
-void ins1(enum operator op, ubyte arg1, struct fncode *fn)
+void ins1(enum operator op, uint8_t arg1, struct fncode *fn)
 /* Effects: Adds instruction ins to code of 'fn'.
      The instruction has one argument, arg1.
    Modifies: fn
@@ -222,15 +228,17 @@ void ins1(enum operator op, ubyte arg1, struct fncode *fn)
   switch (op)
     {
       /* Note: op_exit_n *MUST NOT* modify stack depth */
-    case op_recall + vclass_local: case op_recall + vclass_closure:
-    case op_vref + vclass_local: case op_integer1: case op_constant1:
+    case op_recall_local: case op_recall_closure:
+    case op_vref_local: case op_integer1: case op_constant1:
     case op_closure:
-      fn->current_depth++;
-      if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
+      adjust_depth(1, fn);
+      break;
+    case op_typeset_check:
+      adjust_depth(-1, fn);
       break;
     case op_execute: case op_pop_n: case op_execute_primitive:
     case op_execute_secure: case op_execute_varargs:
-      fn->current_depth -= arg1;
+      adjust_depth(-arg1, fn);
       break;
     default:
       break;
@@ -239,7 +247,7 @@ void ins1(enum operator op, ubyte arg1, struct fncode *fn)
   add_ins(arg1, fn);
 }
 
-void ins2(enum operator op, uword arg2, struct fncode *fn)
+void ins2(enum operator op, uint16_t arg2, struct fncode *fn)
 /* Effects: Adds instruction ins to code of 'fn'.
      The instruction has a two byte argument (arg2), stored in big-endian
      format.
@@ -248,13 +256,16 @@ void ins2(enum operator op, uword arg2, struct fncode *fn)
 {
   switch (op)
     {
-    case op_recall + vclass_global: case op_vref + vclass_global:
+    case op_recall_global: case op_vref_global:
     case op_integer2: case op_constant2:
-      fn->current_depth++;
-      if (fn->current_depth > fn->max_depth) fn->max_depth = fn->current_depth;
+      adjust_depth(1, fn);
       break;
-    case op_execute_global2: case op_execute_primitive2:
-      fn->current_depth--;
+    case op_execute_global_2arg: case op_execute_primitive_2arg:
+      adjust_depth(-1, fn);
+      break;
+    case op_execute2: case op_execute_primitive2:
+    case op_execute_secure2: case op_execute_varargs2:
+      adjust_depth(-arg2, fn);
       break;
     default:
       break;
@@ -276,7 +287,7 @@ void branch(enum operator abranch, struct label *to, struct fncode *fn)
     {
     case op_branch1: break;
     case op_branch_nz1: case op_branch_z1: case op_loop1:
-      fn->current_depth--;
+      adjust_depth(-1, fn);
       break;
     default: abort();
     }
@@ -420,125 +431,46 @@ static inline struct ilist *reverse_ilist(struct ilist *l)
   return reverse_list(l, struct ilist);
 }
 
-struct linenos {
-  int size, used;
-  ubyte *data;
-};
-
-static void grow_linenos(struct linenos *l)
+static struct string *build_lineno_data(struct ilist *ins)
 {
-  l->size = l->size ? l->size * 2 : 64;
-  l->data = realloc(l->data, l->size);
-}
-
-/*
-  line information encoding:
-
-    bytes on current line
-    delta lines
-
-  if the value to be encoded is < 0 or >= 255, a 255 byte is used,
-  followed by the new number (not a delta)
-*/
-static struct string *build_lineno_data(struct fncode *fn)
-{
-  struct ilist *ins = fn->instructions;
   if (ins == NULL)
-    return NULL;
+    return static_empty_string;
 
-  struct linenos data = { 0 };
+  ulong nins = 1;
 
-#define ADD(n) do {				\
-  if (data.used == data.size)			\
-    grow_linenos(&data);			\
-  data.data[data.used++] = (n);		\
-} while (0)
+  uint32_t last_line = UINT32_MAX;
+  for (struct ilist *i = ins; i; i = i->next)
+    if (i->lineno != last_line)
+      {
+        last_line = i->lineno;
+        ++nins;
+      }
 
-  int last_line = fn->lineno, start_offset = ins ? ins->offset : 0;
-  int last_offset = start_offset;
+  /* instructions offsets are numbered backwards here */
+  const ulong last_ofs = ins->offset;
 
+  struct lni_state *states = malloc(sizeof *states * nins);
+  ulong i = 0;
+  last_line = UINT32_MAX;
   for (; ins; ins = ins->next)
-    {
-      if (ins->lineno == 0 || ins->lineno == last_line)
-	continue;
+    if (ins->lineno != last_line)
+      {
+        last_line = ins->lineno;
+        states[i] = (struct lni_state){
+          .addr = last_ofs - ins->offset,
+          .line = ins->lineno
+        };
+        ++i;
+      }
+  assert(i == nins - 1);
+  states[i] = (struct lni_state){
+    .addr = last_ofs + 1,
+    .line = last_line
+  };
 
-      if (ins->offset + 255 < last_offset)
-	{
-	  ADD(255);
-	  for (int i = 0; i < 4; ++i)
-	    ADD(((start_offset - ins->offset) >> (8 * i)) & 0xff);
-	}
-      else
-	ADD(last_offset - ins->offset);
-      last_offset = ins->offset;
-
-      if (last_line > ins->lineno || (ins->lineno >= last_line + 255))
-	{
-	  int i;
-	  ADD(255);
-	  for (i = 0; i < 4; ++i)
-	    ADD((ins->lineno >> (8 * i)) & 0xff);
-	}
-      else
-	ADD(ins->lineno - last_line);
-      last_line = ins->lineno;
-    }
-
-#undef ADD
-
-  struct string *res = (struct string *)allocate_string(type_string,
-							data.used + 1);
-  memcpy(res->str, data.data, data.used);
-  res->str[data.used] = 0;
-  res->o.flags |= OBJ_IMMUTABLE | OBJ_READONLY;
-
-  free(data.data);
-
-  return res;
-}
-
-int get_code_line_number(struct icode *code, int offset)
-{
-  int line = code->code.lineno;
-  int dlen;
-  int pos = 0;
-  ubyte *data;
-  int cofs = 0;
-
-  if (code->lineno_data == NULL)
-    return -1;
-
-  dlen = string_len(code->lineno_data);
-  data = (ubyte *)code->lineno_data->str;
-
-  for (;;)
-    {
-      if (pos >= dlen)
-	return line;
-
-      if (data[pos] == 255)
-	{
-	  cofs = 0;
-	  ++pos;
-	  for (int i = 0; i < 4; ++i)
-	    cofs |= data[pos++] << (8 * i);
-	}
-      else
-	cofs += data[pos++];
-
-      if (cofs > offset)
-	return line;
-
-      if (data[pos] == 255)
-	{
-	  line = 0;
-	  ++pos;
-	  for (int i = 0; i < 4; ++i)
-	    line |= data[pos++] << (8 * i);
-	}
-      else
-	line += data[pos++];
-    }
+  struct string *lni = dwarf_line_number_info(states, nins);
+  free(states);
+  return lni;
 }
 
 struct icode *generate_fncode(struct fncode *fn,
@@ -546,10 +478,10 @@ struct icode *generate_fncode(struct fncode *fn,
                               struct string *varname,
                               struct string *afilename,
                               struct string *anicename,
-                              int alineno,
-                              struct vector *arg_types,
+                              const struct loc *loc,
+                              struct obj *arguments,
                               unsigned return_typeset,
-                              int seclev)
+                              seclev_t seclev)
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
      recent call to new_fncode. That call is then deemed to never have
@@ -568,10 +500,12 @@ struct icode *generate_fncode(struct fncode *fn,
        scanins = scanins->next)
     ++sequence_length;
 
-  assert(immutablep(arg_types));
+  if (!TYPE(arguments, string))
+    assert(TYPE(arguments, vector));
+  assert(immutablep(arguments));
 
-  GCPRO6(help, varname, afilename, anicename, arg_types, lineno_data);
-  lineno_data = build_lineno_data(fn);
+  GCPRO(help, varname, afilename, anicename, arguments, lineno_data);
+  lineno_data = build_lineno_data(fn->instructions);
 
   /* Warning: Portability */
   ulong size = (offsetof(struct icode, constants)
@@ -596,8 +530,14 @@ struct icode *generate_fncode(struct fncode *fn,
       .filename       = afilename,
       .nicename       = anicename,
       .help           = help,
-      .arg_types      = arg_types,
-      .lineno         = alineno,
+      .arguments.obj  = arguments,
+      .linenos        = lineno_data,
+      .lineno         = (loc->line > 0 && loc->line <= UINT16_MAX
+                         ? loc->line
+                         : 1),
+      .column         = (loc->col > 0 && loc->col < P(8)
+                         ? loc->col
+                         : 1),
       .seclevel       = seclev,
       .return_typeset = return_typeset,
     },
@@ -606,8 +546,9 @@ struct icode *generate_fncode(struct fncode *fn,
     .stkdepth          = fn->max_depth,
     .call_count        = 0,
     .instruction_count = 0,
-    .lineno_data       = lineno_data,
   };
+
+  assert(gencode->stkdepth == fn->max_depth); /* check in-range */
 
   /* Copy the sequence (which is reversed) */
   union instruction *codeins
@@ -623,7 +564,7 @@ struct icode *generate_fncode(struct fncode *fn,
     for (int i = fn->cstindex; i-- > 0; )
       {
         GCCHECK(csts);
-        assert(TYPE(csts, type_pair));
+        assert(TYPE(csts, pair));
         GCCHECK(csts->car);
         gencode->constants[i] = csts->car;
         csts = csts->cdr;
@@ -633,7 +574,8 @@ struct icode *generate_fncode(struct fncode *fn,
 
   /* Jump to interpreter to execute interpreted code - machine specific */
 
-#if defined(i386) && !defined(NOCOMPILER)
+#ifndef NOCOMPILER
+#ifdef __i386__
   /* movl interpreter_invoke,%ecx */
   gencode->magic_dispatch[0] = 0xb9;
   ulong invoke_addr = (ulong)interpreter_invoke;
@@ -643,6 +585,17 @@ struct icode *generate_fncode(struct fncode *fn,
   gencode->magic_dispatch[6] = 0xe1;
   /* nop */
   gencode->magic_dispatch[7] = 0x90;
+#elif defined __x86_64__
+  static struct magic_dispatch magic_dispatch = {
+    .movq_r11 = { 0x49, 0xbb },
+    .invoke   = interpreter_invoke,
+    .jmpq_r11 = { 0x41, 0xff, 0xe3 }
+  };
+  CASSERT_EXPR(sizeof magic_dispatch == 2 + 8 + 3);
+  gencode->magic_dispatch = magic_dispatch;
+#else
+  #error Unsupported architecture
+#endif
 #endif
 
 #ifdef GCSTATS

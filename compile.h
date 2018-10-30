@@ -32,18 +32,24 @@ struct mfile;
 extern struct component *component_undefined;
 extern struct component *component_true, *component_false;
 
+extern struct constant *constant_null;
+
+void init_string_cache(void);
+void free_string_cache(void);
+struct string *scache_alloc_str_len(const char *str, size_t len);
+struct string *scache_alloc_str(const char *str);
+
 value make_constant(const struct constant *c);
 value make_shared_string_constant(const struct constant *c,
                                   struct table *cache);
-struct string *make_filename(const char *fname);
-bool interpret(value *result, int seclev, int reload);
-struct closure *compile_code(struct mfile *f, int seclev);
+bool interpret(value *result, seclev_t seclev, int reload);
+struct closure *compile_code(struct mfile *f, seclev_t seclev);
 
 void compile_init(void);
 
 extern struct mfile *this_mfile;
 
 bool load_file(const char *fullname, const char *filename,
-               const char *nicename, int seclev, bool reload);
+               const char *nicename, seclev_t seclev, bool reload);
 
 #endif

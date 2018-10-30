@@ -28,14 +28,19 @@ struct strbuf;
 
 enum prt_level { prt_display, prt_write, prt_examine, prt_constant };
 
-bool output_value_cut(struct oport *f, enum prt_level level, bool no_quote,
-                      value v, size_t maxlen);
-void output_value(struct oport *f, enum prt_level level, bool no_quote,
-                  value v);
+void output_value_cut(struct oport *f, enum prt_level level,
+                      bool no_quote, value v, size_t maxlen);
+void output_value(struct oport *f, enum prt_level level, value v);
+bool print_constant(struct oport *f, value v, size_t maxlen, bool allow_gone);
+
+void write_nul_string(struct oport *op, struct string *s);
+
 void print_init(void);
 
 void describe_fn(struct strbuf *sb, value v);
 
 void sb_write_string(struct strbuf *sb, const char *str, size_t len);
+
+void sb_add_seclevel(struct strbuf *sb, int lev);
 
 #endif

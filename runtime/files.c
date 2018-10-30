@@ -19,22 +19,19 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "../mudlle-config.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
+#include <grp.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <utime.h>
-
-#ifdef WIN32
-#  include <io.h>
-#else
-#  include <grp.h>
-#  include <pwd.h>
-#  include <glob.h>
-#endif
 
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -43,22 +40,27 @@
 
 #include "../call.h"
 #include "../compile.h"
+#include "../context.h"
 #include "../interpret.h"
 #include "../mparser.h"
+#include "../mudlle-macro.h"
 #include "../ports.h"
 #include "../utils.h"
 
 #include "bigint.h"
+#include "check-types.h"
 #include "files.h"
 #include "io.h"
 #include "mudlle-float.h"
-#include "runtime.h"
+#include "prims.h"
 
+#ifdef ARG_MAX
+#endif
 
 TYPEDOP(load, 0, "`s -> `b. Loads file `s. Returns true if successful",
         1, (struct string *name), OP_STR_READONLY | OP_TRACE, "s.n")
 {
-  TYPEIS(name, type_string);
+  CHECK_TYPES(name, string);
   char *fname;
   ALLOCA_PATH(fname, name);
   return makebool(load_file(fname, fname, fname, 1, true));
@@ -70,21 +72,16 @@ UNSAFETOP(mkdir, 0, "`s `n1 -> `n2. Make directory `s (mode `n1)."
           2, (struct string *name, value mode),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
-  TYPEIS(name, type_string);
-  ISINT(mode);
-
-#ifdef WIN32
-  return makeint(mkdir(name->str));
-#else
+  CHECK_TYPES(name, string,
+              mode, integer);
   return makeint(mkdir(name->str, intval(mode)));
-#endif
 }
 
 UNSAFETOP(rmdir, 0, "`s -> `n. Remove directory `s. Returns Unix errno.",
           1, (struct string *name),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
-  TYPEIS(name, type_string);
+  CHECK_TYPES(name, string);
   return makeint(rmdir(name->str));
 }
 
@@ -93,14 +90,14 @@ UNSAFETOP(directory_files, 0, "`s -> `l. List all files of directory `s"
           1, (struct string *dir),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[ln]")
 {
-  TYPEIS(dir, type_string);
+  CHECK_TYPES(dir, string);
 
   DIR *d = opendir(dir->str);
   if (d == NULL)
     return makebool(false);
 
   struct list *files = NULL;
-  GCPRO1(files);
+  GCPRO(files);
   for (struct dirent *entry; (entry = readdir(d)); )
     {
       struct string *fname = alloc_string(entry->d_name);
@@ -112,58 +109,98 @@ UNSAFETOP(directory_files, 0, "`s -> `l. List all files of directory `s"
   return files;
 }
 
-#ifndef WIN32
+static const long allowed_glob_flags =
+  0
+#ifdef GLOB_TILDE
+ #define GD_TILDE     "  `GLOB_TILDE    \tCarry out tilde expansion for"     \
+                      " home directories.\n"
+ | GLOB_TILDE
+#else
+ #define GD_TILDE ""
+#endif
+#ifdef GLOB_BRACE
+ #define GD_BRACE     "  `GLOB_BRACE    \tExpand {a,b} style brace"          \
+                      " expressions.\n"
+ | GLOB_BRACE
+#else
+ #define GD_BRACE ""
+#endif
+#ifdef GLOB_MARK
+ #define GD_MARK      "  `GLOB_MARK     \tAppend a slash to each path"       \
+                      " corresponding to a directory.\n"
+ | GLOB_MARK
+#else
+ #define GD_MARK ""
+#endif
+#ifdef GLOB_NOCHECK
+ #define GD_NOCHECK   "  `GLOB_NOCHECK  \tIf no pattern matches, return the" \
+                      " original pattern.\n"
+ | GLOB_NOCHECK
+#else
+ #define GD_NOCHECK ""
+#endif
+#ifdef GLOB_NOESCAPE
+ #define GD_NOESCAPE  "  `GLOB_NOESCAPE \tDo not allow backslash to be"      \
+                      " used as an escape character.\n"
+ | GLOB_NOESCAPE
+#else
+ #define GD_NOESCAPE ""
+#endif
+#ifdef GLOB_PERIOD
+ #define GD_PERIOD    "  `GLOB_PERIOD   \tAllow a leading period to be"      \
+                      " matched by metacharacters.\n"
+ | GLOB_PERIOD
+#else
+ #define GD_PERIOD ""
+#endif
+#ifdef GLOB_NOMAGIC
+ #define GD_NOMAGIC   "  `GLOB_NOMAGIC  \tIf the pattern contains no"        \
+                      " metacharacters, return it as the only match,"        \
+                      " even if there is no such file.\n"
+ | GLOB_NOMAGIC
+#else
+ #define GD_NOMAGIC ""
+#endif
+#ifdef GLOB_ONLYDIR
+ #define GD_ONLYDIR   "  `GLOB_ONLYDIR  \tHint only to return matching"      \
+                      " directories. The implementation may ignore this"     \
+                      " flag.\n"
+ | GLOB_ONLYDIR
+#else
+ #define GD_ONLYDIR ""
+#endif
+ | 0;
+
 UNSAFETOP(glob_files, 0,
           "`s0 `s1 `n -> `l. Returns a list of all files matched by "
-          "the glob pattern `s1, executed in directory `s0, using flags in `n "
-          "(`GLOB_xxx). Returns FALSE on error",
+          "the glob pattern `s1, executed in directory `s0. Returns false on"
+          " error. `n specifies flags to use:\n"
+          GD_TILDE
+          GD_BRACE
+          GD_MARK
+          GD_NOCHECK
+          GD_NOESCAPE
+          GD_PERIOD
+          GD_NOMAGIC
+          GD_ONLYDIR,
           3, (struct string *dir, struct string *pat, value n),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ssn.[ln]")
 {
-  TYPEIS(pat, type_string);
-  TYPEIS(dir, type_string);
-
-  long flags = GETINT(n);
-
-  const int allowed_flags =
-    0
-#ifdef GLOB_TILDE
-    | GLOB_TILDE
-#endif
-#ifdef GLOB_BRACE
-    | GLOB_BRACE
-#endif
-#ifdef GLOB_MARK
-    | GLOB_MARK
-#endif
-#ifdef GLOB_NOCHECK
-    | GLOB_NOCHECK
-#endif
-#ifdef GLOB_NOESCAPE
-    | GLOB_NOESCAPE
-#endif
-#ifdef GLOB_PERIOD
-    | GLOB_PERIOD
-#endif
-#ifdef GLOB_NOMAGIC
-    | GLOB_NOMAGIC
-#endif
-#ifdef GLOB_ONLYDIR
-    | GLOB_ONLYDIR
-#endif
-    ;
-
-  if (flags & ~allowed_flags)
-    runtime_error(error_bad_value);
+  long flags;
+  CHECK_TYPES(pat, string,
+              dir, string,
+              n,   CT_INT(flags));
+  if (flags & ~allowed_glob_flags)
+    RUNTIME_ERROR(error_bad_value, "invalid flags");
 
   int orig_wd;
   if ((orig_wd = open(".", 0)) < 0)
-    runtime_error(error_bad_value);
+    RUNTIME_ERROR(error_abort, "cannot find current working directory");
 
   if (chdir(dir->str) < 0)
     {
       close(orig_wd);
-      runtime_error(error_bad_value);
+      RUNTIME_ERROR(error_bad_value, "failed to change working directory");
     }
 
   glob_t files;
@@ -172,7 +209,7 @@ UNSAFETOP(glob_files, 0,
     {
       close(orig_wd);
       globfree(&files);
-      runtime_error(error_bad_value);
+      RUNTIME_ERROR(error_bad_value, "failed to restore working directory");
     }
 
   close(orig_wd);
@@ -184,7 +221,7 @@ UNSAFETOP(glob_files, 0,
     }
 
   struct list *l = NULL;
-  GCPRO1(l);
+  GCPRO(l);
   for (char **s = files.gl_pathv; *s; ++s)
     {
       struct string *f = alloc_string(*s);
@@ -194,7 +231,6 @@ UNSAFETOP(glob_files, 0,
   globfree(&files);
   return l;
 }
-#endif /* ! WIN32 */
 
 static value make_timespec(const struct timespec *ts)
 {
@@ -210,23 +246,30 @@ static value make_timespec(const struct timespec *ts)
 static value build_file_stat(struct stat *sb)
 {
   struct vector *info = alloc_vector(FILE_STAT_FIELDS);
-  GCPRO1(info);
+  GCPRO(info);
 
-  info->data[FS_DEV]     = makeint((int)sb->st_dev);
-  info->data[FS_INO]     = makeint((int)sb->st_ino);
-  info->data[FS_MODE]    = makeint(sb->st_mode);
-  info->data[FS_NLINK]   = makeint(sb->st_nlink);
-  info->data[FS_UID]     = makeint(sb->st_uid);
-  info->data[FS_GID]     = makeint(sb->st_gid);
-  info->data[FS_RDEV]    = makeint((int)sb->st_rdev);
-  info->data[FS_SIZE]    = makeint((int)sb->st_size);
-  info->data[FS_ATIME]   = makeint(sb->st_atime);
-  info->data[FS_MTIME]   = makeint(sb->st_mtime);
-  info->data[FS_CTIME]   = makeint(sb->st_ctime);
-#ifndef WIN32
-  info->data[FS_BLKSIZE] = makeint(sb->st_blksize);
-  info->data[FS_BLOCKS]  = makeint((int)sb->st_blocks);
-#endif
+#define SETVSTAT(FIELD, field) \
+  SET_VECTOR(info, FS_ ## FIELD, make_int_or_bigint(sb->st_ ## field))
+
+  SETVSTAT(DEV,   dev);
+  SETVSTAT(INO,   ino);
+  SETVSTAT(MODE,  mode);
+  SETVSTAT(NLINK, nlink);
+  SETVSTAT(UID,   uid);
+  SETVSTAT(GID,   gid);
+  SETVSTAT(RDEV,  rdev);
+  SETVSTAT(SIZE,  size);
+
+  /* treat time as the time() primitive does: no bigints */
+  info->data[FS_ATIME] = makeint(sb->st_atime);
+  info->data[FS_MTIME] = makeint(sb->st_mtime);
+  info->data[FS_CTIME] = makeint(sb->st_ctime);
+
+  SETVSTAT(BLKSIZE, blksize);
+  SETVSTAT(BLOCKS,  blocks);
+
+#undef SETVSTAT
+
   SET_VECTOR(info, FS_AFTIME, make_timespec(&sb->st_atim));
   SET_VECTOR(info, FS_MFTIME, make_timespec(&sb->st_mtim));
   SET_VECTOR(info, FS_CFTIME, make_timespec(&sb->st_ctim));
@@ -241,9 +284,9 @@ UNSAFETOP(file_stat, 0, "`s -> `v. Returns status of file `s, or false for"
           1, (struct string *fname),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
 {
-  struct stat sb;
+  CHECK_TYPES(fname, string);
 
-  TYPEIS(fname, type_string);
+  struct stat sb;
   if (!stat(fname->str, &sb))
     return build_file_stat(&sb);
   else
@@ -259,25 +302,23 @@ TYPEDOP(file_system_stat, 0, "`s -> `v. Returns file system statistics"
         1, (struct string *fname),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vn]")
 {
-  TYPEIS(fname, type_string);
+  CHECK_TYPES(fname, string);
 
   struct statvfs sb;
   if (statvfs(fname->str, &sb) < 0)
     return makeint(errno);
 
   struct vector *v = alloc_vector(FILE_SYSTEM_STAT_FIELDS);
-  GCPRO1(v);
+  GCPRO(v);
 
 #define SETVFS(FIELD, field) \
-  SET_VECTOR(v, FSYS_ ## FIELD, make_unsigned_int_or_bigint(sb.f_ ## field))
+  SET_VECTOR(v, FSYS_ ## FIELD, make_int_or_bigint(sb.f_ ## field))
 
   SETVFS(BSIZE,   bsize);
   SETVFS(FRSIZE,  frsize);
-  CASSERT_EXPR((fsblkcnt_t)-1 > 0 && (fsblkcnt_t)-1 <= ULONG_MAX);
   SETVFS(BLOCKS,  blocks);
   SETVFS(BFREE,   bfree);
   SETVFS(BAVAIL,  bavail);
-  CASSERT_EXPR((fsfilcnt_t)-1 > 0 && (fsfilcnt_t)-1 <= ULONG_MAX);
   SETVFS(FILES,   files);
   SETVFS(FFREE,   ffree);
   SETVFS(FAVAIL,  favail);
@@ -292,16 +333,15 @@ TYPEDOP(file_system_stat, 0, "`s -> `v. Returns file system statistics"
 }
 #endif  /* USE_GMP */
 
-#ifndef WIN32
 UNSAFETOP(real_path, 0,
           "`s0 -> `s1. Resolves any symbolic links, follows references to"
           " /./ and /../, and returns the canonicalized path for `s0."
           " Returns `errno on error.",
           1, (struct string *path),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.S")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sn]")
 {
+  CHECK_TYPES(path, string);
   char buf[PATH_MAX], *res;
-  TYPEIS(path, type_string);
   if ((res = realpath(path->str, buf)) == NULL)
     return makeint(errno);
   return alloc_string(res);
@@ -314,9 +354,8 @@ UNSAFETOP(file_lstat, 0,
           1, (struct string *fname),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
 {
+  CHECK_TYPES(fname, string);
   struct stat sb;
-
-  TYPEIS(fname, type_string);
   if (!lstat(fname->str, &sb))
     return build_file_stat(&sb);
   else
@@ -331,14 +370,15 @@ UNSAFETOP(file_utime, 0,
           2, (struct string *fname, struct list *mtimes),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sl.n")
 {
-  TYPEIS(fname, type_string);
+  CHECK_TYPES(fname, string,
+              mtimes, CT_TYPESET(TYPESET_LIST));
 
   struct utimbuf buf, *times;
   if (mtimes == NULL)
     times = NULL;
   else
     {
-      TYPEIS(mtimes, type_pair);
+      assert(TYPE(mtimes, pair));
       buf.actime = GETUINT(mtimes->car);
       buf.modtime = GETUINT(mtimes->cdr);
       times = &buf;
@@ -354,7 +394,7 @@ UNSAFETOP(readlink, 0,
           "for failure", 1, (struct string *lname),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
 {
-  TYPEIS(lname, type_string);
+  CHECK_TYPES(lname, string);
 
   struct stat sb;
   if (lstat(lname->str, &sb) || !S_ISLNK(sb.st_mode))
@@ -373,14 +413,13 @@ UNSAFETOP(readlink, 0,
   memcpy(res->str, buf, r);
   return res;
 }
-#endif /* ! WIN32 */
 
 UNSAFETOP(file_regularp, "file_regular?",
           "`s -> `b. Returns TRUE if `s is a regular file.",
           1, (struct string *fname),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
-  TYPEIS(fname, type_string);
+  CHECK_TYPES(fname, string);
   struct stat sb;
   return makebool(stat(fname->str, &sb) == 0 && S_ISREG(sb.st_mode));
 }
@@ -390,7 +429,7 @@ UNSAFETOP(directoryp, "directory?",
           1, (struct string *dname),
           OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
-  TYPEIS(dname, type_string);
+  CHECK_TYPES(dname, string);
   struct stat sb;
   return makebool(stat(dname->str, &sb) == 0 && S_ISDIR(sb.st_mode));
 }
@@ -400,7 +439,7 @@ UNSAFETOP(remove, 0, "`s -> `n. Removes file `s. Returns the Unix error"
 	  1, (struct string *fname),
 	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
-  TYPEIS(fname, type_string);
+  CHECK_TYPES(fname, string);
   return makeint(unlink(fname->str) ? errno : 0);
 }
 
@@ -410,20 +449,21 @@ UNSAFETOP(rename, 0,
 	  2, (struct string *oldname, struct string *newname),
 	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.n")
 {
-  TYPEIS(oldname, type_string);
-  TYPEIS(newname, type_string);
+  CHECK_TYPES(oldname, string,
+              newname, string);
   return makeint(rename(oldname->str, newname->str) ? errno : 0);
 }
 
-#ifndef WIN32
 UNSAFETOP(chown, 0, "`s1 `n0 `n1 -> `n2. Changed owner of file `s1 to uid `n0"
           " and gid `n1. Use -1 not to change that field."
           " Returns errno or 0 for success.",
           3, (struct string *fname, value uid, value gid),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "snn.n")
 {
-  TYPEIS(fname, type_string);
-  return makeint(chown(fname->str, GETINT(uid), GETINT(gid)) ? errno : 0);
+  CHECK_TYPES(fname, string,
+              uid,   integer,
+              gid,   integer);
+  return makeint(chown(fname->str, intval(uid), intval(gid)) ? errno : 0);
 }
 
 UNSAFETOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
@@ -431,16 +471,17 @@ UNSAFETOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
           2, (struct string *fname, value mode),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
-  TYPEIS(fname, type_string);
-  return makeint(chmod(fname->str, GETINT(mode)) ? errno : 0);
+  CHECK_TYPES(fname, string,
+              mode,  integer);
+  return makeint(chmod(fname->str, intval(mode)) ? errno : 0);
 }
-#endif /* ! WIN32 */
 
 TYPEDOP(strerror, 0, "`n -> `s. Returns an error string corresponding to"
         " errno `n, or `false if there is no such errno.",
         1, (value merrno), OP_LEAF | OP_NOESCAPE, "n.[sz]")
 {
-  const char *s = strerror(GETINT(merrno));
+  CHECK_TYPES(merrno, integer);
+  const char *s = strerror(intval(merrno));
   return s ? alloc_string(s) : makebool(false);
 }
 
@@ -449,14 +490,14 @@ TYPEDOP(getenv, 0, "`s0 -> `s1|false. Return the value of the environment"
         1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
         "s.[sz]")
 {
-  TYPEIS(s, type_string);
+  CHECK_TYPES(s, string);
   char *r = getenv(s->str);
   return r == NULL ? makebool(false) : alloc_string(r);
 }
 
 TYPEDOP(getcwd, 0, "-> `s. Returns the name of the current working directory,"
         " or a Unix errno value on error. Cf. `strerror",
-        0, (void), OP_LEAF | OP_NOESCAPE, ".S")
+        0, (void), OP_LEAF | OP_NOESCAPE, ".[sn]")
 {
   char buf[PATH_MAX];
   char *wd = getcwd(buf, sizeof buf);
@@ -468,6 +509,7 @@ UNSAFETOP(chdir, 0, "`s -> `n. Change current working directory to `s."
           1, (struct string *path), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
           "s.n")
 {
+  CHECK_TYPES(path, string);
   if (chdir(path->str) < 0)
     return makeint(errno);
   return makeint(0);
@@ -499,24 +541,15 @@ UNSAFETOP(print_file_part, 0,
               value mbytes),
           OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "osn[nu].n")
 {
-  TYPEIS(name, type_string);
-
-  long start = GETINT(mstart);
-  if (start < 0)
-    runtime_error(error_bad_value);
-  long bytes;
-  if (mbytes == NULL)
-    bytes = -1;
-  else
-    {
-      bytes = GETINT(mbytes);
-      if (bytes < 0)
-        runtime_error(error_bad_value);
-    }
-
-  p = get_oport(p);
-  if (p == NULL)
-    runtime_error(error_bad_type);
+  long start, bytes = -1;
+  {
+    GCPRO(name);                /* CT_OPORT may cause GC */
+    CHECK_TYPES(p,      CT_OPORT,
+                name,   string,
+                mstart, CT_RANGE(start, 0, LONG_MAX),
+                mbytes, OR(null, CT_RANGE(bytes, 0, LONG_MAX)));
+    UNGCPRO();
+  }
 
   FILE *f = fopen(name->str, "r");
   if (f == NULL)
@@ -529,7 +562,7 @@ UNSAFETOP(print_file_part, 0,
       return makeint(r);
     }
 
-  GCPRO1(p);
+  GCPRO(p);
 
   int result = 0;
   const size_t bufsize = 16 * 1024;
@@ -547,7 +580,7 @@ UNSAFETOP(print_file_part, 0,
         }
       struct oport_stat obuf;
       opstat(p, &obuf);
-      if (obuf.size >= (obuf.type == oport_type_file
+      if (obuf.size >= (is_file_port(p)
                         ? 10 * 1024 * 1024
                         : 128 * 1024))
         {
@@ -580,9 +613,9 @@ UNSAFETOP(file_read, 0,
           "`s1 -> `s2|`n. Reads and returns at most `MAX_STRING_SIZE"
           " characters from file `s1. Returns a Unix errno value on error.",
 	  1, (struct string *name),
-	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.S")
+	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s.[sn]")
 {
-  TYPEIS(name, type_string);
+  CHECK_TYPES(name, string);
 
   int fd = open(name->str, O_RDONLY);
   if (fd < 0)
@@ -607,7 +640,7 @@ UNSAFETOP(file_read, 0,
 
   if (n != size)
     {
-      GCPRO1(s);
+      GCPRO(s);
       struct string *ns = alloc_empty_string(n);
       memcpy(ns->str, s->str, n);
       UNGCPRO();
@@ -625,7 +658,7 @@ UNSAFETOP(file_read, 0,
 static bool write_block(void *data, struct string *mstr, size_t len)
 {
   const char *str = mstr->str;
-  int fd = (long)data;
+  int fd = ptr_int(data);
   while (len > 0)
     {
       ssize_t n = write(fd, str, len);
@@ -641,21 +674,21 @@ static bool write_block(void *data, struct string *mstr, size_t len)
   return true;
 }
 
-static value file_write(struct string *file, value data, bool do_append)
+static value file_write(struct string *file, value data, bool do_append,
+                        const struct prim_op *op)
 {
-  TYPEIS(file, type_string);
-  if (!TYPE(data, type_string))
-    check_string_port(data);
+  CHECK_TYPES_OP(op,
+                 file, string,
+                 data, OR(string, CT_STR_OPORT));
 
   int m = O_WRONLY | O_CREAT | (do_append ? O_APPEND : O_TRUNC);
   int fd = open(file->str, m, 0666);
   if (fd < 0)
     return makeint(errno);
 
-  if (!(TYPE(data, type_string)
-        ? write_block((void *)(long)fd, data,
-                      string_len((struct string *)data))
-        : port_for_blocks(data, write_block, (void *)(long)fd)))
+  if (!(TYPE(data, string)
+        ? write_block(int_ptr(fd), data, string_len((struct string *)data))
+        : port_for_blocks(data, write_block, int_ptr(fd))))
     goto got_error;
 
   close(fd);
@@ -674,9 +707,9 @@ UNSAFETOP(file_write, 0,
           "Returns a Unix error number for failure or 0 for success.\n"
           "On failure, partial data may have been written.",
           2, (struct string *file, value data),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s[so].n")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s[so].n")
 {
-  return file_write(file, data, false);
+  return file_write(file, data, false, THIS_OP);
 }
 
 UNSAFETOP(file_append, 0,
@@ -686,46 +719,35 @@ UNSAFETOP(file_append, 0,
           "Returns a Unix error number for failure or 0 for success.\n"
           "On failure, partial data may have been written.",
           2, (struct string *file, value data),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s[so].n")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s[so].n")
 {
-  return file_write(file, data, true);
+  return file_write(file, data, true, THIS_OP);
 }
 
-#ifndef WIN32
 SECTOP(passwd_file_entries, 0,
        "-> `l. Returns a list of [ `pw_name `pw_uid "
        "`pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of "
        "/etc/passwd. Cf. `getpwent(3)",
-       0, (void),
-       1,
-       OP_LEAF | OP_NOESCAPE, ".l")
+       0, (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
 {
   struct list *res = NULL;
-  struct passwd *pw;
   struct vector *v = NULL;
 
-  GCPRO2(res, v);
+  GCPRO(res, v);
 
   setpwent();
   for (;;)
     {
-      do
-	{
-	  errno = 0;
-	  pw = getpwent();
-	}
-      while (pw == NULL && errno == EINTR);
-
+      errno = 0;
+      struct passwd *pw = getpwent();
       if (pw == NULL)
-	{
-	  int en = errno;
-	  endpwent();
-	  if (en)
-	    runtime_error(error_bad_value);
-	  break;
+        {
+          if (errno == EINTR)
+            continue;
+          break;
 	}
 
-      v = alloc_vector(6);
+      v = alloc_vector(PASSWD_ENTRY_FIELDS);
       SET_VECTOR(v, PW_NAME,  alloc_string(pw->pw_name));
       SET_VECTOR(v, PW_UID,   makeint(pw->pw_uid));
       SET_VECTOR(v, PW_GID,   makeint(pw->pw_gid));
@@ -736,6 +758,11 @@ SECTOP(passwd_file_entries, 0,
       res = alloc_list(v, res);
     }
 
+  int en = errno;
+  endpwent();
+  if (en)
+    runtime_error(error_bad_value);
+
   UNGCPRO();
 
   return res;
@@ -745,15 +772,13 @@ SECTOP(group_file_entries, 0,
        "-> `l. Returns a list of [ `gr_name `gr_gid "
        "( `gr_mem ... ) ] from the contents of /etc/group."
        " Cf. `getgrent(3)",
-       0, (void),
-       1,
-       OP_LEAF | OP_NOESCAPE, ".l")
+       0, (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
 {
   struct list *res = NULL, *l = NULL;
   struct group *grp;
   struct vector *v = NULL;
 
-  GCPRO3(res, v, l);
+  GCPRO(res, v, l);
 
   setgrent();
   for (;;)
@@ -794,7 +819,6 @@ SECTOP(group_file_entries, 0,
 
   return res;
 }
-#endif /* ! WIN32 */
 
 #define DEF(s) system_define(#s, makeint(s))
 
@@ -815,7 +839,6 @@ void files_init(void)
 
   DEFINE(chdir);
 
-#ifndef WIN32
   DEFINE(real_path);
   DEFINE(readlink);
   DEFINE(file_lstat);
@@ -894,5 +917,4 @@ void files_init(void)
 #ifdef GLOB_ONLYDIR
   DEF(GLOB_ONLYDIR);
 #endif
-#endif /* ! WIN32 */
 }

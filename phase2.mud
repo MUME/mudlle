@@ -20,10 +20,10 @@
  */
 
 library phase2 // Phase 2: 3-address (not really) generation
-requires system, sequences, misc, compiler, vars, ins3, dlist
+requires compiler, dlist, ins3, misc, sequences, vars
 defines mc:phase2, mc:inline_builtin_call, mc:reset_closure_count
 reads mc:this_module, mc:verbose
-writes mc:this_function, mc:lineno
+writes mc:this_function
 // See ins3.mud for details on these instructions
 
 // temporaries are added to the local variables of each function
@@ -41,7 +41,7 @@ writes mc:this_function, mc:lineno
 
 [
 
-  | cundefined, ctrue, cfalse, czero, closure_count, builtin_branch,
+  | cundefined, ctrue, cfalse, czero, cone, closure_count, builtin_branch,
     builtin_call?, builtin_branch_not, comp_true, comp_false, vset, phase2,
     gen_clist, gen_partial_clist, gen_component, gen_if, gen_while,
     gen_condition, make_bf, builtin_functions, builtin_branches, make_bb,
@@ -68,17 +68,18 @@ writes mc:this_function, mc:lineno
   builtin_branch = sequence
     (false, false,
      mc:branch_eq, mc:branch_ne,
-     mc:branch_lt, mc:branch_le,
-     mc:branch_gt, mc:branch_ge,
-     false, false, false, false, false, false,
+     mc:branch_lt, mc:branch_ge,
+     mc:branch_le, mc:branch_gt,
+     false, false, mc:branch_bitand, false, false, false,
      false, false, false, false, false, false,
      false, false, false, false, false, false, false, false);
   assert(vlength(builtin_branch) == mc:parser_builtins);
   builtin_branch_not = sequence
     (false, false,
      mc:branch_ne, mc:branch_eq,
-     mc:branch_ge, mc:branch_gt,
-     mc:branch_le, mc:branch_lt);
+     mc:branch_ge, mc:branch_lt,
+     mc:branch_gt, mc:branch_le,
+     false, false, mc:branch_nbitand);
   for (|i, l| [ i = vlength(builtin_branch_not); l = vlength(builtin_branch) ];
        i < l;
        ++i)
@@ -182,6 +183,7 @@ writes mc:this_function, mc:lineno
      make_bf("set_cdr!",       gen_set_mem!(1, type_pair),   2),
      make_bf("symbol_name",    mc:b_symbol_name,             1),
      make_bf("symbol_get",     mc:b_symbol_get,              1),
+     make_bf("symbol_ref",     mc:b_symbol_ref,              2),
      make_bf("symbol_set!",    gen_set_mem!(1, type_symbol), 2),
      make_bf("cons",           mc:b_cons,                    2),
      make_bf("pcons",          mc:b_pcons,                   2),
@@ -222,7 +224,10 @@ writes mc:this_function, mc:lineno
      make_bb("readonly?", mc:branch_readonly, mc:branch_writable, 1),
      make_bb("any_primitive?", mc:branch_any_prim, mc:branch_not_prim, 1),
 
-     make_bb("equal?", mc:branch_equal, mc:branch_nequal, 2));
+     make_bb("equal?", mc:branch_equal, mc:branch_nequal, 2),
+
+     make_bb("bit_set?", mc:branch_bitset, mc:branch_bitclear, 2),
+     make_bb("bit_clear?", mc:branch_bitclear, mc:branch_bitset, 2));
 
   builtin_call? = fn (function, args, builtins)
     [
@@ -254,10 +259,10 @@ writes mc:this_function, mc:lineno
 
   // gniark, gniark, guess the values
   cundefined = mc:var_make_constant(42);
-  ctrue = mc:var_make_constant(true);
-  comp_true = sequence(mc:c_recall, -1, ctrue);
+  ctrue = cone = mc:var_make_constant(true);
+  comp_true = sequence(mc:c_recall, mc:no_loc, ctrue);
   cfalse = czero = mc:var_make_constant(false);
-  comp_false = sequence(mc:c_recall, -1, cfalse);
+  comp_false = sequence(mc:c_recall, mc:no_loc, cfalse);
 
   mc:phase2 = fn (mod)
     mod[mc:m_body] = phase2(mod[mc:m_body]);
@@ -277,100 +282,48 @@ writes mc:this_function, mc:lineno
         il[mc:il_ins] = mc:make_compute_ins(bf[2], result, cdr(args));
     ];
 
-  ins_typeset_trap = fn (topf, arg, typeset)
+  ins_typeset_trap = fn (topf, arg, loc, typeset)
     [
       // common case
-      if (typeset == mc:typeset_any)
+      if (typeset == typeset_any)
         exit<function> null;
 
-      | types |
-      types = mc:types_from_typeset(typeset);
-      if (cdr(types) == null)
-        [
-          mc:ins_trap(topf, mc:trap_type, error_bad_type,
-                      list(arg, mc:var_make_constant(car(types))));
-          exit<function> null;
-        ];
-
-      | oklab, elab, int_ok? |
-      elab = mc:new_label(topf);
-      oklab = mc:new_label(topf);
-      int_ok? = typeset & (1 << type_integer);
-      mc:ins_branch(topf, mc:branch_type? + type_integer,
-                    if (int_ok?) oklab else elab,
-                    list(arg));
-      if (int_ok?
-          && cdr(types = lfilter(fn (n) n != type_integer, types)) == null)
-        [
-          mc:ins_trap(topf, mc:trap_type, error_bad_type,
-                      list(arg, mc:var_make_constant(car(types))));
-          mc:ins_branch(topf, mc:branch_always, oklab, null);
-        ]
-      else
-        [
-          | null_ok? |
-          null_ok? = typeset & (1 << type_null);
-          mc:ins_branch(topf, mc:branch_type? + type_null,
-                        if (null_ok?) oklab else elab,
-                        list(arg));
-          if (null_ok?
-              && cdr(types = lfilter(fn (n) n != type_null, types)) == null)
-            [
-              mc:ins_trap(topf, mc:trap_type, error_bad_type,
-                          list(arg, mc:var_make_constant(car(types))));
-              mc:ins_branch(topf, mc:branch_always, oklab, null);
-            ]
-          else
-            [
-              loop
-                [
-                  if (types == null) exit null;
-                  mc:ins_branch(topf, mc:branch_type? + car(types), oklab,
-                                list(arg));
-                  types = cdr(types);
-                ];
-            ];
-        ];
-
-      mc:ins_label(topf, elab);
-      mc:ins_trap(topf, mc:trap_always, error_bad_type, null);
-      mc:ins_label(topf, oklab);
+      assert((typeset & ~typeset_any) == 0);
+      mc:set_loc(loc);
+      mc:ins_trap(topf, mc:trap_typeset, error_bad_type,
+                  list(arg, mc:var_make_constant(typeset)));
     ];
 
   phase2 = fn (top)
     // Returns: intermediate rep of function top
     [
-      | clist, topf, result, args, typesets |
+      | clist, topf, result, args |
 
       mc:this_function = top;
       clist = top[mc:c_fvalue];
       topf = mc:new_fncode(top);
       args = top[mc:c_fargs];
-      typesets = top[mc:c_fargtypesets];
 
-      mc:lineno = top[mc:c_flineno];
+      mc:set_loc(top[mc:c_loc]);
 
       // generate argument count check trap (not for varargs functions)
       if (!top[mc:c_fvarargs])
 	mc:ins_trap(topf, mc:trap_argcheck, error_wrong_parameters,
-		    list(mc:var_make_constant(llength(top[mc:c_fargs]))));
+		    list(mc:var_make_constant(llength(args))));
 
       // argument type checks
       while (args != null)
 	[
-	  | typeset |
-
-	  typeset = car(typesets);
-          ins_typeset_trap(topf, car(args), typeset);
-	  args = cdr(args);
-	  typesets = cdr(typesets);
+	  | arg, loc, typeset |
+	  @([arg typeset loc] . args) = args;
+          ins_typeset_trap(topf, arg, loc, typeset);
 	];
 
       // compute expression
       result = gen_clist(topf, clist);
 
       // return result
-      ins_typeset_trap(topf, result, top[mc:c_freturn_typeset]);
+      ins_typeset_trap(topf, result, mc:no_loc, top[mc:c_freturn_typeset]);
       mc:ins_return(topf, result);
 
       top[mc:c_fvalue] =
@@ -418,19 +371,19 @@ writes mc:this_function, mc:lineno
       // terms contains terms to be added; one of
       //   null
       //   arg1 . null
-      //   arg2 . (lineno . arg1)
+      //   arg2 . (loc . arg1)
 
       concat? = false;
 
       // updates terms with the remaining terms to be added
-      recurse = fn (args, partial?, lineno)
+      recurse = fn (args, partial?, loc)
         lforeach(fn (argl) [
           | arg |
           arg = gen_partial_clist(fcode, argl);
 
           if (arg[mc:c_class] == mc:c_builtin
               && arg[mc:c_bfn] == mc:b_add)
-            exit<function> recurse(arg[mc:c_bargs], false, arg[mc:c_lineno]);
+            exit<function> recurse(arg[mc:c_bargs], false, arg[mc:c_loc]);
 
           | r |
           r = gen_component(fcode, arg);
@@ -456,9 +409,9 @@ writes mc:this_function, mc:lineno
                           || string?(v) && string?(v2))
                         [
                           if (mc:verbose >= 3)
-                            dformat("%d: %s FOLD%s\n",
-                                    if (lineno > 0) lineno
-                                    else mc:lineno,
+                            dformat("%0w: %s FOLD%s\n",
+                                    if (mc:loc_line(loc) > 0) loc
+                                    else mc:get_loc(),
                                     if (string?(v)) "STR" else "INT",
                                     if (partial?) " (partial)" else "");
                           | sum |
@@ -472,8 +425,7 @@ writes mc:this_function, mc:lineno
               // together now
               if (cdr(terms) != null)
                 [
-                  if (cadr(terms) > 0)
-                    mc:lineno = cadr(terms);
+                  mc:maybe_set_loc(cadr(terms));
                   terms = gen_builtin(fcode, mc:b_add,
                                       list(cddr(terms), car(terms)))
                     . null;
@@ -481,25 +433,24 @@ writes mc:this_function, mc:lineno
                 ]
             ];
           if (terms != null)
-            terms = lineno . car(terms);
+            terms = loc . car(terms);
           add_leaves = r . add_leaves;
           terms = r . terms;
         ], args);
 
-      oline = mc:lineno;
-      recurse(args, partial?, mc:lineno);
-      mc:lineno = oline;
+      oline = mc:get_loc();
+      recurse(args, partial?, mc:get_loc());
+      mc:set_loc(oline);
 
       | result |
       if (cdr(terms) == null)
         result = car(terms)
       else
         [
-          if (cadr(terms) > 0)
-            mc:lineno = cadr(terms);
+          mc:maybe_set_loc(cadr(terms));
           result = gen_builtin(fcode, mc:b_add, list(cddr(terms), car(terms)));
           add_ils = dprev(fcode[0]) . add_ils;
-          mc:lineno = oline;
+          mc:set_loc(oline);
         ];
 
       if (concat? && llength(add_leaves) > 2)
@@ -511,8 +462,7 @@ writes mc:this_function, mc:lineno
             assert(ins[mc:i_class] == mc:i_compute
                    && ins[mc:i_aop] == mc:b_add);
             // replace previous add with 0+0
-            ins[mc:i_aargs] = list(mc:var_make_constant(0),
-                                   mc:var_make_constant(0));
+            ins[mc:i_aargs] = list(czero, czero);
           ], add_ils);
           result = mc:new_local(fcode);
           add_leaves = lreverse!(add_leaves);
@@ -531,7 +481,8 @@ writes mc:this_function, mc:lineno
                     flab, fn () [
                       mc:ins_label(fcode, flab);
                       gen_fail(fcode, null, null);
-                    ]);
+                    ],
+                    false);
       mc:ins_label(fcode, slab);
       mc:ins_assign(fcode, result, cundefined);
     ];
@@ -541,11 +492,10 @@ writes mc:this_function, mc:lineno
     // Effects: Generates 3-address code to evaluate c in fcode
     // Returns: The variable that contains the expression's value
     [
-      | class, olineno, result |
+      | class, prevloc, result |
 
-      olineno = mc:lineno;
-      if (c[mc:c_lineno] > 0)
-	mc:lineno = c[mc:c_lineno];
+      prevloc = mc:get_loc();
+      mc:maybe_set_loc(c[mc:c_loc]);
 
       class = c[mc:c_class];
 
@@ -638,7 +588,17 @@ writes mc:this_function, mc:lineno
               bf[2](fcode, result, cdr(args))
             else
               mc:ins_compute(fcode, bf[2], result, cdr(args))
-	  else
+	  else if ((bf = builtin_call?(function, args, builtin_branches))
+                   && bf[2] != mc:branch_equal) // equal?() is better as-is
+            [
+              | cond, loc |
+              loc = mc:get_loc();
+              cond = list(vector(
+                mc:c_execute, loc,
+                lmap(fn (v) list(vector(mc:c_recall, loc, v)), args)));
+              result = gen_if(fcode, cond, false, false)
+            ]
+          else
 	    mc:ins_call(fcode, result, args);
 	  result
 	]
@@ -662,13 +622,17 @@ writes mc:this_function, mc:lineno
 	  args = c[mc:c_bargs];
 	  if (op == mc:b_if)
 	    [
+              mc:maybe_set_loc(caar(args)[mc:c_loc]);
 	      gen_if(fcode, car(args), cadr(args), false);
 	      cundefined
 	    ]
 	  else if (op == mc:b_ifelse)
-	    gen_if(fcode, car(args), cadr(args), caddr(args))
-	  else if (op == mc:b_sc_and || op == mc:b_sc_or)
-	    gen_if(fcode, c . null, comp_true . null, comp_false . null)
+            [
+              mc:maybe_set_loc(caar(args)[mc:c_loc]);
+              gen_if(fcode, car(args), cadr(args), caddr(args))
+            ]
+	  else if (op == mc:b_sc_and || op == mc:b_sc_or || op == mc:b_not)
+	    gen_if(fcode, c . null, false, false)
 	  else if (op == mc:b_while)
             gen_while(fcode, car(args), cadr(args))
 	  else if (op == mc:b_loop)
@@ -702,46 +666,67 @@ writes mc:this_function, mc:lineno
 	]
       else fail();
 
-      mc:lineno = olineno;
+      mc:set_loc(prevloc);
       result
     ];
 
   gen_if = fn (fcode, condition, success, failure)
     // Types: fcode : fncode
     //        condition, success, failure : list of component or 'false'
+    //        If both are 'false', return true/false result
     // Effects: generates code for 'if (condition) success else failure'
     // Returns: The variable that contains the if's result
-    //   (if neither of success or failure is false)
+    //   (if unless one of success or failure is false)
     [
-      | slab, flab, endlab, result |
+      | slab, flab, endlab, result, boolean |
 
       slab = mc:new_label(fcode);
       flab = mc:new_label(fcode);
       endlab = mc:new_label(fcode);
+
+      boolean = false;
+      if (!success && !failure)
+        [
+          boolean = (fn (r)
+            [
+              mc:ins_assign(fcode, result, r);
+              mc:ins_branch(fcode, mc:branch_always, endlab, null);
+            ]) . false;
+          success = list(comp_true);
+          failure = list(comp_false);
+        ];
+
       if (success && failure) result = mc:new_local(fcode);
-      gen_condition(fcode, condition,
-		    slab, fn () [
-		      | sresult |
-		      mc:ins_label(fcode, slab);
-		      if (success)
-			[
-			  sresult = gen_clist(fcode, success);
-			  if (failure) // if not an 'ifelse' result is discarded
-			    mc:ins_assign(fcode, result, sresult)
-			];
-		      mc:ins_branch(fcode, mc:branch_always, endlab, null);
-		    ],
-		    flab, fn () [
-		      | fresult |
-		      mc:ins_label(fcode, flab);
-		      if (failure)
-			[
-			  fresult = gen_clist(fcode, failure);
-			  if (success) // if not an 'ifelse' result is discarded
-			    mc:ins_assign(fcode, result, fresult)
-			];
-		      mc:ins_branch(fcode, mc:branch_always, endlab, null);
-		    ]);
+
+      | successf, failuref |
+
+      successf = fn ()
+        [
+          | sresult |
+          mc:ins_label(fcode, slab);
+          if (success)
+            [
+              sresult = gen_clist(fcode, success);
+              if (failure) // if not an 'ifelse' result is discarded
+                mc:ins_assign(fcode, result, sresult)
+            ];
+          mc:ins_branch(fcode, mc:branch_always, endlab, null);
+        ];
+
+      failuref = fn ()
+        [
+          | fresult |
+          mc:ins_label(fcode, flab);
+          if (failure)
+            [
+              fresult = gen_clist(fcode, failure);
+              if (success) // if not an 'ifelse' result is discarded
+                mc:ins_assign(fcode, result, fresult)
+            ];
+          mc:ins_branch(fcode, mc:branch_always, endlab, null);
+        ];
+
+      gen_condition(fcode, condition, slab, successf, flab, failuref, boolean);
       mc:ins_label(fcode, endlab);
       result
     ];
@@ -769,12 +754,12 @@ writes mc:this_function, mc:lineno
 		    exitlab, fn () [
 		      mc:ins_label(fcode, exitlab);
 		      mc:ins_branch(fcode, mc:branch_always, endlab, null);
-		    ]);
+		    ], false);
       mc:ins_label(fcode, endlab);
       mc:end_block(fcode, cundefined)
     ];
 
-  gen_condition = fn (fcode, condition, slab, success, flab, failure)
+  gen_condition = fn (fcode, condition, slab, success, flab, failure, boolean)
     // Types: fcode : fncode
     //        condition : list of component
     //        slab, flab : label
@@ -783,14 +768,31 @@ writes mc:this_function, mc:lineno
     //   slab (respectively flab) on success (failure).
     //   success() and failure() are called to generate the actual code
     //   for theses cases.
+    //   If boolean cons(func, inverse?), call func(var) var contains the
+    //   (possibly inverted) boolean result instead
     [
-      | class, bargs, branch_succeed, branch_fail |
+      | class, bargs, branch_succeed, branch_fail, prevloc,
+        inv_bool, bool_result |
+
+      inv_bool = fn (bool) match (bool)
+        [
+          ,false => false;
+          (f . i?) => f . !i?;
+          _ => fail;
+        ];
+
+      bool_result = fn (var)
+        [
+          car(boolean)(var);
+          if (success) success();
+          if (failure) failure();
+          mc:set_loc(prevloc);
+        ];
 
       condition = gen_partial_clist(fcode, condition);
 
-      // We may want to restore the previous line number
-      if (condition[mc:c_lineno] > 0)
-	mc:lineno = condition[mc:c_lineno];
+      prevloc = mc:get_loc();
+      mc:maybe_set_loc(condition[mc:c_loc]);
 
       class = condition[mc:c_class];
       if (class == mc:c_builtin)
@@ -803,13 +805,14 @@ writes mc:this_function, mc:lineno
 	      // Tricky ...
 	      | label |
 	      label = mc:new_label(fcode);
-	      gen_condition(fcode, car(args),
-			    label, fn () [
-			      mc:ins_label(fcode, label);
-			      gen_condition(fcode, cadr(args),
-					    slab, success, flab, failure);
-			    ],
-			    flab, false);
+	      gen_condition(
+                fcode, car(args), label,
+                fn () [
+                  mc:ins_label(fcode, label);
+                  gen_condition(fcode, cadr(args), slab, success,
+                                flab, failure, boolean);
+                ], flab, false, false);
+              mc:set_loc(prevloc);
 	      exit<function> null;
 	    ]
 	  else if (op == mc:b_sc_or)
@@ -817,55 +820,133 @@ writes mc:this_function, mc:lineno
 	      // Tricky ...
 	      | label |
 	      label = mc:new_label(fcode);
-	      gen_condition(fcode, car(args),
-			    slab, false,
-			    label, fn () [
-			      mc:ins_label(fcode, label);
-			      gen_condition(fcode, cadr(args),
-					    slab, success, flab, failure);
-			    ]);
+	      gen_condition(
+                fcode, car(args),
+                slab, false,
+                label, fn () [
+                  mc:ins_label(fcode, label);
+                  gen_condition(fcode, cadr(args), slab, success,
+                                flab, failure, boolean);
+                ], false);
+              mc:set_loc(prevloc);
 	      exit<function> null;
 	    ]
 	  else if (op == mc:b_not)
 	    [
 	      // Swap conclusions
-	      gen_condition(fcode, car(args), flab, failure, slab, success);
+	      gen_condition(fcode, car(args), flab, failure,
+                            slab, success, inv_bool(boolean));
+              mc:set_loc(prevloc);
 	      exit<function> null;
 	    ]
 	  else if (builtin_branch[op])
 	    [
-              | is_recall_zero? |
+              | cst_val |
 
-              is_recall_zero? = fn (c)
-                (c[mc:c_class] == mc:c_recall
-                 && mc:var_value(c[mc:c_rsymbol]) == 0);
+              // return constant or null
+              cst_val = fn (c)
+                match (c[mc:c_class])
+                  [
+                    ,mc:c_recall => mc:var_value(c[mc:c_rsymbol]);
+                    ,mc:c_constant => c[mc:c_cvalue];
+                    _ => null;
+                  ];
 
 	      // Generate specialised branch for certain operators
 	      // (eg <, <=, ...)
               args = lmap(fn (arg) gen_partial_clist(fcode, arg), args);
 
-              if (op == mc:b_eq || op == mc:b_ne)
-                <normal> [
+              <normal> if (op == mc:b_eq || op == mc:b_ne)
+                [
                   | arg1, arg2 |
                   @(arg1 arg2) = args;
-                  if (is_recall_zero?(arg2))
+                  if (cst_val(arg2) == false)
                     null
-                  else if (is_recall_zero?(arg1))
+                  else if (cst_val(arg1) == false)
                     arg1 = arg2
                   else
                     exit<normal> null;
 
                   args = list(arg1);
-                  exit<function>
-                    if (op == mc:b_eq)
-                      gen_condition(fcode, args, flab, failure, slab, success)
-                    else
-                      gen_condition(fcode, args, slab, success, flab, failure);
+                  if (op == mc:b_eq)
+                    gen_condition(fcode, args, flab, failure, slab, success,
+                                  inv_bool(boolean))
+                  else
+                    gen_condition(fcode, args, slab, success, flab, failure,
+                                  boolean);
+                  mc:set_loc(prevloc);
+                  exit<function> null;
+                ]
+              else if (op == mc:b_bitand)
+                [
+                  | arg1, arg2, cst, carg |
+                  @(arg1 arg2) = args;
+                  if (integer?(cst = cst_val(carg = arg1)))
+                    arg1 = arg2
+                  else if (integer?(cst = cst_val(carg = arg2)))
+                    null
+                  else
+                    exit<normal> null;
+
+                  if (cst && (cst & (cst - 1)) == 0)
+                    [
+                      // if cst has one bit only, check for ~arg2 & cst
+                      | not? |
+                      not? = (arg1[mc:c_class] == mc:c_builtin
+                              && arg1[mc:c_bfn] == mc:b_bitnot);
+                      if (not?)
+                        [
+                          @(arg1) = arg1[mc:c_bargs];
+                          arg1 = gen_partial_clist(fcode, arg1);
+                        ];
+
+                      if (boolean)
+                        [
+                          | inv?, r, bit |
+                          arg1 = gen_component(fcode, arg1);
+                          r = mc:new_local(fcode);
+                          bit = bits_exists(fn (i) true, cst);
+                          mc:ins_compute(fcode, mc:b_shift_right, r,
+                                         list(arg1, mc:var_make_constant(bit)));
+                          mc:ins_compute(fcode, mc:b_bitand, r,
+                                         list(r, cone));
+                          @(_ . inv?) = boolean;
+                          inv? ^= not?;
+                          if (inv?)
+                            mc:ins_compute(fcode, mc:b_bitxor,
+                                           r, list(r, cone));
+                          exit<function> bool_result(r);
+                        ];
+
+                      if (not?)
+                        [
+                          condition[mc:c_bargs] = list(list(arg1), list(carg));
+                          gen_condition(
+                            fcode, list(condition), flab, failure, slab, success,
+                            inv_bool(boolean));
+                          mc:set_loc(prevloc);
+                          exit<function> null;
+                        ]
+                    ];
                 ];
 
               bargs = lmap(fn (arg) gen_component(fcode, arg), args);
-              branch_fail = builtin_branch_not[op];
-              branch_succeed = builtin_branch[op];
+              if (boolean && op != mc:b_bitand)
+                [
+                  assert(op >= mc:b_eq && op <= mc:b_gt);
+                  | r, inv? |
+                  @(_ . inv?) = boolean;
+                  r = mc:new_local(fcode);
+                  if (inv?)
+                    op ^= 1;    // invert logic
+                  mc:ins_compute(fcode, op, r, bargs);
+                  exit<function> bool_result(r);
+                ]
+              else
+                [
+                  branch_fail = builtin_branch_not[op];
+                  branch_succeed = builtin_branch[op];
+                ];
 	    ]
 	  else
 	    [
@@ -1007,6 +1088,23 @@ writes mc:this_function, mc:lineno
 	  branch_succeed = mc:branch_true;
 	];
 
+      if (boolean
+          && ((branch_fail == mc:branch_false
+               && branch_succeed == mc:branch_true)
+              || (branch_fail == mc:branch_true
+                  && branch_succeed == mc:branch_false)))
+        [
+          | var, inv?, r |
+          @(var) = bargs;
+          @(_ . inv?) = boolean;
+          if (branch_succeed != mc:branch_true)
+            inv? = !inv?;
+          r = mc:new_local(fcode);
+          mc:ins_compute(fcode, if (inv?) mc:b_eq else mc:b_ne,
+                         r, list(var, cfalse));
+          exit<function> bool_result(r);
+        ];
+
       // generate basic code
       if (success)
         [
@@ -1020,6 +1118,7 @@ writes mc:this_function, mc:lineno
           if (failure) failure()
           else mc:ins_branch(fcode, mc:branch_always, flab, null);
         ];
+      mc:set_loc(prevloc);
     ];
 
 ];

@@ -19,6 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "mudlle-config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -34,7 +36,6 @@
 #include "context.h"
 #include "error.h"
 #include "lexer.h"
-#include "mudlle.h"
 #include "print.h"
 #include "types.h"
 
@@ -51,7 +52,7 @@ static void execute(const char *line, bool show_result)
   if (interpret(&result, 1, true) && show_result)
     {
       printf("Result: ");
-      output_value(mudout, prt_write, false, result);
+      output_value(mudout, prt_write, result);
       printf("\n");
     }
 

@@ -19,68 +19,50 @@
 # "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
 # PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
-# disable built-in rules
-.SUFFIXES:
+.PHONY: wrong-file
+wrong-file:
+	$(error Use Makefile in the parent directory)
 
-OBJS:=arith.o basic.o bigint.o bitset.o bool.o debug.o files.o	\
-        io.o list.o mudlle-float.o mudlle-string.o mudlle-xml.o	\
-        mudllecst.o pattern.o runtime.o support.o symbol.o		\
-        vector.o
+RTOBJS:=$(addprefix runtime/, arith.o basic.o bigint.o bitset.o	\
+        bool.o debug.o files.o io.o list.o mudlle-float.o		\
+        mudlle-string.o mudlle-xml.o mudllecst.o pattern.o		\
+        runtime.o support.o symbol.o vector.o)
 
-$(OBJS): CFLAGS+=$(PRIMITIVE_CFLAGS)
+$(RTOBJS): CFLAGS+=$(PRIMITIVE_CFLAGS)
 
-SRC = $(OBJS:%.o=%.c)
+mudlle: $(RTOBJS)
 
-CSTFILES = files.h io.h ../error.h ../module.h ../types.h
+RTSRC = $(RTOBJS:%.o=%.c)
+
+CSTFILES := error.h module.h types.h			\
+	runtime/basic.h runtime/files.h runtime/io.h
 
 ifneq ($(USE_XML),)
 CPPFLAGS += -isystem /usr/include/libxml2
-CSTFILES += mudlle-xml.h
+CSTFILES += runtime/mudlle-xml.h
 endif
 
-all: librun.a
+RTDEPFILE:=runtime/.depend
 
-.PHONY: clean depclean
-depclean:
-	rm -f .depend
+.PHONY: clean_runtime
 
-clean:
-	rm -f *.o librun.a mudllecst.c .depend
+clean: clean_runtime
+clean_runtime:
+	rm -f runtime/*.o runtime/mudllecst.c $(RTDEPFILE)
 
-librun.a: $(OBJS)
-	[ ! -f librun.a ] || rm -f librun.a
-	ar r librun.a $(OBJS)
-	-ranlib librun.a
+runtime/mudllecst.c: runtime/consts.pl $(CSTFILES) runtime/Makefile
+	@echo "Create $@"
+	$(Q)LC_ALL=C $(PERL) $< -o $@ -- $(CSTFILES)
 
-mudllecst.c: consts.pl $(CSTFILES) Makefile
-	$(PERL) $< -o $@ -- $(CSTFILES)
+$(RTDEPFILE): $(RTSRC) $(ARCHDEP)
+	@echo "Create $@"
+	$(Q)$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS) $(RTSRC) \
+		| sed 's!^\(.*\)\.o *:!runtime/\1.o:!g' > $@
 
-ifeq (,$(USE_CPP_STEP))
-%.o: %.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
+ifneq (,$(depfile))
+ifeq (,$(wildcard $(RTDEPFILE)))
+-include $(RTDEPFILE)
 else
-%.o: %-mpp.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
-
-.PRECIOUS: %-mpp.c
-%-mpp.c: %.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | indent > $@
-endif
-
-.PHONY: dep depend
-dep depend: .depend
-
-.depend: $(SRC)
-	$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS) $(SRC) \
-		| sed 's/\.o *:/.o:/g' > $@
-
-depfile:=.depend
-
-# include dependency files unless we are only running cleaning targets
-ifneq (,$(MAKECMDGOALS))
-ifeq ($(MAKECMDGOALS),$(filter clean depclean,$(MAKECMDGOALS)))
-depfile:=
+include $(RTDEPFILE)
 endif
 endif
-
--include $(depfile)

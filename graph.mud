@@ -19,8 +19,9 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-library graph // A generic directed graph type, with support for typical graph algos.
-requires system, sequences
+// A generic directed graph type, with support for typical graph algos.
+library graph
+requires sequences
 defines new_graph, graph_add_node, graph_remove_node,
   graph_add_edge, graph_remove_edge, graph_nodes, graph_nodes_apply,
   graph_nodes_exists?, graph_node_graph, graph_node_get, graph_node_set!,

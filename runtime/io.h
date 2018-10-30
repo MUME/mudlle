@@ -22,6 +22,13 @@
 #ifndef RUNTIME_IO_H
 #define RUNTIME_IO_H
 
+#include "../mudlle-config.h"
+
+#include <sys/types.h>
+
+#include "../error.h"
+#include "../ports.h"
+
 enum {
   tm_sec,
   tm_min,
@@ -37,6 +44,38 @@ enum {
 void io_init(void);
 
 struct oport *get_oport(struct oport *oport);
-void check_string_port(struct oport *oport);
+
+/* end mudlle const */
+#define TYPESET_OPORT TSET(oport)
+
+#define __CT_OPORT_E(v, msg, typeset) (v = get_oport(v), error_none)
+
+/* CT_OPORT checks that var is an oport or a character. If it is a
+   character, sets var to its standard output port. May cause GC! */
+#define CT_OPORT F(TYPESET_OPORT, __CT_OPORT_E, TYPESET_OPORT)
+/* CT_OPT_OPORT does what CT_OPORT does, but just sets var to NULL for
+   any other types. May cause GC! */
+#define CT_OPT_OPORT F(TYPESET_ANY, __CT_OPORT_E, )
+
+static inline enum runtime_error ct_str_oport_e(struct oport *op,
+                                                const char **errmsg)
+{
+  if (!is_string_port(op))
+    {
+      *errmsg = "exepected a string oport";
+      return error_bad_value;
+    }
+  return error_none;
+}
+
+#define __CT_STR_OPORT_E(v, msg, typeset) ct_str_oport_e(v, msg)
+/* CT_STR_OPORT checks that var is an oport; then it checks that it is
+   a string oport. */
+#define CT_STR_OPORT F(TSET(oport), __CT_STR_OPORT_E, TSET(oport))
+
+enum runtime_error ct_time_p(long l, const char **errmsg, time_t *dst);
+
+#define __CT_TIME_E(v, msg, dst) ct_time_p(v, msg, &dst)
+#define CT_TIME(dst) CT_INT_P(dst, __CT_TIME_E)
 
 #endif /* RUNTIME_IO_H */

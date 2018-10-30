@@ -52,20 +52,23 @@ enum operator {
   op_closure_code1,		/* arg1 is code's offset in constants */
   op_closure_code2,		/* arg2 is code's offset in constants */
   op_execute,			/* arg1 is # of parameters passed */
+  op_execute2,                  /* arg2 is # of parameters passed */
   op_execute_secure,		/* arg1 is # of parameters passed */
+  op_execute_secure2,           /* arg2 is # of parameters passed */
   op_execute_varargs,		/* arg1 is # of parameters passed */
+  op_execute_varargs2,          /* arg2 is # of parameters passed */
   op_execute_primitive,		/* arg1 is # of parameters passed */
-  op_execute_primitive1,	/* arg2 is global offset */
-  op_execute_primitive2,	/* arg2 is global offset */
-  op_execute_global1,		/* arg2 is global offset */
-  op_execute_global2,		/* arg2 is global offset */
+  op_execute_primitive2,        /* arg2 is # of parameters passed */
+  op_execute_primitive_1arg,	/* arg2 is global offset */
+  op_execute_primitive_2arg,	/* arg2 is global offset */
+  op_execute_global_1arg,       /* arg2 is global offset */
+  op_execute_global_2arg,       /* arg2 is global offset */
   op_argcheck,			/* arg1 is # of parameters expected */
   op_varargs,			/* arg0. Makes vector of args -> local var 0 */
   op_discard,			/* arg0. Pop top of stack (discard result) */
   op_pop_n,			/* arg1. Pop n stack entries */
   op_exit_n,			/* arg1. Pop top of stack, pop n
                                    entries, push old top of stack */
-  op_dup,			/* arg0. Duplicate top of stack */
   /* All branch instructions must be consecutive, with the 1 byte version
      immediately preceding the 2 byte one.
      op_branch1 must be the first branch */

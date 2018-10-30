@@ -22,13 +22,13 @@
 #ifndef OBJENV_H
 #define OBJENV_H
 
+#include "mvalues.h"
 #include "types.h"
 
 struct env			/* Is a record */
 {
   struct obj o;
   value used;         /* # of elements used as opposed to allocated */
-  value size;
   struct vector *values;
 };
 
@@ -41,21 +41,22 @@ void env_reserve(struct env *env, ulong n);
 /* Effects: Makes sure that env has n free entries
 */
 
-ulong env_add_entry(struct env *env, value v);
+ulong env_grow_and_add_entry(struct env *env, value v);
 /* Effects: Adds a new value to env, initialised to v.
    Returns: The index of the new value.
    Modifies: env.
    Requires: table contain less than 2^30 entries.
 */
 
-#define ENV_ADD_ENTRY(env, v) do {                      \
-    if ((long)(env)->used >= (long)(env)->size)         \
-      env_add_entry((env), (v));                        \
-    else                                                \
-      {                                                 \
-	(env)->values->data[intval((env)->used)] = (v); \
-	(env)->used = (value)((long)(env)->used + 2);   \
-      }                                                 \
-  } while(0)
+static inline ulong env_add_entry(struct env *env, value v)
+{
+  long used = intval(env->used);
+  if (used >= vector_len(env->values))
+    return env_grow_and_add_entry(env, v);
+
+  env->values->data[used] = v;
+  env->used = makeint(used + 1);
+  return used;
+}
 
 #endif

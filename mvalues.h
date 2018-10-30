@@ -24,7 +24,17 @@
 
 #include <limits.h>
 #include <stddef.h>
+
+#ifdef __x86_64__
+  #include "x64.h"
+#elif defined __i386__
+  #include "x86.h"
+#endif
+
 #include "types.h"
+
+/* increase this as compiled mudlle suffers a backwards-incompatible change */
+#define MCODE_VERSION 7
 
 /* Objects are either null, integers or pointers to more complex things (like
    variables). Null is represented by NULL. Integers have the lowest bit set.
@@ -34,7 +44,7 @@ static inline bool is_function(value v)
 {
   if (!pointerp(v))
     return false;
-  return (1U << ((struct obj *)v)->type) & TYPESET_FUNCTION;
+  return P(((struct obj *)v)->type) & TYPESET_FUNCTION;
 }
 
 static inline bool is_any_primitive(value p)
@@ -44,24 +54,82 @@ static inline bool is_any_primitive(value p)
   return ((struct obj *)p)->garbage_type == garbage_primitive;
 }
 
+#define is_typeset(v, typeset)                  \
+  (__builtin_constant_p(typeset)                \
+   ? is_const_typeset(v, typeset)               \
+   : is_generic_typeset(v, typeset))
+
+static inline bool is_const_typeset(value v, unsigned typeset)
+{
+  if (typeset == TYPESET_ANY)
+    return true;
+  if ((typeset & TSET(null)) && v == NULL)
+    return true;
+  if (integerp(v))
+    return typeset & TSET(integer);
+  if (!(typeset & TSET(null)) && v == NULL)
+    return false;
+  struct obj *obj = v;
+  typeset &= ~(TSET(null) | TSET(integer));
+  switch (typeset & TYPESET_ANY)
+    {
+    case 0:
+      return false;
+    case TYPESET_ANY ^ (TSET(null) | TSET(integer)):
+      return true;
+    case TYPESET_PRIMITIVE:
+      return is_any_primitive(obj);
+#define __ISTYPE(arg, t)                        \
+      case P(type_ ## t):                       \
+        return obj->type == type_ ## t;
+      FOR_PLAIN_TYPES(__ISTYPE,)
+#undef __ISTYPE
+    }
+  return P(obj->type) & typeset;
+}
+
+static inline bool is_generic_typeset(value v, unsigned typeset)
+{
+  if (v == NULL)
+    return typeset & TSET(null);
+  if (integerp(v))
+    return typeset & TSET(integer);
+  struct obj *obj = v;
+  return P(obj->type) & typeset;
+}
+
 /* Make & unmake integers */
-#define intval(obj)  ((long)(obj) >> 1)
-#define uintval(obj) ((unsigned long)(obj) >> 1)
+#define intval(obj)  (CHECK_VALUE(obj), (long)(obj) >> 1)
+#define uintval(obj) (CHECK_VALUE(obj), (unsigned long)(obj) >> 1)
 /* add 0UL to integer-promote to unsigned long */
 #define makeint(i)   ((value)((((i) + 0UL) << 1) | 1))
 
+/* return the sum of mudlle integer 'v' and 'l' */
+static inline value mudlle_iadd(value v, long l)
+{
+  return (value)((long)v + 2 * l);
+}
+
 enum {
   MAX_MUDLLE_OBJECT_SIZE = 16 * 1024 * 1024,
-  MAX_VECTOR_SIZE = ((MAX_MUDLLE_OBJECT_SIZE - sizeof (struct vector))
-                     / sizeof (value)),
-  MAX_STRING_SIZE = (MAX_MUDLLE_OBJECT_SIZE - sizeof (struct string) - 1),
-  MAX_TABLE_ENTRIES  = ((MAX_MUDLLE_OBJECT_SIZE / sizeof (value) / 2)
-                        * 3 / 4 - 1)
+  MAX_VECTOR_SIZE   = ((MAX_MUDLLE_OBJECT_SIZE - sizeof (struct vector))
+                       / sizeof (value)),
+  MAX_STRING_SIZE   = (MAX_MUDLLE_OBJECT_SIZE - sizeof (struct string) - 1),
+  MAX_TABLE_ENTRIES = ((MAX_MUDLLE_OBJECT_SIZE / sizeof (value) / 2)
+                       * 3 / 4 - 1),
+  MAX_FUNCTION_ARGS = 2048,
+  MAX_LOCAL_VARS    = 4096
 };
 
 #define TAGGED_INT_BITS (CHAR_BIT * sizeof (long) - 1)
 #define MAX_TAGGED_INT  (LONG_MAX >> 1)
 #define MIN_TAGGED_INT  (-MAX_TAGGED_INT - 1)
+
+static inline long mudlle_sign_extend(long l)
+{
+  struct { long i : TAGGED_INT_BITS; } m = { .i = l };
+  return m.i;
+}
 
 enum {
   OBJ_READONLY = 1,       /* Used for some values */
@@ -98,19 +166,24 @@ static inline value make_readonly(value v)
 }
 
 #define STATIC_STRING(name, value)                      \
-static ulong static_data_ ## name;                      \
-static const struct static_string name = {              \
-  .static_data = &static_data_ ## name,                 \
-  .mobj = {                                             \
-    .size = sizeof (struct string) + sizeof value,      \
-    .garbage_type = garbage_static_string,              \
-    .type = type_string,                                \
-    .flags = OBJ_IMMUTABLE | OBJ_READONLY               \
-  },                                                    \
-  .str = value                                          \
-}
+  static ulong static_data_ ## name;                    \
+  static const struct {                                 \
+    struct static_obj s;                                \
+    char str[sizeof value];                             \
+  } name = {                                            \
+    .s = {                                              \
+      .static_data = &static_data_ ## name,             \
+      .o = {                                            \
+        .size = sizeof (struct string) + sizeof value,  \
+        .garbage_type = garbage_static_string,          \
+        .type = type_string,                            \
+        .flags = OBJ_IMMUTABLE | OBJ_READONLY           \
+      }                                                 \
+    },                                                  \
+    .str = value                                        \
+  }
 
-#define GET_STATIC_STRING(name) ((struct string *)&(name).mobj)
+#define GET_STATIC_STRING(name) ((struct string *)&(name).s.o)
 
 /* How each class of object is structured */
 
@@ -126,17 +199,7 @@ struct grecord
   struct obj *data[];		/* Pointers to other objects */
 };
 
-/* A pointer to a temporary external data structure.
-   These disappear when data is reloaded (as the pointers become invalid)
-*/
-struct gtemp
-{
-  struct obj o;
-  void *external;
-};
-
 /* The code structures are somewhat machine-dependent */
-
 struct code
 {
   struct obj o;
@@ -144,68 +207,116 @@ struct code
   struct string *filename;      /* Name on disk */
   struct string *nicename;      /* Pretty-printed file name */
   struct string *help;
-  struct vector *arg_types;     /* null for varargs */
-  uword lineno;
-  uword seclevel;
-  ulong return_typeset;
+  union {
+    struct obj *obj;
+    struct string *vararg;      /* name for varargs */
+    struct vector *argv;        /* ... or vector(name|false . typeset) */
+  } arguments;
+  struct string *linenos;       /* DWARF line number information */
+  uint16_t lineno;
+  seclev_t seclevel;
+  unsigned return_typeset : 24;
+  unsigned column : 8;
 };
+CASSERT(P(24) > TYPESET_ANY);
 
-#if defined(i386) && !defined(NOCOMPILER)
+static inline bool code_is_vararg(const struct code *code)
+{
+  return !TYPE(code->arguments.obj, vector);
+}
+
+#if (defined __i386__ || defined __x86_64__) && !defined NOCOMPILER
 struct icode
 {
   struct code code;
-  uword nb_constants;
-  uword nb_locals;
-  uword stkdepth;
-  uword dummy0;
-  ulong call_count;		/* Profiling */
-  struct string *lineno_data;
-  ulong instruction_count;
+  uint32_t instruction_count;
+  uint32_t call_count;		/* Profiling */
+  uint16_t nb_constants;
+  uint16_t nb_locals;
+  uint16_t stkdepth;
+  uint16_t dummy0;
   ulong dummy1[2];
-  ubyte magic_dispatch[8];	/* Machine code jump to interpreter.
-				   This is at the same offset as mcode
-				   in struct mcode */
-  struct obj *constants[/*nb_constants*/];
+
+  /* Machine code jump to interpreter. This is at the same offset as
+     mcode in struct mcode */
+#ifdef __i386__
+  uint8_t magic_dispatch[8];
+#elif defined __x86_64__
+  struct magic_dispatch {
+    uint8_t movq_r11[2];
+    void (*invoke)(void);
+    uint8_t jmpq_r11[3];
+  } __attribute__((__packed__)) magic_dispatch;
+#else
+  #error Unsupported architecture
+#endif
+  value constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
 struct mcode /* machine-language code object */
 {
   struct code code;
-  ulong code_length;		/* Length of machine code in bytes */
-  struct string *linenos;
-  uword nb_constants;
-  uword nb_rel;
-  uword return_itype;
-  ubyte closure_flags;          /* CLF_xxx flags */
-  ubyte dummy;
+#ifdef __i386__
   struct mcode *myself;		/* Self address, for relocation */
-  ubyte magic[8];               /* Magic pattern that doesn't occur in code */
+#endif
+  uint32_t code_length;		/* Length of machine code in bytes */
+  uint16_t nb_constants;
+#ifdef __i386__
+  uint16_t nb_rel;
+#elif defined __x86_64__
+  uint16_t nb_pc_rel;           /* %rip-relative constants */
+#endif
+  uint16_t return_itype;
+  uint8_t closure_flags;        /* CLF_xxx flags */
 
-  ubyte mcode[/*code_length*/];  /* Aligned on CODE_ALIGNMENT */
+  bool dwarf_seen : 1;
+  unsigned : 7;
+#ifdef __x86_64__
+  uint32_t dummy[3];
+#endif
+  uint8_t magic[8];             /* Magic pattern that doesn't occur in code */
+
+  uint8_t mcode[/*code_length*/]; /* Aligned on CODE_ALIGNMENT */
   /* Following the machine code:
+       - nb_pc_rel addresses of C functions (not for i386)
        - nb_constants offsets of contants in mcode
-       - nb_rel relative addresses of C functions in mcode
-       Each offset is a uword if code_length <= (uword)~0; otherwise a long.
+       - nb_rel relative addresses of C functions in mcode (not for x86-64)
+       Each offset is a uint16_t if code_length <= UINT16_MAX;
+       otherwise a uint32_t.
   */
 };
 
-CASSERT(mdispatch, (offsetof(struct mcode, mcode)
-                    == offsetof(struct icode, magic_dispatch)));
-#endif  /* i386 && !NOCOMPILER */
+CASSERT(offsetof(struct mcode, mcode)
+        == offsetof(struct icode, magic_dispatch));
+
+struct mcode_fields {
+  void *cst_offsets;
+  uint32_t code_size;
+  unsigned code_pad;
+  uint32_t (*get_cst_ofs)(void **srcp);
+  void *(*add_cst_ofs)(void *dst, uint32_t ofs);
+};
+
+void mcode_fields(struct mcode_fields *f, const struct mcode *mcode);
+void mcode_fields_spec(struct mcode_fields *f, char *mcode,
+                       ulong code_len, uint32_t nb_pc_rel,
+                       uint32_t nb_rel, uint32_t nb_constants);
+
+#endif  /* (__i386__ || __x86_64__) && !NOCOMPILER */
 
 #ifdef NOCOMPILER
 struct icode
 {
   struct code code;
-  uword nb_constants;
-  uword nb_locals;
-  uword stkdepth;
-  uword dummy;
+  uint16_t nb_constants;
+  uint16_t nb_locals;
+  uint16_t stkdepth;
+  uint16_t dummy;
   ulong call_count;		/* Profiling */
   struct string *lineno_data;
   ulong instruction_count;
-  struct obj *constants[/*nb_constants*/];
+  value constants[/*nb_constants*/];
   /* instructions follow the constants array */
 };
 
@@ -213,8 +324,8 @@ struct mcode /* machine-language code object */
 {
   struct code code;
   /* Not used when no compiler around ... */
-  ubyte closure_flags;          /* CLF_xxx flags */
-  ubyte mcode[];
+  uint8_t closure_flags;          /* CLF_xxx flags */
+  uint8_t mcode[];
 };
 #endif  /* NOCOMPILER */
 

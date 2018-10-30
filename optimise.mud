@@ -20,11 +20,11 @@
  */
 
 library optimise // The actual optimisations
-requires compiler, vars, flow, ins3, phase2, graph, dlist, sequences, misc
+requires compiler, dlist, flow, graph, ins3, misc, phase2, sequences, vars
 defines mc:optimise_functions, mc:recompute_vars, mc:fold_branch,
   mc:register_noreturn_variant
 reads mc:verbose
-writes mc:lineno, mc:this_function
+writes mc:this_function
 [
   | fold, compute_ops, branch_ops, useless_instructions, remove_instruction,
     fold_constants, fold_length_branch, propagate_copies,
@@ -72,9 +72,9 @@ writes mc:lineno, mc:this_function
      fn (x, y) true . x == y,
      fn (x, y) true . x != y,
      fn (x, y) if (integer?(x) && integer?(y)) true . x < y else false,
+     fn (x, y) if (integer?(x) && integer?(y)) true . x >= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x <= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x > y else false,
-     fn (x, y) if (integer?(x) && integer?(y)) true . x >= y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x | y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x ^ y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x & y else false,
@@ -83,8 +83,18 @@ writes mc:lineno, mc:this_function
      fn (x, y) if (integer?(x) && integer?(y)) true . x + y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x - y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x * y else false,
-     fn (x, y) if (!integer?(x) || !integer?(y) || y == 0) false else true . x / y,
-     fn (x, y) if (!integer?(x) || !integer?(y) || y == 0) false else true . x % y,
+     fn (x, y) [
+       if (!integer?(x) || !integer?(y) || y == 0)
+         false
+       else
+         true . x / y
+     ],
+     fn (x, y) [
+       if (!integer?(x) || !integer?(y) || y == 0)
+         false
+       else
+         true . x % y
+     ],
      fn (x) if (integer?(x)) true . -x else false,
      fn (x) true . !x,
      fn (x) if (integer?(x)) true . ~x else false,
@@ -92,7 +102,7 @@ writes mc:lineno, mc:this_function
      false,                     // if
      false,                     // while
      false,                     // loop
-     fn (x, y)
+     fn (x, y) [
        if (integer?(y))
          if (vector?(x))
            if (y >= -vector_length(x) && y < vector_length(x)) true . x[y]
@@ -102,7 +112,8 @@ writes mc:lineno, mc:this_function
 	   else false
          else false
        else if (string?(y) && table?(x)) true . x[y]
-       else false,
+       else false
+     ],
      false,                     // set
      fn (x, y) false,           // cons's are mutable
      fn (x) false,              // assign
@@ -118,9 +129,31 @@ writes mc:lineno, mc:this_function
      fn (x) if (symbol?(x)) true . symbol_get(x) else false,
      false,                     // vectors are mutable
      fn v true . check_immutable(protect(v)), // sequence
-     fn (x, y) true . check_immutable(pcons(x, y)) // pcons
+     fn (x, y) true . check_immutable(pcons(x, y)), // pcons
+     fn (x, s) [
+       | sym |
+       if (table?(x) && string?(s) && (sym = table_lookup(x, s)))
+         true . sym
+       else
+         false
+     ]
      );
   assert(vlength(compute_ops) == mc:builtins);
+
+  | bit_test |
+  bit_test = fn (x, y, neg?)
+    [
+      | byte |
+      if (string?(x) && integer?(y)
+          && y >= 0 && (byte = (y >> 3)) < slength(x))
+        [
+          | r |
+          r = x[byte] & (1 << (y & 7));
+          true . (if (neg?) !r else r)
+        ]
+      else
+        false
+    ];
 
   branch_ops = sequence
     (fn () false,
@@ -131,6 +164,10 @@ writes mc:lineno, mc:this_function
      fn (x, y) true . !(x || y),
      fn (x, y) true . (x && y),
      fn (x, y) true . !(x && y),
+     fn (x, y) bit_test(x, y, false),
+     fn (x, y) bit_test(x, y, true),
+     fn (x, y) if (integer?(x) && integer?(y)) true . (x & y) else false,
+     fn (x, y) if (integer?(x) && integer?(y)) true . !(x & y) else false,
      fn (x, y) true . x == y,
      fn (x, y) true . x != y,
      fn (x, y) if (integer?(x) && integer?(y)) true . x < y else false,
@@ -168,9 +205,9 @@ writes mc:lineno, mc:this_function
      false,        // eq
      false,        // ne
      type_integer, // lt
+     type_integer, // ge
      type_integer, // le
      type_integer, // gt
-     type_integer, // ge
      type_integer, // bitor
      type_integer, // bitxor
      type_integer, // bitand
@@ -204,7 +241,8 @@ writes mc:lineno, mc:this_function
      type_symbol,  // symbol_get
      false,        // vector
      false,        // sequence
-     false         // pcons
+     false,        // pcons
+     stype_any     // symbol_ref -- may read-only trap
      );
   assert(vlength(compute_trap_types) == mc:builtins);
 
@@ -252,10 +290,10 @@ writes mc:lineno, mc:this_function
             && toins[mc:i_top] == mc:trap_always))
         [
           | prevline |
-          prevline = mc:lineno;
-          mc:lineno = il[mc:il_lineno];
+          prevline = mc:get_loc();
+          mc:set_loc(il[mc:il_loc]);
           mc:warning("branch is %s taken", if (val) "always" else "never");
-          mc:lineno = prevline;
+          mc:set_loc(prevline);
         ];
 
       if (mc:verbose >= 3)
@@ -290,7 +328,8 @@ writes mc:lineno, mc:this_function
 	];
     ];
 
-  // true if arg can use '==' instead of 'equal?()'
+  // true if arg can use '==' instead of 'equal?()'; cf. itype_full_equal
+  // in inference.mud
   simple_equal? = fn (arg)
     [
       | t |
@@ -423,14 +462,13 @@ writes mc:lineno, mc:this_function
               if (callable?(fun, vlength(args)))
                 result = trap_error(fn () apply(fun, args),
                                     fn (n) got_error = n,
-                                    call_trace_off,
-                                    true)
+                                    call_trace_off)
               else
                 got_error = error_wrong_parameters;
 
               | prevline |
-              prevline = mc:lineno;
-              mc:lineno = il[mc:il_lineno];
+              prevline = mc:get_loc();
+              mc:set_loc(il[mc:il_loc]);
               if (got_error != null)
                 [
                   mc:warning("call to %s() causes %s error",
@@ -455,7 +493,7 @@ writes mc:lineno, mc:this_function
               ins = mc:make_compute_ins(
                 mc:b_assign, ins[mc:i_cdest],
                 list(mc:var_make_constant(result)));
-              mc:lineno = prevline;
+              mc:set_loc(prevline);
               il[mc:il_ins] = ins;
               change = true
             ]
@@ -1028,7 +1066,7 @@ writes mc:lineno, mc:this_function
 	       ins = il[mc:il_ins];
 	       class = ins[mc:i_class];
 
-               mc:lineno = il[mc:il_lineno];
+               mc:set_loc(il[mc:il_loc]);
 
 	       ndvar = il[mc:il_defined_var];
 
@@ -1155,10 +1193,10 @@ writes mc:lineno, mc:this_function
       fval = f[mc:c_fvalue];
       fg = cdr(fval);
 
-      useless = useless_instructions
-	(f, mc:set_vars!(mc:set_vars!(mc:new_varset(f),
-                                      f[mc:c_fglobals_write]),
-			 f[mc:c_fclosure_write]));
+      useless = useless_instructions(
+        f,
+        mc:set_vars!(mc:set_vars!(mc:new_varset(f), f[mc:c_fglobals_write]),
+                     f[mc:c_fclosure_write]));
       if (useless != null)
 	[
 	  if (mc:verbose >= 3)
@@ -1275,7 +1313,8 @@ writes mc:lineno, mc:this_function
                       ouse &= ~(mc:local_write_once | mc:local_write_many
                                 | mc:local_write_many_nonnull);
 
-                      if (lfind?(dvar, ifn[mc:c_fargs]))
+                      if (lexists?(fn (@[var _ _]) var == dvar,
+				   ifn[mc:c_fargs]))
                         dvar[mc:v_lclosure_uses]
                           = (ouse | mc:local_write_many
                              | mc:local_write_many_nonnull)
@@ -1366,7 +1405,7 @@ writes mc:lineno, mc:this_function
 
       // clear the index of argument variables (so that unused arguments
       // are easily ignored)
-      lforeach(fn (arg) arg[mc:v_number] = 0, ifn[mc:c_fargs]);
+      lforeach(fn (@[arg _ _]) arg[mc:v_number] = 0, ifn[mc:c_fargs]);
 
       // first find all variables that are written
       // then prepend those that are read (but not written)

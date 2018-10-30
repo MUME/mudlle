@@ -21,10 +21,10 @@
 
 library mx86 // mudlle assembler for x86
 // uses x86: prefix
-requires system, dlist, misc, sequences, vars, compiler
+requires compiler, dlist, misc, sequences, vars
 
 defines x86:l_ins, x86:l_alias, x86:l_number, x86:il_label, x86:il_ins,
-  x86:il_node, x86:il_number, x86:il_offset, x86:il_lineno, x86:i_op,
+  x86:il_node, x86:il_number, x86:il_offset, x86:il_loc, x86:i_op,
   x86:i_arg1, x86:i_arg2, x86:lvar, x86:lreg, x86:lidx, x86:lridx, x86:limm,
   x86:lcst, x86:lfunction, x86:lclosure, x86:lglobal, x86:lglobal_constant,
   x86:gl_c, x86:gl_mudlle,
@@ -41,6 +41,7 @@ defines x86:l_ins, x86:l_alias, x86:l_number, x86:il_label, x86:il_ins,
   x86:op_andbyte, x86:op_test, x86:op_inc, x86:op_dec, x86:op_neg, x86:op_not,
   x86:op_bt, x86:op_bts, x86:op_btr, x86:op_btc, x86:op_shl, x86:op_shr,
   x86:op_setcc, x86:op_movzxbyte, x86:op_xchg, x86:op_imul, x86:op_movbyte,
+  x86:op_orbyte,
   x86:ops, x86:new_code,
   x86:set_instruction, x86:get_instructions, x86:rem_instruction,
   x86:copy_instruction, x86:mudlleint, x86:doubleint, x86:push, x86:pop,
@@ -48,14 +49,16 @@ defines x86:l_ins, x86:l_alias, x86:l_number, x86:il_label, x86:il_ins,
   x86:cmp, x86:cmpbyte, x86:or, x86:xor, x86:and, x86:andbyte, x86:test,
   x86:inc, x86:dec, x86:neg, x86:not, x86:bt, x86:btr, x86:bts, x86:btc,
   x86:shl, x86:shr, x86:setcc, x86:movzxbyte, x86:xchg, x86:imul, x86:movbyte,
+  x86:orbyte,
   x86:new_label,
-  x86:label, x86:set_label, x86:ins_list, x86:print_ins, x86:resolve, x86:trap,
+  x86:label, x86:set_label, x86:skip_label_alias, x86:ins_list, x86:print_ins,
+  x86:resolve, x86:trap,
   x86:op_jmp32, x86:op_jcc32, x86:callrel, x86:op_callrel, x86:sar, x86:op_sar,
   x86:op_op16, x86:op16, x86:leave, x86:op_leave, x86:lqidx, x86:adc,
   x86:op_adc, x86:callrel_prim, x86:op_callrel_prim,
   x86:reset_ins_count
 
-reads x86:spillreg, mc:lineno
+reads x86:spillreg
 
 [
 // labels:
@@ -71,7 +74,7 @@ x86:il_ins = 1; // the actual instruction
 x86:il_node = 2; // the basic block to which this instruction belongs
 x86:il_number = 3; // a unique number (for display)
 x86:il_offset = 4; // instruction offset (int)
-x86:il_lineno = 5;
+x86:il_loc = 5;
 
 // An instruction is a vector:
 // (all instructins must represent legal x86 instructions)
@@ -145,25 +148,25 @@ x86:reg_dh = 6;
 x86:reg8 = sequence(x86:reg_al, x86:reg_cl, x86:reg_dl, x86:reg_bl);
 
 // branches, using x86 encoding
-x86:bne = 5;
-x86:be = 4;
+x86:bne = 5;                    // ZF = 1
+x86:be = 4;                     // ZF = 0
 
-x86:bg = 15;
-x86:ble = 14;
-x86:bge = 13;
-x86:bl = 12;
+x86:bg = 15;                    // ZF = 0 and SF = OF
+x86:ble = 14;                   // ZF = 1 or SF != OF
+x86:bge = 13;                   // SF = OF
+x86:bl = 12;                    // SF != OF
 
-x86:ba = 7;
-x86:bbe = 6;
-x86:bae = 3;
-x86:bb = 2;
+x86:ba = 7;                     // CF = 0 and ZF = 0
+x86:bbe = 6;                    // CF = 1 or ZF 1
+x86:bae = 3;                    // CF = 0
+x86:bb = 2;                     // CF = 1
 
-x86:bno = 1;
-x86:bo = 0;
-x86:bns = 9;
-x86:bs = 8;
-x86:bnp = 11;
-x86:bp = 10;
+x86:bno = 1;                    // OF = 0
+x86:bo = 0;                     // OF = 1
+x86:bns = 9;                    // SF = 0
+x86:bs = 8;                     // SF = 1
+x86:bnp = 11;                   // PF = 0
+x86:bp = 10;                    // PF = 1
 
 x86:balways = -1; // special value, used for x86:trap
 
@@ -194,6 +197,7 @@ x86:op_xor = 13;
 x86:op_and = 14;
 x86:op_andbyte = 15;
 x86:op_test = 16;
+x86:op_orbyte = 40;
 
 x86:op_inc = 17;
 x86:op_dec = 18;
@@ -216,7 +220,7 @@ x86:op_op16 = 34; // generate the operand size prefix
 
 x86:op_imul = 38;
 
-x86:ops = 40;
+x86:ops = 41;
 
 [
   | ins_index, label_index, rnames32, rnames8, cnames, mode, eastr, slabel,
@@ -229,7 +233,7 @@ x86:ops = 40;
       vector(null, false, null)
       // 0: insertion position
       // 1: label for next instruction (false for none)
-      // 2: list of error handlers [error number, lineno, label]
+      // 2: list of error handlers [error number, loc, label]
     ];
 
   x86:set_instruction = fn "fncode ilist -> . Sets the current instruction insert position to ilist" (fcode, pos)
@@ -268,7 +272,7 @@ x86:ops = 40;
       | newins |
 
       // Add instruction
-      newins = vector(fcode[1], ins, null, ++ins_index, 0, mc:lineno);
+      newins = vector(fcode[1], ins, null, ++ins_index, 0, mc:get_loc());
 
       // This is a strange hack:
       //   When code is initially generated, fcode[0] starts at null,
@@ -378,6 +382,7 @@ x86:ops = 40;
   x86:cmp = generic_op2(x86:op_cmp);
   x86:cmpbyte = generic_op2(x86:op_cmpbyte);
   x86:or = generic_op2(x86:op_or);
+  x86:orbyte = generic_op2(x86:op_orbyte);
   x86:xor = generic_op2(x86:op_xor);
   x86:and = generic_op2(x86:op_and);
   x86:andbyte = generic_op2(x86:op_andbyte);
@@ -417,7 +422,15 @@ be generated in x86code" (fcode, label)
 	else fcode[1] = label;
       ];
 
-  x86:set_label = fn "label ilist -> . Sets label to point to ilist. Might make it an alias of existing label" (l, il)
+  x86:skip_label_alias = fn (vector label)
+    [
+      | nlabel |
+      while (vector?(nlabel = label[x86:l_alias]))
+        label = nlabel;
+      label
+    ];
+
+  x86:set_label = fn "label ilist -> . Sets label to point to ilist. Might make it an alias of existing label" (vector l, vector il)
     [
       | lab |
 
@@ -436,20 +449,25 @@ be generated in x86code" (fcode, label)
 
   // traps
 
-  x86:trap = fn "x86code cc n -> Cause error n if cc is true "
-    (fcode, cc, n, lineno)
+  x86:trap = fn "x86code cc n -> Cause error n with arguments args if cc is true"
+    (fcode, cc, n, args)
     [
-      | t, l |
+      | l |
 
-      if (t = lexists?(fn (trap) trap[0] == n && trap[1] == lineno,
-                       fcode[2]))
-	l = t[2]
-      else
-	[
-	  // new trap
-	  l = x86:new_label(fcode);
-	  fcode[2] = vector(n, lineno, l) . fcode[2];
-	];
+      <found> [
+        for ( | tl | tl = fcode[2]; tl != null; tl = cdr(tl))
+          match (car(tl))
+            [
+              [ ,n ,(mc:get_loc()) ,args label ] => [
+                l = label;
+                exit<found> null;
+              ]
+            ];
+
+        // new trap
+        l = x86:new_label(fcode);
+        fcode[2] = vector(n, mc:get_loc(), args, l) . fcode[2];
+      ];
 
       if (cc == x86:balways)
 	x86:jmp(fcode, l)
@@ -471,7 +489,10 @@ be generated in x86code" (fcode, label)
 	  il = dget(scan);
 	  if (il[x86:il_label])
 	    dformat("%s:", slabel(il[x86:il_label]));
-	  dformat("\t%s\t(%s) ", il[x86:il_lineno], il[x86:il_number]);
+          | loc |
+          loc = il[x86:il_loc];
+	  dformat("\t%d:%d\t(%s) ", mc:loc_line(loc), mc:loc_column(loc),
+                  il[x86:il_number]);
 
 	  x86:print_ins(il[x86:il_ins]);
 
@@ -489,7 +510,7 @@ be generated in x86code" (fcode, label)
 	     "bt" "bts" "btr" "btc"
 	     "shl" "shr" "setcc" "movzx8" "xchg"
 	     "jmp32" "jcc32" "callrel" "sar" "op16" "leave" "adc"
-             "callrelprim" "imul" "mov8"];
+             "callrelprim" "imul" "mov8" "or8"];
   assert(vlength(opname) == x86:ops);
 
   cnames = '["o" "no" "b" "ae" "e" "ne" "be" "a"
@@ -501,24 +522,44 @@ be generated in x86code" (fcode, label)
 
   mode = '[0 0 0 0 0 "cst" "fn" "gbl" "gcst" "prim" "sym"];
 
-  eastr = fn (ea, rnames)
+  eastr = fn (@(m . a), rnames)
     [
-      | m, a |
+      | itoea |
 
-      m = car(ea); a = cdr(ea);
+      itoea = fn (n)
+        if (n >= -1024 && n <= 1024)
+          itoa(n)
+        else
+          format("%#x", n);
+
       if (m == x86:lreg)
 	rnames[a]
       else if (m == x86:lidx)
-	format("%s[%s]", cdr(a), rnames32[car(a)])
+        [
+          | r, disp |
+          @(r . disp) = a;
+          format("%s[%s]", itoea(disp), rnames32[r])
+        ]
       else if (m == x86:lridx)
-	format("%s[%s*%s+%s]", cdddr(a), rnames32[car(a)], cadr(a),
-	       rnames32[caddr(a)])
+        [
+          | ridx, scale, rbase, disp |
+          @(ridx scale rbase . disp) = a;
+          format("%s[%s*%d+%s]", itoea(disp), rnames32[ridx], scale,
+                 rnames32[rbase])
+        ]
       else if (m == x86:lqidx)
-	format("%s[%s*%s]", cddr(a), rnames32[car(a)], cadr(a))
+        [
+          | ridx, scale, disp |
+          @(ridx scale . disp) = a;
+          format("%s[%s*%d]", itoea(disp), rnames32[ridx], scale)
+        ]
       else if (m == x86:limm)
-	if (integer?(a)) format("%s", a)
-	else if (cdr(a)) format("2*%s+1", car(a))
-	else format("2*%s", car(a))
+	if (integer?(a))
+          itoea(a)
+	else if (cdr(a))
+          format("2*%s+1", itoea(car(a)))
+	else
+          format("2*%s", itoea(car(a)))
       else if (m == x86:lfunction)
 	format("fn[%s]", if (string?(a)) a else mc:fname(a))
       else if (m == x86:lclosure)
@@ -544,11 +585,7 @@ be generated in x86code" (fcode, label)
     ];
 
   slabel = fn (label)
-    [
-      | nlabel |
-      while (nlabel = label[x86:l_alias]) label = nlabel;
-      itoa(label[x86:l_number])
-    ];
+    itoa(x86:skip_label_alias(label)[x86:l_number]);
 
   x86:print_ins = fn (ins)
     [

@@ -21,9 +21,8 @@
 
 // 3-address (not really) instructions for intermediate representation
 library ins3
-requires system, compiler, vars, misc, dlist, sequences
+requires compiler, dlist, misc, sequences, vars
 defines
-
   mc:i_class, mc:i_compute, mc:i_aop, mc:i_adest, mc:i_aargs, mc:i_atypes,
   mc:i_asizeinfo,
   mc:i_branch, mc:i_bop, mc:i_bdest, mc:i_bargs, mc:i_btypes, mc:i_trap,
@@ -35,27 +34,28 @@ defines
   mc:i_return, mc:i_rvalue, mc:i_rtype, mc:i_vref, mc:i_vdest, mc:i_varg,
 
   mc:branch_never, mc:branch_always, mc:branch_true, mc:branch_false,
-  mc:branch_or, mc:branch_nor, mc:branch_and, mc:branch_nand, mc:branch_eq,
-  mc:branch_ne, mc:branch_lt, mc:branch_ge, mc:branch_le, mc:branch_gt,
-  mc:branch_slength, mc:branch_vlength, mc:branch_equal, mc:branch_nequal,
+  mc:branch_or, mc:branch_nor, mc:branch_and, mc:branch_nand, mc:branch_bitand,
+  mc:branch_nbitand, mc:branch_eq, mc:branch_ne, mc:branch_lt, mc:branch_ge,
+  mc:branch_le, mc:branch_gt, mc:branch_slength, mc:branch_vlength,
+  mc:branch_bitset, mc:branch_bitclear, mc:branch_equal, mc:branch_nequal,
   mc:branch_immutable, mc:branch_mutable, mc:branch_readonly,
-  mc:branch_writable, mc:branch_any_prim, mc:branch_not_prim,
-  mc:branch_type?, mc:branch_ntype?,
+  mc:branch_writable, mc:branch_any_prim, mc:branch_not_prim, mc:branch_type?,
+  mc:branch_ntype?,
 
   mc:trap_never, mc:trap_always, mc:trap_argcheck, mc:trap_loop, mc:trap_type,
-  mc:trap_global_write, mc:trap_global_read,
+  mc:trap_typeset, mc:trap_global_write, mc:trap_global_read,
 
   mc:memory_read, mc:memory_write, mc:memory_write_safe,
-  mc:il_label, mc:il_ins, mc:il_node, mc:il_number, mc:il_lineno,
-  mc:il_defined_var, mc:il_arguments, mc:il_live_in, mc:il_live_out, mc:l_ilist,
-  mc:l_alias, mc:l_number, mc:l_mclabel,
+  mc:il_label, mc:il_ins, mc:il_node, mc:il_number, mc:il_loc,
+  mc:il_defined_var, mc:il_arguments, mc:il_live_in, mc:il_live_out,
+  mc:l_ilist, mc:l_alias, mc:l_number, mc:l_mclabel,
 
   mc:itype_typeset, mc:itypemap, mc:itypemap_inverse,
   itype_none, itype_function, itype_integer, itype_string, itype_vector,
   itype_null, itype_symbol, itype_table, itype_pair, itype_other, itype_any,
   itype_float, itype_bigint, itype_reference, itype_non_zero, itype_zero,
   itype_list, itype_names,
-  mc:typeset_any, mc:stype_typesets,
+  mc:stype_typesets, mc:type_typeset,
 
   mc:types_from_typeset, mc:itypeset_from_typeset,
 
@@ -69,9 +69,10 @@ defines
   mc:closure_vars, mc:arguments, mc:set_closure_vars!, mc:barguments,
   mc:replace_dest, mc:replace_args, mc:ins_list, mc:ins_list1, mc:print_ins,
   mc:slabel, mc:fncode_fn, mc:new_varset, mc:set_vars!, mc:call_escapes?,
-  mc:my_protected_global?, mc:make_trap_ins
+  mc:my_protected_global?, mc:make_trap_ins,
+  mc:skip_label_alias
 
-reads mc:lineno, mc:this_module
+reads mc:this_module
 
 [
 //  x := y op z, x := op y, x := y
@@ -144,29 +145,33 @@ mc:branch_or         = 4;
 mc:branch_nor        = 5;
 mc:branch_and        = 6;
 mc:branch_nand       = 7;
-mc:branch_eq         = 8;
-mc:branch_ne         = 9;
-mc:branch_lt         = 10;      // lt, ge, le, gt toggle meaning by
-mc:branch_ge         = 11;      // flipping the lowest bit
-mc:branch_le         = 12;
-mc:branch_gt         = 13;
-mc:branch_slength    = 14;      // eq, ne, ...
-mc:branch_vlength    = 20;      // eq, ne, ...
-mc:branch_equal      = 26;
-mc:branch_nequal     = 27;
-mc:branch_immutable  = 28;
-mc:branch_mutable    = 29;
-mc:branch_readonly   = 30;
-mc:branch_writable   = 31;
-mc:branch_any_prim   = 32;
-mc:branch_not_prim   = 33;
-mc:branch_type?      = 34;
+mc:branch_bitand     = 8;
+mc:branch_nbitand    = 9;
+mc:branch_bitset     = 10;
+mc:branch_bitclear   = 11;
+mc:branch_eq         = 12;
+mc:branch_ne         = 13;
+mc:branch_lt         = 14;      // lt, ge, le, gt toggle meaning by
+mc:branch_ge         = 15;      // flipping the lowest bit
+mc:branch_le         = 16;
+mc:branch_gt         = 17;
+mc:branch_slength    = 18;      // eq, ne, ...
+mc:branch_vlength    = 24;      // eq, ne, ...
+mc:branch_equal      = 30;
+mc:branch_nequal     = 31;
+mc:branch_immutable  = 32;
+mc:branch_mutable    = 33;
+mc:branch_readonly   = 34;
+mc:branch_writable   = 35;
+mc:branch_any_prim   = 36;
+mc:branch_not_prim   = 37;
+mc:branch_type?      = 38;
 mc:branch_ntype?     = mc:branch_type? + last_synthetic_type;
 
 | branch_names |
 branch_names = '[
-  "never" "always" "true" "false" "or" "nor" "and" "nand"
-  "==" "!=" "<" ">=" "<=" ">"
+  "never" "always" "true" "false" "or" "nor" "and" "nand" "bitand" "!bitand"
+  "bitset?" "bitclear?" "==" "!=" "<" ">=" "<=" ">"
   "slength ==" "slength !=" "slength <" "slength >=" "slength <=" "slength >"
   "vlength ==" "vlength !=" "vlength <" "vlength >=" "vlength <=" "vlength >"
   "equal?" "!equal?" "immutable?"
@@ -181,12 +186,14 @@ mc:trap_argcheck      = 2;
 mc:trap_loop          = 3; // check for infinite loops (implicit at
                            // function entry)
 mc:trap_type          = 4; // arg1 is value, arg2 is type (constant)
-mc:trap_global_write  = 5; // check that arg1 is not readonly (arg1 is global)
+mc:trap_typeset       = 5; // arg1 is value, arg2 is typeset (constant)
+mc:trap_global_write  = 6; // check that arg1 is not readonly (arg1 is global)
                            // and that the calling code is allowed to write it
-mc:trap_global_read   = 6; // check that reading global arg1 is allowed
+mc:trap_global_read   = 7; // check that reading global arg1 is allowed
 
 | trap_names |
-trap_names = '["never" 0 "argcheck" "loop" "!type" "!writable" "!readable"];
+trap_names = '["never" 0 "argcheck" "loop" "!type" "!typeset"
+               "!writable" "!readable"];
 
 // memory ops
 mc:memory_read = 1;
@@ -199,7 +206,7 @@ mc:il_label        = 0; // label of this instruction, or false
 mc:il_ins          = 1; // the actual instruction
 mc:il_node         = 2; // the basic block to which this instruction belongs
 mc:il_number       = 3; // a unique number (for display)
-mc:il_lineno       = 4; // line number of this instruction
+mc:il_loc          = 4; // line number of this instruction
 mc:il_defined_var  = 5; // number of variable defined here (or false)
 mc:il_arguments    = 6; // varset of arguments used
 
@@ -293,10 +300,10 @@ mc:itypemap = sequence // map from type_xxx/stype_xxx -> itype typesets
    itype_list);                 // stype_list
 assert(vlength(mc:itypemap) == last_synthetic_type);
 
-vfori(fn (i) [
+vforeachi(fn (i, ts) [
   | it |
   it = 1 << i;
-  for (| ts, t | [ t = 0; ts = mc:itype_typeset[i] ]; ts; [ ts >>= 1; ++t ])
+  for (| t | t = 0; ts; [ ts >>= 1; ++t ])
     if (ts & 1)
       assert(mc:itypemap[t] & it);
 ], mc:itype_typeset);
@@ -331,14 +338,18 @@ mc:itypemap_inverse = sequence // map from type_xxx/stype_xxx -> itype typesets
    itype_any & ~itype_list);    // stype_list
 assert(vlength(mc:itypemap) == last_synthetic_type);
 
-mc:typeset_any = (1 << last_type) - 1;
 mc:stype_typesets =
-  '[ 0                                             // stype_none
-     ,mc:typeset_any                               // stype_any
-     ,((1 << type_closure) | (1 << type_primitive) // stype_function
-       | (1 << type_varargs) | (1 << type_secure))
-     ,((1 << type_pair) | (1 << type_null)) ];     // stype_list
+  '[ 0                          // stype_none
+     ,typeset_any               // stype_any
+     ,typeset_function          // stype_function
+     ,typeset_list ];           // stype_list
 assert(vlength(mc:stype_typesets) == last_synthetic_type - last_type);
+
+mc:type_typeset = fn (int type)
+  if (type >= last_type)
+    mc:stype_typesets[type - last_type]
+  else
+    1 << type;
 
 // save on frequent allocations
 | static_type_pairs |
@@ -349,7 +360,7 @@ protect(static_type_pairs);
 
 mc:types_from_typeset = list fn (int typeset)
   [
-    if (typeset == mc:typeset_any)
+    if (typeset == typeset_any)
       exit<function> static_type_pairs[stype_any];
 
     if (typeset == 0)
@@ -361,10 +372,7 @@ mc:types_from_typeset = list fn (int typeset)
       [
         --t;
         | ts |
-        if (t >= last_type)
-          ts = mc:stype_typesets[t - last_type]
-        else
-          ts = 1 << t;
+        ts = mc:type_typeset(t);
         if (ts != 0 && ((typeset & ts) == ts))
           [
             typeset &= ~ts;
@@ -425,7 +433,7 @@ generating instructions for function component" (top)
       old = ilist;
       loop
 	[
-	  | ins, iold, next, label, nlabel, nextins |
+	  | ins, iold, next, label, nextins |
 
 	  next = dnext(old);
 	  if (next == ilist) exit ilist;
@@ -436,8 +444,7 @@ generating instructions for function component" (top)
 	  // remove branch to next instruction
 	  if (ins[mc:i_class] == mc:i_branch)
 	    [
-	      label = ins[mc:i_bdest];
-	      while (nlabel = label[mc:l_alias]) label = nlabel;
+	      label = mc:skip_label_alias(ins[mc:i_bdest]);
 
 	      nextins = dget(next);
 
@@ -466,14 +473,13 @@ generating instructions for function component" (top)
       scan = ilist;
       loop
 	[
-	  | ins, label, nlabel |
+	  | ins, label |
 	  ins = dget(scan)[mc:il_ins];
 
 	  if (ins[mc:i_class] == mc:i_branch)
 	    [
 	      // branch removal can create more than one depth of aliasing
-	      label = ins[mc:i_bdest];
-	      while (vector?(nlabel = label[mc:l_alias])) label = nlabel;
+	      label = mc:skip_label_alias(ins[mc:i_bdest]);
 	      ins[mc:i_bdest] = label;
 
 	      // label is used
@@ -494,10 +500,11 @@ generating instructions for function component" (top)
       scan = ilist;
       loop
 	[
-	  | label |
-	  if (label = dget(scan)[mc:il_label])
+	  | label, il |
+          il = dget(scan);
+	  if (label = il[mc:il_label])
 	    if (!label[mc:l_alias]) // unused
-	      dget(scan)[mc:il_label] = false
+	      il[mc:il_label] = false
 	    else
 	      label[mc:l_alias] = false; // reset to usual state
 	  scan = dnext(scan);
@@ -579,9 +586,10 @@ generating instructions for function component" (top)
     [
       | newins |
 
+      assert(pair?(mc:get_loc()));
       // Add instruction
       newins = vector(fcode[1], ins, null, ins_index = ins_index + 1,
-		      mc:lineno + 0, false, false);
+		      mc:get_loc(), false, false);
 
       // This is a strange hack:
       //   When code is initially generated, fcode[0] starts at null,
@@ -664,7 +672,7 @@ be generated in fncode" (fcode, label)
 	else fcode[1] = label;
       ];
 
-  mc:set_label = fn "label ilist -> . Sets label to point to ilist. Might make it an alias of existing label" (l, il)
+  mc:set_label = fn "label ilist -> . Sets label to point to ilist. Might make it an alias of existing label" (vector l, vector il)
     [
       | lab |
 
@@ -677,7 +685,8 @@ be generated in fncode" (fcode, label)
 	[
 	  l[mc:l_ilist] = il;
 	  il[mc:il_label] = l;
-	]
+	];
+      null
     ];
 
   // labeled blocks
@@ -727,7 +736,7 @@ be generated in fncode" (fcode, label)
     ];
 
   // instruction examination
-  mc:defined_var = fn (ins)
+  mc:defined_var = fn (vector ins)
     [
       | class |
       class = ins[mc:i_class];
@@ -743,7 +752,7 @@ be generated in fncode" (fcode, label)
   mc:closure_vars = fn (ins)
     lmap(fn (v) v[mc:v_cparent], ins[mc:i_ffunction][mc:c_fclosure]);
 
-  mc:arguments = fn (ins, ambiguous)
+  mc:arguments = fn (vector ins, ambiguous)
     [
       | class |
 
@@ -797,7 +806,7 @@ be generated in fncode" (fcode, label)
        && module_status(mod) == module_protected)
     ];
 
-  mc:call_escapes? = fn (ins)
+  mc:call_escapes? = fn (vector ins)
     // Returns: True if call may escape
     [
       | fun |
@@ -870,7 +879,7 @@ be generated in fncode" (fcode, label)
     ];
 
   // instruction update
-  mc:replace_dest = fn (ins, newdest)
+  mc:replace_dest = fn (vector ins, newdest)
     [
       | class |
 
@@ -884,7 +893,7 @@ be generated in fncode" (fcode, label)
       else fail()
     ];
 
-  mc:replace_args = fn (ins, replacements)
+  mc:replace_args = fn (vector ins, replacements)
     [
       | rep, replist, class |
 
@@ -962,7 +971,10 @@ be generated in fncode" (fcode, label)
 	  il = dget(scan);
 	  if (il[mc:il_label])
 	    dformat("%s:", mc:slabel(il[mc:il_label]));
-	  dformat("\t%s\t(%s) ", il[mc:il_lineno], il[mc:il_number]);
+          | loc |
+          loc = il[mc:il_loc];
+	  dformat("\t%d:%d\t(%s) ", mc:loc_line(loc), mc:loc_column(loc),
+                  il[mc:il_number]);
           | ins |
           ins = il[mc:il_ins];
           if (ins == null)
@@ -975,7 +987,7 @@ be generated in fncode" (fcode, label)
 	]
     ];
 
-  mc:print_ins = fn (ins, closures)
+  mc:print_ins = fn (vector ins, closures)
     [
       | print_sz |
       print_sz = fn (sz)
@@ -1038,7 +1050,23 @@ be generated in fncode" (fcode, label)
         ]
       else if (class == mc:i_trap)
 	[
-	  print_if(trap_names[ins[mc:i_top]], ins[mc:i_targs]);
+          | top |
+          top = ins[mc:i_top];
+          if (top == mc:trap_type || top == mc:trap_typeset)
+            [
+              | arg, v |
+              @(arg v) = ins[mc:i_targs];
+              v = v[mc:v_kvalue];
+              dformat("if %s %s ", trap_names[top], mc:svar(arg));
+              if (top == mc:trap_type)
+                dformat("%s ", type_names[v])
+              else
+                dformat("{%s} ",
+                        concat_words(bits_reduce(fn (t, l) type_names[t] . l,
+                                                 null, v), ","))
+            ]
+          else
+            print_if(trap_names[ins[mc:i_top]], ins[mc:i_targs]);
 	  dformat("trap %s", ins[mc:i_tdest]);
 	]
       else if (class == mc:i_return)
@@ -1082,12 +1110,16 @@ be generated in fncode" (fcode, label)
 	dformat("%s %s %s", mc:svar(car(args)), op, mc:svar(cadr(args)))
     ];
 
-  mc:slabel = fn (label)
+  mc:skip_label_alias = fn (vector label)
     [
       | nlabel |
-      while (nlabel = label[mc:l_alias]) label = nlabel;
-      itoa(label[mc:l_number])
+      while (vector?(nlabel = label[mc:l_alias]))
+        label = nlabel;
+      label
     ];
+
+  mc:slabel = fn (label)
+    itoa(mc:skip_label_alias(label)[mc:l_number])
 
 ];
 

@@ -19,7 +19,7 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#  include "../options.h"
+#include "../mudlle-config.h"
 
 #ifdef USE_XML
 
@@ -31,75 +31,96 @@
 #include "../ports.h"
 #include "../table.h"
 
+#include "check-types.h"
 #include "mudlle-xml.h"
-#include "runtime.h"
+#include "prims.h"
+#include "symbol.h"
 #include "vector.h"
 
 static xmlCharEncodingHandlerPtr xml_utf16_encoder;
 
 static char *strdup_utf8(const xmlChar *xmlstr)
 {
-  unsigned char *result;
-  int ilen, olen, i;
-
   if (xmlstr == NULL)
     return NULL;
 
+  /* optimize for ASCII input */
+  for (const xmlChar *c = xmlstr; ; ++c)
+    if (*c & 0x80)
+      break;
+    else if (*c == 0)
+      {
+        size_t size = c - xmlstr + 1;
+        char *result = malloc(size);
+        memcpy(result, xmlstr, size);
+        return result;
+      }
 
-  ilen = strlen((const char *)xmlstr);
-  olen = ilen * 2;
-  result = malloc(olen + 1);
+  int ilen = strlen((const char *)xmlstr);
+  int olen = ilen * 2;
+  unsigned char *result = malloc(olen + 1);
   if (xml_utf16_encoder->output(result, &olen, xmlstr, &ilen) < 0)
     {
       free(result);
       return NULL;
     }
 
-  for (i = 0; i < olen / 2; ++i)
+  int ochars = olen / 2;
+  for (int i = 0; i < ochars; ++i)
     {
       if (result[i * 2 + 1] == 0)
         result[i] = result[i * 2];
       else
         result[i] = '?';
     }
-  result[i] = 0;
-
-  return (char *)result;
+  result[ochars] = 0;
+  return realloc(result, ochars + 1);
 }
 
 static struct string *alloc_utf8(const xmlChar *xmlstr)
 {
-  struct string *mresult;
-  char *latin1;
-
   if (xmlstr == NULL)
     return NULL;
 
-  latin1 = strdup_utf8(xmlstr);
+  /* optimize for ASCII input */
+  for (const xmlChar *c = xmlstr; ; ++c)
+    if (*c & 0x80)
+      break;
+    else if (*c == 0)
+      return alloc_string((const char *)xmlstr);
+
+  char *latin1 = strdup_utf8(xmlstr);
   if (latin1 == NULL)
     return NULL;
 
-  mresult = alloc_string(latin1);
+  struct string *mresult = alloc_string(latin1);
   free(latin1);
 
   return mresult;
 }
 
-static struct {
+struct xml_error {
   char *msg;
   char *uri;
   int line;
-} xml_error;
+};
 
 static void xml_error_handler(void *arg,
                               const char *msg,
                               xmlParserSeverities severity,
                               xmlTextReaderLocatorPtr locator)
 {
-  xml_error.uri  = strdup_utf8(xmlTextReaderLocatorBaseURI(locator));
-  xml_error.line = xmlTextReaderLocatorLineNumber(locator);
-  /* msg is hopefully ASCII */
-  xml_error.msg  = strdup(msg);
+  struct xml_error *xml_error = arg;
+  if (xml_error->msg != NULL)
+    return;
+  xmlChar *uri = xmlTextReaderLocatorBaseURI(locator);
+  *xml_error = (struct xml_error){
+    .uri  = strdup_utf8(uri),
+    .line = xmlTextReaderLocatorLineNumber(locator),
+    /* msg is hopefully ASCII */
+    .msg  = strdup(msg)
+  };
+  free(uri);
 }
 
 static struct vector *reverse_siblings(struct vector *node)
@@ -117,32 +138,18 @@ static struct vector *reverse_siblings(struct vector *node)
   return prev;
 }
 
-SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
-       " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
-       " an error string. `t is the name table, or NULL.",
-       3, (struct string *mfilename, value mflags, struct table *name_table),
-       LVL_IMPLEMENTOR, 0,
-       "sn[tu].[vs]")
+static value mudlle_xml_read(xmlTextReaderPtr reader, struct table *name_table)
 {
-  TYPEIS(mfilename, type_string);
-  int flags = GETRANGE(mflags, INT_MIN, INT_MAX);
-
-  char *filename;
-  ALLOCA_PATH(filename, mfilename);
-
-  xmlTextReaderPtr reader = xmlReaderForFile(filename, NULL, flags);
-  if (reader == NULL)
-    return msprintf("cannot open '%s'", filename);
-
-  xmlTextReaderSetErrorHandler(reader, xml_error_handler, NULL);
+  struct xml_error xml_error = { .msg = NULL };
+  xmlTextReaderSetErrorHandler(reader, xml_error_handler, &xml_error);
 
   if (name_table == NULL)
     name_table = alloc_table(DEF_TABLE_SIZE);
   else
-    TYPEIS(name_table, type_table);
+    TYPEIS(name_table, table);
 
   struct vector *node = NULL, *xmlstack = NULL;
-  GCPRO3(xmlstack, node, name_table);
+  GCPRO(xmlstack, node, name_table);
   int result;
   while ((result = xmlTextReaderRead(reader)) == 1)
     {
@@ -159,14 +166,18 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
       struct symbol *name_symbol = table_lookup(name_table, name);
       if (name_symbol == NULL)
         {
+          struct string *mstr = make_readonly(alloc_string(name));
+
           if (obj_readonlyp(&name_table->o))
             {
               free(name);
               xmlFreeTextReader(reader);
-              runtime_error(error_value_read_only);
+
+              /* cause user-friendly call trace */
+              code_table_set(name_table, mstr, NULL);
+              abort();
             }
 
-          struct string *mstr = make_readonly(alloc_string(name));
           name_symbol = table_add_fast(name_table, mstr, NULL);
         }
       free(name);
@@ -184,7 +195,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
           struct gcpro gcpro4;
           struct string *mstr;
 
-          GCPRO(gcpro4, pair);
+          GCPROV(gcpro4, pair);
 
           xmlTextReaderMoveToAttributeNo(reader, i);
 
@@ -194,7 +205,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
           mstr = alloc_utf8(xmlTextReaderConstValue(reader));
           pair->cdr = mstr;
 
-          UNGCPRO1(gcpro4);
+          UNGCPROV(gcpro4);
 
           ((struct vector *)node->data[xmlnode_attributes])->data[i] = pair;
         }
@@ -218,8 +229,6 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
         }
       else
         {
-          struct vector *parent;
-
           while (mdepth < xmlstack->data[xmlnode_depth])
             {
               xmlstack = xmlstack->data[xmlnode_parent];
@@ -230,7 +239,7 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
           if (node_type != XML_READER_TYPE_END_ELEMENT
               && node_type != XML_READER_TYPE_END_ENTITY)
             {
-              parent = xmlstack->data[xmlnode_parent];
+              struct vector *parent = xmlstack->data[xmlnode_parent];
               node->data[xmlnode_parent] = parent;
               node->data[xmlnode_sibling] = xmlstack;
               if (parent)
@@ -243,25 +252,140 @@ SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
 
   /* will probably not happen without the "real" error strings being
      set; better safe than sorry! */
-  const char *error = NULL;
-  if (result == -1)
-    error = "does not parse";
+  if (result == -1 && xml_error.msg == NULL)
+    {
+      xmlChar *uri = xmlTextReaderBaseUri(reader);
+      xml_error = (struct xml_error){
+        .uri  = strdup_utf8(uri),
+        .line = 1,
+        .msg  = strdup("does not parse")
+      };
+      free(uri);
+    }
 
   xmlFreeTextReader(reader);
 
   if (xml_error.msg)
     {
-      struct string *merror = msprintf("%s:%d: %s",
-                                       xml_error.uri,
-                                       xml_error.line,
-                                       xml_error.msg);
-      free(xml_error.msg);
+      struct vector *e = alloc_vector(3);
+      struct gcpro gcpro4;
+      GCPROV(gcpro4, e);
+      SET_VECTOR(e, 0, alloc_string(xml_error.uri));
+      SET_VECTOR(e, 1, makeint(xml_error.line));
+      SET_VECTOR(e, 2, alloc_string(xml_error.msg));
+      UNGCPROV(gcpro4);
       free(xml_error.uri);
-      memset(&xml_error, 0, sizeof xml_error);
-      return merror;
+      free(xml_error.msg);
+      return e;
     }
 
-  return error ? (value)alloc_string(error) : reverse_siblings(xmlstack);
+  return reverse_siblings(xmlstack);
+}
+
+struct xml_read_data {
+  struct vector *minput;
+  int vidx, sidx;
+};
+
+static int xml_read_input(void *arg, char *buffer, int len)
+{
+  struct xml_read_data *read_data = arg;
+  int count = 0;
+  while (len > 0)
+    {
+      if (vector_len(read_data->minput) == read_data->vidx)
+        return count;
+
+      struct string *s = read_data->minput->data[read_data->vidx];
+      int srem = string_len(s) - read_data->sidx;
+      if (srem == 0)
+        {
+          ++read_data->vidx;
+          read_data->sidx = 0;
+          continue;
+        }
+      int n = srem;
+      if (len < n)
+        n = len;
+      memcpy(buffer, s->str + read_data->sidx, n);
+      buffer += n;
+      count += n;
+      len -= n;
+      read_data->sidx += n;
+    }
+  return count;
+}
+
+static int xml_read_close(void *arg)
+{
+  return 0;
+}
+
+SECTOP(xml_read, 0, "`v `s `n `t -> `x. Reads an XML document (named `s)"
+       " from vector of strings `v using `XML_PARSE_xxx flags in `n.\n"
+       "Returns an XML tree, or an error [`uri `line `msg].\n"
+       "`t is the name table, or NULL.",
+       4, (struct vector *minput, struct string *murl, value mflags,
+           struct table *name_table),
+       LVL_IMPLEMENTOR, 0,
+       "vsn[tu].v")
+{
+  int flags;
+  CHECK_TYPES(minput,     vector,
+              murl,       string,
+              mflags,     CT_RANGE(flags, INT_MIN, INT_MAX),
+              name_table, CT_TYPES(null, table));
+
+  char *url;
+  ALLOCA_PATH(url, murl);
+
+  for (int i = 0; i < vector_len(minput); ++i)
+    TYPEIS(minput->data[i], string);
+
+  struct xml_read_data read_data = { .minput = minput };
+  GCPRO(read_data.minput);
+  xmlTextReaderPtr reader = xmlReaderForIO(xml_read_input, xml_read_close,
+                                           &read_data, url, "ISO-8859-1",
+                                           flags);
+  if (reader == NULL)
+    runtime_error(error_bad_value);
+
+  value result = mudlle_xml_read(reader, name_table);
+
+  UNGCPRO();
+
+  return result;
+}
+
+SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
+       " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
+       " an error [`uri `line `msg]. `t is the name table, or NULL.",
+       3, (struct string *mfilename, value mflags, struct table *name_table),
+       LVL_IMPLEMENTOR, 0,
+       "sn[tu].v")
+{
+  int flags;
+  CHECK_TYPES(mfilename,  string,
+              mflags,     CT_RANGE(flags, INT_MIN, INT_MAX),
+              name_table, CT_TYPES(null, table));
+
+  char *filename;
+  ALLOCA_PATH(filename, mfilename);
+
+  xmlTextReaderPtr reader = xmlReaderForFile(filename, NULL, flags);
+  if (reader == NULL)
+    {
+      GCPRO(mfilename);
+      struct vector *e = alloc_vector(3);
+      UNGCPRO();
+      e->data[0] = mfilename;
+      e->data[1] = makeint(0);
+      STATIC_STRING(sstr_cannot_open, "cannot open file");
+      e->data[2] = GET_STATIC_STRING(sstr_cannot_open);
+      return e;
+    }
+
+  return mudlle_xml_read(reader, name_table);
 }
 
 #define DEFINE_INT(name) system_define(#name, makeint(name))
@@ -271,6 +395,7 @@ void xml_init(void)
   xml_utf16_encoder = xmlFindCharEncodingHandler("UTF-16LE");
   assert(xml_utf16_encoder != NULL);
 
+  DEFINE(xml_read);
   DEFINE(xml_read_file);
 
   DEFINE_INT(XML_PARSE_RECOVER);

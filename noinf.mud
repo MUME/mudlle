@@ -20,7 +20,7 @@
  */
 
 library inference // type inference, disabled version
-requires system, vars, ins3
+requires ins3, vars
 defines mc:infer_types, mc:show_type_info, mc:constant?
 [
   mc:show_type_info = mc:infer_types = fn (x) 0;

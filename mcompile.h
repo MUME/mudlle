@@ -22,16 +22,21 @@
 #ifndef MCOMPILE_H
 #define MCOMPILE_H
 
-#include "mudlle.h"
+#include "mudlle-config.h"
+
+#include <stdbool.h>
+
+#include "types.h"
 
 struct alloc_block;
 struct block;
 struct fncode;
+struct loc;
 struct mfile;
 
 /* Compile module references */
 
-bool mstart(struct alloc_block *heap, struct mfile *f, int seclev);
+bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev);
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -45,25 +50,28 @@ bool mstart(struct alloc_block *heap, struct mfile *f, int seclev);
 void mstop(struct mfile *f);
 /* Effects: Stop processing module f */
 
-void mrecall(ulong n, const char *name, struct fncode *fn);
+void mrecall(const struct loc *loc, unsigned long n, const char *name,
+             struct fncode *fn);
 /* Effects: Generate code to recall variable n
 */
 
-void mexecute(ulong offset, const char *name, int count, struct fncode *fn);
+void mexecute(const struct loc *loc, unsigned long n, const char *name,
+              int count, struct fncode *fn);
 /* Effects: Generates code to call function in variable n, with count
      arguments. If name is NULL, assume that it is part of a protected
      imported module (used for builtins)
 */
 
-bool mwritable(ulong n, const char *name);
+bool mwritable(const struct loc *loc, unsigned long n, const char *name);
 /* Effects: Return true if variable n/name may be written to. Otherwise,
    log error message.*/
 
-void massign(ulong n, const char *name, struct fncode *fn);
+void massign(const struct loc *loc, unsigned long n, const char *name,
+             struct fncode *fn);
 /* Effects: Generate code to assign to variable n
 */
 
-void mwarn_module(int seclev, struct block *b);
+void mwarn_module(seclev_t seclev, struct block *b);
 /* Effects: Warns about unused variables in module name
  */
 

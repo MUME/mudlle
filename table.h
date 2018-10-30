@@ -24,6 +24,7 @@
 
 #include <string.h>
 
+#include "error.h"
 #include "mvalues.h"
 
 struct table *alloc_table(ulong size);
@@ -68,8 +69,6 @@ enum runtime_error safe_table_mset(struct table *table, struct string *s,
                                    value *x);
 void table_mset(struct table *table, struct string *name, value data);
 bool table_set(struct table *table, const char *name, value data);
-bool table_set_len(struct table *table, const char *name, size_t nlength,
-                   value data);
 /* Effects: Sets table[name] to data, adds it if not already present
    Modifies: table
    Returns: false if entry name was readonly
@@ -119,9 +118,6 @@ void table_foreach(struct table *table, void *data,
 
 struct table *table_copy(struct table *table);
 struct table *table_shallow_copy(struct table *table);
-
-bool table_is_empty(struct table *table);
-struct table *table_resize(struct table *table);
 
 void rehash_table(struct table *table);
 

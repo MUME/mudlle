@@ -1,11 +1,12 @@
 #ifndef STRBUF_H
 #define STRBUF_H
 
+#include "mudlle.h"
+
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "mudlle.h"
 #include "mvalgrind.h"
 
 struct strbuf {
@@ -30,6 +31,8 @@ static inline char *sb_mutable_str(struct strbuf *sb) { return sb->buf; }
 void sb_setminsize(struct strbuf *sb, size_t need);
 /* make strbuf have room for exactly 'need' characters (including nul) */
 void sb_setsize(struct strbuf *sb, size_t size);
+/* free unused memory */
+void sb_trim(struct strbuf *sb);
 
 /* set number of characters in strbuf to 'len' */
 static inline void sb_setlen(struct strbuf *sb, size_t len)
@@ -83,6 +86,8 @@ static inline void sb_makeroom(struct strbuf *sb, size_t len)
 /* add memory */
 static inline void sb_addmem(struct strbuf *sb, const void *data, size_t len)
 {
+  if (len == 0)
+    return;
   sb_makeroom(sb, len);
   memcpy(sb->buf + sb->used, data, len);
   sb->used += len;
@@ -150,8 +155,11 @@ int sb_printf(struct strbuf *sb, const char *fmt, ...)
 int sb_vprintf(struct strbuf *sb, const char *fmt, va_list va)
   FMT_PRINTF(2, 0);
 
+extern const char base64chars[];
+
+void sb_add_base64(struct strbuf *sb, const void *data, size_t len, bool pad);
+
 struct oport;
 struct oport *make_strbuf_oport(struct strbuf *sb);
-void strbuf_init(void);
 
 #endif  /* STRBUF_H */

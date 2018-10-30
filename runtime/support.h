@@ -25,12 +25,12 @@
 #include "../error.h"
 #include "../types.h"
 
-extern const struct primitive_ext *const global_read_ext;
-extern const struct primitive_ext *const global_write_ext;
+extern const struct prim_op *const global_read_ext;
+extern const struct prim_op *const global_write_ext;
 
 void support_init(void);
 
-void global_runtime_error(enum runtime_error error, bool is_write,
-                          ulong goffset, value val) NORETURN;
+noreturn void global_runtime_error(enum runtime_error error, bool is_write,
+                                   ulong goffset, value val);
 
 #endif /* RUNTIME_SUPPORT_H */

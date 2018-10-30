@@ -22,11 +22,13 @@
 #ifndef RUNTIME_MUDLLE_STRING_H
 #define RUNTIME_MUDLLE_STRING_H
 
+#include "check-types.h"
+
 #include "../types.h"
 
 bool string_equalp(struct string *a, struct string *b);
 value string_append(struct string *s1, struct string *s2,
-                    const struct primitive_ext *op);
+                    const struct prim_op *op);
 value code_string_ref(struct string *str, value i);
 value code_string_set(struct string *str, value i, value c);
 
@@ -38,8 +40,16 @@ void string_init(void);
 
 const unsigned char *get_iso88591_pcre_table(void);
 
-bool is_regexp(value _re);
-
 extern struct string *const static_empty_string;
+
+enum runtime_error ct_string_index(long idx, const char **errmsg,
+                                   struct string *str, bool beyond,
+                                   long *dst);
+
+#define __CT_STR_IDX_E(v, msg, dst_str_beyond)                          \
+  ct_string_index(v, msg, ARGN2 dst_str_beyond, ARGN3 dst_str_beyond,   \
+                  &(ARGN1 dst_str_beyond))
+#define CT_STR_IDX(dst, str, beyond) \
+  CT_INT_P((dst, str, beyond), __CT_STR_IDX_E)
 
 #endif /* RUNTIME_MUDLLE_STRING_H */

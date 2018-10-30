@@ -20,11 +20,10 @@
  */
 
 library phase4 // Phase 4: code generation
-requires system, sequences, misc, graph, compiler, vars, ins3, mp,
-  flow, phase3, optimise
+requires compiler, flow, graph, ins3, misc, mp, optimise, phase3, sequences,
+  vars
 defines mc:phase4
 reads mc:verbose, mc:disassemble
-writes mc:lineno
 [
   | clear_igraph, make_igraph, allocate_registers, cgen_function, cgen_code |
 
@@ -98,7 +97,13 @@ writes mc:lineno
       | groups, no, nob, spiltargs, ncallee, ncaller, nscratch, nregargs,
 	spill, easy_spill, changes, color_graph, color_order, ainfo,
 	notspilt, spilt, temps, locals, map, vars, group_variables,
-	select_colors, select_spill, localsb |
+        select_colors, select_spill, localsb,
+        vg_notspilt, vg_spilt, vg_local, vg_temp |
+
+      vg_notspilt = 0;
+      vg_spilt    = 1;
+      vg_local    = 2;
+      vg_temp     = 3;
 
       group_variables = fn (vars)
 	[
@@ -106,13 +111,14 @@ writes mc:lineno
 
 	  group = fn (il, live_in, live_out, x)
 	    [
-	      | ins, class |
+	      | ins, class, dvar |
 
 	      ins = il[mc:il_ins];
               if (!mp:uses_scratch?(ins))
                 exit<function> null;
 
 	      class = ins[mc:i_class];
+              dvar = il[mc:il_defined_var];
 
 	      if (class == mc:i_call
                   || (class == mc:i_branch
@@ -126,11 +132,10 @@ writes mc:lineno
 
 		  // everything live after the call (except the result)
 		  // belongs either in notspilt or in spilt
-                  if (class == mc:i_call)
-                    clear_bit!(survive_call = bcopy(live_out),
-                               ins[mc:i_cdest][mc:v_number])
-                  else
-                    survive_call = live_out;
+                  survive_call = live_out;
+                  if (dvar && bit_set?(survive_call, dvar))
+                    clear_bit!(survive_call = bcopy(survive_call), dvar);
+
 		  bdifference!(temps, survive_call);
 		  bdifference!(locals, survive_call);
 		  bforeach
@@ -153,16 +158,23 @@ writes mc:lineno
 		  // but is the simplest test
 
 		  // operations that imply allocation use scratch regs
-		  if (class == mc:i_closure
-                      || (class == mc:i_compute
-                          && vfind?(ins[mc:i_aop],
-                                    sequence(mc:b_cons,
-                                             mc:b_pcons,
-                                             mc:b_vector,
-                                             mc:b_sequence))))
-		    survives = live_in
+                  if (class == mc:i_closure
+                                 || (class == mc:i_compute
+                                     && (match (ins[mc:i_aop]) [
+                                       ,mc:b_vector || ,mc:b_sequence => true
+                                     ])))
+                    [
+                      survives = live_in;
+                      // test before making an otherwise-unnecessary copy
+                      if (dvar && bit_set?(live_in, dvar))
+                        clear_bit!(survives = bcopy(live_in), dvar)
+                    ]
 		  else
-		    survives = bintersection(live_in, live_out);
+                    [
+                      survives = bintersection(live_in, live_out);
+                      if (dvar)
+                        clear_bit!(survives, dvar);
+                    ];
 
 		  // those temps that survive move to locals
 		  bunion!(locals, bintersection(temps, survives));
@@ -215,18 +227,38 @@ writes mc:lineno
 
       spill = fn (vars, bvars)
 	[
-	  | v |
+          // find variable with most neighbours to spill
 
-	  // spill first unallocated variable
-	  if (v = lexists?(fn (v) !v[mc:v_location], vars))
-	    [
-	      v[mc:v_location] = vector(mc:v_lspill, mc:spill_spill, 0);
-	      clear_bit!(bvars, v[mc:v_number]);
-	      true
-	    ]
-	  else
-	    false
-	];
+	  | best, maxneigh, bvars2 |
+          bvars2 = bcopy(bvars); // create one copy to save some memory allocation
+          maxneigh = -1;
+
+          loop
+            [
+              | v |
+              @(v . vars) = vars;
+              if (!v[mc:v_location])
+                [
+                  | n |
+                  n = bcount(bintersection!(bvars2, v[mc:v_neighbours]));
+                  if (n > maxneigh)
+                    [
+                      maxneigh = n;
+                      best = v;
+                    ];
+                ];
+              if (vars == null)
+                exit null;
+              bassign!(bvars2, bvars);
+            ];
+
+          if (best == null)
+            exit<function> false;
+
+          best[mc:v_location] = vector(mc:v_lspill, mc:spill_spill, 0);
+          clear_bit!(bvars, best[mc:v_number]);
+          true
+        ];
 
       color_order = vector(0, 0, 0);
       color_graph = fn (vars, bvars, regtype, nregs)
@@ -377,7 +409,8 @@ writes mc:lineno
 
       // first nregargs are in registers
       spiltargs = mc:new_varset(ifn);
-      mc:set_vars!(spiltargs, nth_pair(nregargs + 1, ifn[mc:c_fargs]));
+      mc:set_vars!(spiltargs, lmap(fn (@[var _ _]) var,
+				   nth_pair(nregargs + 1, ifn[mc:c_fargs])));
 
       vars = make_igraph(ifn);
       // separate variables into 4 groups:
@@ -387,27 +420,27 @@ writes mc:lineno
       //   3: temps: those that can live in the scratch registers
       //   2: locals: all the others
       groups = group_variables(vars);
-      temps = bitset_to_list(groups[3], map);
-      locals = bitset_to_list(groups[2], map);
-      spilt = bitset_to_list(groups[1], map);
-      notspilt = bitset_to_list(groups[0], map);
+      temps    = bitset_to_list(groups[vg_temp],     map);
+      locals   = bitset_to_list(groups[vg_local],    map);
+      spilt    = bitset_to_list(groups[vg_spilt],    map);
+      notspilt = bitset_to_list(groups[vg_notspilt], map);
 
       if (mc:verbose >= 3)
 	[
 	  dformat("AVAILABLE: scratch: %s, caller: %s callee: %s\n",
-			 nscratch, ncaller, ncallee);
+                  nscratch, ncaller, ncallee);
 	];
 
       // Do scratch registers first, as they should normally all
       // be successful
-      if (!color_graph(temps, groups[3], mc:reg_scratch, nscratch))
+      if (!color_graph(temps, groups[vg_temp], mc:reg_scratch, nscratch))
 	[
 	  // if fail, add unallocated temps to locals
 	  locals = lappend(lfilter(fn (v) !v[mc:v_location], temps), locals);
-	  bunion!(groups[2], groups[3]);
+	  bunion!(groups[vg_local], groups[vg_temp]);
 	];
 
-      localsb = groups[2];
+      localsb = groups[vg_local];
       <allocate_locals> loop
 	[
 	  loop
@@ -421,8 +454,8 @@ writes mc:lineno
 	  // spill somebody, preferably already spilled
 	  // beyond that, the heuristic needs much more thought
 	  // (e.g. which is better: spill long-lived or short-lived vars ?)
-	  easy_spill(locals, localsb) ||
-	  spill(locals, localsb)
+	  if (!easy_spill(locals, localsb))
+            spill(locals, localsb)
 	];
 
       // Note: see old-allocate.mud for an idea that doesn't work
@@ -432,7 +465,7 @@ writes mc:lineno
       // This needs further investigation.
 
       no = lappend(notspilt, spilt);
-      nob = bunion(groups[0], groups[1]);
+      nob = bunion(groups[vg_notspilt], groups[vg_spilt]);
       <allocate_others> loop
 	[
 	  loop
@@ -447,15 +480,15 @@ writes mc:lineno
 	  // spill somebody, preferably already spilled
 	  // beyond that, the heuristic needs much more thought
 	  // (e.g. which is better: spill long-lived or short-lived vars ?)
-	  easy_spill(spilt, nob) ||
-	  spill(notspilt, nob)
+	  if (!easy_spill(spilt, nob))
+            spill(notspilt, nob)
 	];
 
-      ainfo =
-	vector(select_colors(vars, mc:reg_scratch, nscratch),
-	       select_colors(vars, mc:reg_caller, ncaller),
-	       select_colors(vars, mc:reg_callee, ncallee),
-	       select_spill(vars, llength(ifn[mc:c_flocals])));
+      ainfo = vector(
+        select_colors(vars, mc:reg_scratch, nscratch),
+        select_colors(vars, mc:reg_caller,  ncaller),
+        select_colors(vars, mc:reg_callee,  ncallee),
+        select_spill(vars, llength(ifn[mc:c_flocals])));
       if (mc:verbose >= 3)
 	[
 	  dformat("USED: scratch: %d, caller: %d callee: %d, spilt %d\n",
@@ -525,7 +558,7 @@ writes mc:lineno
 	  newline();
 	];
 
-      mc:lineno = ifn[mc:c_flineno];
+      mc:set_loc(ifn[mc:c_loc]);
       ifn[mc:c_fvalue] = mp:assemble(code);
     ];
 

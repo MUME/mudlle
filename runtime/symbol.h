@@ -32,6 +32,9 @@ value code_table_ref(struct table *tab, struct string *s);
 value code_table_set(struct table *tab, struct string *s, value c);
 value code_symbol_set(struct symbol *s, value val);
 
+struct symbol *table_symbol_ref(struct table *table, struct string *s,
+                                value x);
+
 void symbol_init(void);
 
 #endif /* RUNTIME_SYMBOL_H */

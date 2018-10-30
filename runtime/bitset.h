@@ -22,6 +22,9 @@
 #ifndef RUNTIME_BITSET_H
 #define RUNTIME_BITSET_H
 
+#include "../types.h"
+
 void bitset_init(void);
+value code_bit_setp(struct string *b, value n);
 
 #endif /* RUNTIME_BITSET_H */

@@ -28,7 +28,6 @@ USE_READLINE  := yes
 # USE_PCRE    	:= yes
 # PCRE_HEADER 	:= PCRE_H	# for <pcre.h>
 # PCRE_HEADER 	:= PCRE_PCRE_H	# for <pcre/pcre.h>
-# USE_MINGW     := yes
 # USE_LPSOLVE   := yes
 # LPSOLVE_HEADER := LPKIT_LPKIT_H     # for <lpkit/lpkit.h>
 # LPSOLVE_HEADER := LP_SOLVE_LPKIT_H  # for <lp_solve/lpkit.h>
@@ -36,52 +35,79 @@ USE_READLINE  := yes
 
 # USE_CPP_STEP := t
 
-export USE_XML USE_GMP USE_READLINE USE_PCRE USE_MINGW USE_LPSOLVE USE_CPP_STEP
+ifeq ($(verbose),yes)
+  Q :=
+else
+  Q := @
+endif
 
-PRIMITIVE_CFLAGS := -mstackrealign
-export PRIMITIVE_CFLAGS
+ifeq ($(optimize),no)
+  NO_OPT := t
+endif
 
 ARCH := i386
-ifeq ($(ARCH),x86_64)
+ifneq ($(filter x86 i386 i686,$(ARCH)),)
+override ARCH := i386
+endif
+
+ifneq ($(filter x64-64 x86_64 x64,$(ARCH)),)
 override ARCH := amd64
 endif
 
-ifneq ($(filter i386 amd64,$(ARCH)),$(ARCH))
+
+ifeq ($(filter i386 amd64,$(ARCH)),)
 $(error Unsupported ARCH=$(ARCH); expected i386 or amd64)
 endif
 
 ifeq ($(ARCH),i386)
+PRIMITIVE_CFLAGS := -mstackrealign
 BUILTINS := x86builtins.o
 BUILTINDEPS := x86consts.h
 ARCHFLAG := -m32
-INSTALLFLAGS := -y
-INSTALLDEPS := compiler
 else
 ifeq ($(ARCH),amd64)
+BUILTINS := x64builtins.o
+BUILTINDEPS := x64consts.h
 ARCHFLAG := -m64
-INSTALLFLAGS := -y -c
-INSTALLDEPS := 
 endif
 endif
 
-OBJS= $(BUILTINS) alloc.o call.o calloc.o charset.o compile.o	\
-	context.o env.o error.o global.o ins.o interpret.o	\
-	lexer.o mcompile.o module.o mudlle-main.o mudlle.o		\
-	objenv.o parser.tab.o ports.o print.o stack.o strbuf.o	\
-	table.o tree.o types.o utils.o
+ARCHDEP:=.mudlle-arch
+
+OLD_ARCH:=$(shell [ -f $(ARCHDEP) ] && cat $(ARCHDEP))
+ifneq ($(OLD_ARCH),$(ARCH))
+ ifneq ($(OLD_ARCH),)
+  $(info Architecture changed. Recompiling.)
+ endif
+.PHONY: $(ARCHDEP)
+endif
+
+$(ARCHDEP):
+	@echo "$(ARCH)" > $@
+
+
+SRC := alloc.c assoc.c call.c calloc.c charset.c compile.c context.c	\
+	dwarf.c elf.c env.c error.c global.c ins.c interpret.c lexer.c	\
+	mcompile.c module.c mudlle-main.c mudlle.c objenv.c		\
+	parser.tab.c ports.c print.c stack.c strbuf.c table.c tree.c	\
+	types.c utils.c
+
+OBJS := $(BUILTINS) $(SRC:%.c=%.o)
 
 alloc.o error.o: CFLAGS+=$(PRIMITIVE_CFLAGS)
 
-SRC = $(filter-out x86builtins.c, $(OBJS:%.o=%.c))
+warnings := all missing-declarations missing-prototypes nested-externs	\
+        shadow unused-macros write-strings
 
-CC=gcc
-CFLAGS := -g3 -std=gnu99 -O2 -Wall -Wshadow -Wwrite-strings	\
-          -Wnested-externs -Wunused-macros
-CPPFLAGS := $(ARCHFLAG)
+CC := gcc -std=gnu11
+CFLAGS := -g3 $(if $(NO_OPT),-O0,-O2) $(addprefix -W,$(warnings))
+CPPFLAGS := $(ARCHFLAG) -I.
 LDFLAGS := $(ARCHFLAG) -fno-pie
 LIBS := -lm
-MAKEDEPEND=$(CC) -MM
-PERL:=perl
+MAKEDEPEND = $(CC) -MM
+PERL := perl
+
+LIBCURSES := -lcurses
 
 ifeq ($(shell uname -s),Darwin)
 CPPFLAGS += -isystem /opt/local/include
@@ -92,7 +118,7 @@ endif # Darwin
 export CC CFLAGS CPPFLAGS LDFLAGS MAKEDEPEND PERL
 
 ifneq ($(USE_XML),)
-CPPFLAGS  += -DUSE_XML
+CPPFLAGS += -DUSE_XML
 LIBS += -lxml2
 endif
 
@@ -103,7 +129,7 @@ endif
 
 ifneq ($(USE_READLINE),)
 CPPFLAGS += -DUSE_READLINE
-LIBS += -lreadline -lcurses
+LIBS += -lreadline $(LIBCURSES)
 endif
 
 ifneq ($(USE_PCRE),)
@@ -120,54 +146,46 @@ ifneq ($(USE_VALGRIND),)
 CPPFLAGS += -DHAVE_VALGRIND_MEMCHECK_H
 endif
 
-ifneq ($(USE_MINGW),)
-LIBS += -lwsock32
-endif
-
 clang:=$(shell : | $(CC) $(CPPFLAGS) $(CFLAGS) -E -dM - \
 	| grep '^\#define __clang__\b')
-ifneq ($(clang),)
-NO_UNUSED_MACROS:=x86builtins.o
+NO_UNUSED_MACROS:=x86builtins.o x64builtins.o
 charset.o: CFLAGS:=-Wno-invalid-source-encoding $(CFLAGS)
-endif
 
 LIBRUN := runtime/librun.a
 
+.PHONY: all
 all: mudlle
 
-mudlle: $(OBJS) $(LIBRUN)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+mudlle: $(OBJS)
+	@echo "Link $@"
+	$(Q)$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 profiler: profiler.o
-	$(CC) $(LDFLAGS) $(CPPFLAGS) -o $@ $<
-
-puremud: $(OBJS) $(LIBRUN)
-	purify -cache-dir=/tmp $(CC) -o puremud $^ -lm
-
-.PHONY: $(LIBRUN)
-$(LIBRUN):
-	$(MAKE) -C $(dir $@) -f Makefile $(notdir $@)
+	@echo "Link $@"
+	$(Q)$(CC) $(LDFLAGS) -o $@ $<
 
 .PHONY: clean depclean
 depclean:
-	$(MAKE) -C runtime -f Makefile $@
 	rm -f .depend
 
 clean:
-	$(MAKE) -C runtime -f Makefile $@
-	rm -f *.o lexer.c tokens.h parser.c .depend genconst \
-		genconstdefs.h mudlle parser.output x86consts.h
+	rm -f *.o *.obj lexer.c tokens.h parser.tab.c parser.tab.h	\
+		.depend genconst genconstdefs.h mudlle parser.output	\
+		x86consts.h x64consts.h
 
 ifeq (,$(USE_CPP_STEP))
-%.o: %.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
+%.o: %.c $(ARCHDEP)
+	@echo "Compile $<"
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 else
 %.o: %-mpp.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
+	@echo "Compile $<"
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 
 .PRECIOUS: %-mpp.c
-%-mpp.c: %.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | indent > $@
+%-mpp.c: %.c $(ARCHDEP)
+	@echo "Create $@"
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | indent > $@
 endif
 
 .depend parser.tab.o lexer.o $(NO_UNUSED_MACROS): \
@@ -176,34 +194,43 @@ endif
 lexer.o: parser.tab.h
 
 lexer.c: lexer.l
-	flex -CFe -8 -o $@ $<
+	@echo "Flex $<"
+	$(Q)flex -CFe -8 -o $@ $<
 
 %.tab.c %.tab.h: %.y
-	bison -dtv $<
+	@echo "Bison $<"
+	$(Q)bison -dtv $<
 
-x86builtins.o: x86builtins.S $(BUILTINDEPS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+$(BUILTINS): $(BUILTINS:%.o=%.S) $(BUILTINDEPS) $(ARCHDEP)
+	@echo "Compile $<"
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-x86consts.h: genconst Makefile
-	./genconst > $@
+x64consts.h x86consts.h: genconst Makefile
+	@echo "Create $<"
+	$(Q)./genconst > $@
 
 genconst: genconst.o Makefile
-	$(CC) $(LDFLAGS) -o $@ $<
+	@echo "Link $@"
+	$(Q)$(CC) $(LDFLAGS) -o $@ $<
 
 genconst.o: genconstdefs.h
 
 CONSTH := types.h mvalues.h context.h error.h
 
 genconstdefs.h: runtime/consts.pl $(CONSTH) Makefile
-	$(PERL) $< -d -o $@ -- $(CONSTH)
+	@echo "Create $@"
+	$(Q)LC_ALL=C $(PERL) $< -d -o $@ -- $(CONSTH)
 
 .PHONY: dep depend
 dep depend: .depend
-	$(MAKE) -C runtime -f Makefile depend
+	$(Q)$(MAKE) -C runtime -f Makefile depend
 
-.depend: $(SRC) genconst.c genconstdefs.h $(BUILTINS:%.o=%.S) $(BUILTINDEPS)
-	$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS) $(filter-out %.h,$^) \
-		| sed 's/\.o *:/.o:/g' > .depend
+.depend: $(SRC) genconst.c genconstdefs.h $(BUILTINS:%.o=%.S) $(BUILTINDEPS) \
+		$(ARCHDEP)
+	@echo "Create $@"
+	$(Q)$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS)		\
+		$(filter-out %.h $(ARCHDEP),$^)		\
+		> $@
 
 # Currently 22 files, split into at most 8 groups for parallel builds
 GROUPS=0 1 2 3 4 5 6 7
@@ -230,17 +257,35 @@ $(eval $(call PASS,icxc2,icxc,comp_icxc))
 .PHONY: compiler
 compiler: comp_icxc2
 
-.PHONY: install
-install: install-compiler.sh $(INSTALLDEPS)
-	/bin/sh $< $(INSTALLFLAGS) $(IDIR)
+
+.PHONY: help
+help:
+	@echo 'Available make targets:' ;				\
+	echo '  mudlle    the mudlle binary (default)' ;		\
+	echo '  compiler  the mudlle compiler' ;			\
+	echo '  clean     remove build files' ;				\
+	echo '  depclean  remove dependency files' ;			\
+	echo ;								\
+	echo 'Useful make variables:' ;					\
+	echo '  ARCH      set to "i386" (default) or "amd64"' ;		\
+	echo '  optimize  set to "no" for -O0 builds' ;			\
+	echo '  verbose   set to "yes" for verbose builds'
 
 depfile:=.depend
 
 # include dependency files unless we are only running cleaning targets
+NO_DEP_TGT:=clean depclean help
+
 ifneq (,$(MAKECMDGOALS))
-ifeq ($(MAKECMDGOALS),$(filter clean depclean,$(MAKECMDGOALS)))
+ifeq ($(MAKECMDGOALS),$(filter $(NO_DEP_TGT),$(MAKECMDGOALS)))
 depfile:=
 endif
 endif
 
+include runtime/Makefile
+
+ifeq (,$(wildcard $(depfile)))
 -include $(depfile)
+else
+include $(depfile)
+endif

@@ -72,7 +72,7 @@ void global_init(void);
 */
 
 void check_global_read(ulong goffset);
-void check_global_write(ulong goffset, value val);
+void check_global_write(value val, ulong goffset);
 /* Errors out if the calling code is not allowed to access that global.
    NB: adjust x86builtins.S if you change this declaration.
 */

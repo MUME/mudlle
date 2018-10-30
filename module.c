@@ -74,7 +74,7 @@ int module_seclevel(const char *name)
   return intval(((struct vector *)sym->data)->data[vmodule_seclev]);
 }
 
-void module_set(const char *name, enum module_status status, int seclev)
+void module_set(const char *name, enum module_status status, seclev_t seclev)
 /* Effects: Sets module status
 */
 {
@@ -133,7 +133,7 @@ bool module_unload(const char *name)
   return true;
 }
 
-enum module_status module_load(const char *name)
+static enum module_status module_load(const char *name)
 /* Effects: Attempts to load module name by calling mudlle hook
      Error/warning messages are sent to muderr
      Sets erred to true in case of error
@@ -174,11 +174,12 @@ enum vstatus module_vstatus(long n, struct string **name)
    Requires: n be a valid global variable offset
 */
 {
-  struct string *v = mvars->data[n];
+  value v = mvars->data[n];
 
   if (integerp(v)) return intval(v);
   if (v == NULL) return var_system_write;
 
+  assert(TYPE(v, string));
   *name = v;
   return var_module;
 }

@@ -4,20 +4,16 @@ mudlle: MUD Language for Little Extensions
 This software is Copyright (C) 1993-2012 David Gay and Gustav Hållberg.
 Read the COPYRIGHT file for terms of use.
 
+
 Installation
 ------------
 To compile this software for 32-bit x86 on Linux or OS X, just type 'make'.
 
-To compile for 64-bit x86 on Linux or OS X, type 'make ARCH=amd64".
+To compile for 64-bit x86-64 on Linux or OS X, type 'make ARCH=amd64".
 
-Other 32-bit platforms could work as well, as long as: x86builtins.o
-is removed from OBJS in Makefile, and options.h is edited
-appropriately. Porting to 64-bit platforms will require changes to the
-garbage collector (alloc.c) and the basic type layout (mvalues.h).
+Makefile contains a number of USE_xxx variables that can be set to
+'yes' to enable that feature. They may require additional header files.
 
-If you have the GNU gmp package installed, you can add -DUSE_GMP to the
-CFLAGS in the Makefiles (or to options.h) to enable "big" (unlimited
-precision) integers.
 
 Quick Introduction
 ------------------
@@ -30,10 +26,11 @@ it with your favourite application if you wish to use it as an
 extension language.
 
 Once compiled, run mudlle and check that basic stuff works:
-./mudlle
-mudlle> 2+3
-Result: 5
-mudlle>
+
+  ./mudlle
+  mudlle> 2+3
+  Result: 5
+  mudlle>
 
 EOF (Ctrl-D), or evaluating quit() will exit the interpreter.
 
@@ -41,18 +38,24 @@ doc/mudlle-intro.doc and doc/mudlle-ref.doc contain a somewhat out of date
 language introduction and reference. However, everything described in those
 documents should still work.
 
-A compiler is available for x86/linux. To load it, type:
+A compiler is available for x86 and x86-64. To load it, type:
+
   load("xc.mud")
+
 at the 'mudlle>' prompt.
 
 To compile a file:
+
   fcompile("<filename.mud>")
+
 This produces <filename.obj>.
 
 To load a compiled file:
+
   fload("<filename.obj>");
 
 Remember, the source code is the documentation.
+
 
 Contact Information
 -------------------

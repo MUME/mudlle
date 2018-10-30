@@ -19,8 +19,9 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "check-types.h"
 #include "list.h"
-#include "runtime.h"
+#include "prims.h"
 
 #include "../interpret.h"
 
@@ -47,7 +48,7 @@ TYPEDOP(car, 0, "`l -> `x. Returns the first element of pair `l.",
         1, (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
-  TYPEIS(l, type_pair);
+  CHECK_TYPES(l, pair);
   return l->car;
 }
 
@@ -55,21 +56,21 @@ TYPEDOP(cdr, 0, "`l -> `x. Returns second element of pair `l.",
         1, (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
-  TYPEIS(l, type_pair);
+  CHECK_TYPES(l, pair);
   return l->cdr;
 }
 
 TYPEDOP(pairp, "pair?", "`x -> `b. Returns TRUE if `x is a pair", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
-  return makebool(TYPE(v, type_pair));
+  return makebool(TYPE(v, pair));
 }
 
 TYPEDOP(listp, "list?", "`x -> `b. Returns TRUE if `x is a pair or null",
         1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
-  return makebool(!v || TYPE(v, type_pair));
+  return makebool(!v || TYPE(v, pair));
 }
 
 TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object",
@@ -81,34 +82,36 @@ TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object",
 
 EXT_TYPEDOP(set_carb, "set_car!", "`l `x -> `x. Sets the first element of"
             " pair `l to `x",
-            2, (struct list *l, value x),
+            2, (struct list *l, value x), (l, x),
             OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "kx.1")
 {
-  TYPEIS(l, type_pair);
+  CHECK_TYPES(l, pair,
+              x, any);
   if (obj_readonlyp(&l->o))
-    runtime_error(error_value_read_only);
+    RUNTIME_ERROR(error_value_read_only, NULL);
   return l->car = x;
 }
 
 EXT_TYPEDOP(set_cdrb, "set_cdr!", "`l `x -> `x. Sets the second element of"
             " pair `l to `x",
-            2, (struct list *l, value x),
+            2, (struct list *l, value x), (l, x),
             OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "kx.1")
 {
-  TYPEIS(l, type_pair);
+  CHECK_TYPES(l, pair,
+              x, any);
   if (obj_readonlyp(&l->o))
-    runtime_error(error_value_read_only);
+    RUNTIME_ERROR(error_value_read_only, NULL);
   return l->cdr = x;
 }
 
 static const typing list_tset = { ".u", "xx*.k", NULL };
 
 FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
-       NVARARGS, (struct vector *args, ulong nargs), 0, OP_LEAF | OP_NOESCAPE,
-       list_tset, static)
+       NVARARGS, (struct vector *args, ulong nargs), (args, nargs),
+       0, OP_LEAF | OP_NOESCAPE, list_tset, static)
 {
   struct list *l = NULL;
-  GCPRO2(l, args);
+  GCPRO(l, args);
 
   while (nargs > 0)
     l = alloc_list(args->data[--nargs], l);
@@ -119,12 +122,12 @@ FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
 
 FULLOP(plist, 0, "`x1 ... -> `l. Returns a read-only and (if all elements"
        " are immutable) immutable list of the arguments.",
-       NVARARGS, (struct vector *args, ulong nargs), 0,
+       NVARARGS, (struct vector *args, ulong nargs), (args, nargs), 0,
        OP_LEAF | OP_NOESCAPE | OP_CONST,
        list_tset, static)
 {
   struct list *l = NULL;
-  GCPRO2(l, args);
+  GCPRO(l, args);
 
   bool immutable = true;
   while (nargs > 0)

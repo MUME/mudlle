@@ -27,13 +27,12 @@
 
 void list_init(void);
 
-struct list;
 value code_set_carb(struct list *l, value x);
 value code_set_cdrb(struct list *l, value x);
 
 static inline struct list *mudlle_reverse_list(struct list *l)
 {
-  return reverse_list_internal(l, offsetof(struct list, cdr));
+  return internal_reverse_list(l, offsetof(struct list, cdr));
 }
 
 #endif /* RUNTIME_LIST_H */

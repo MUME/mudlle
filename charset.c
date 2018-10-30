@@ -23,10 +23,12 @@
  * Support routines for different charsets
  */
 
+#include "mudlle-config.h"
+
 #include <stdlib.h>
 
 #include "charset.h"
-#include "mudlle.h"
+#include "mudlle-macro.h"
 
 /*
  * conversion table for latin1 to 7-bit ascii (for output)
@@ -271,15 +273,6 @@ const unsigned char latin1_to_lower[256] = {
    'ð',  'ñ',  'ò',  'ó',  'ô',  'õ',  'ö',  '÷',
    'ø',  'ù',  'ú',  'û',  'ü',  'ý',  'þ',  'ÿ'
 */
-
-bool str_is8bit(const char *str)
-{
-  while (*str)
-    if (*str++ & 0x80)
-      return true;
-
-  return false;
-}
 
 int str8icmp(const char *s1, const char *s2)
 {
@@ -563,8 +556,11 @@ struct char_name {
   op('¥', "YEN SIGN")
 
 #define __CHAR(a, b) a
-#define __NAME(a, b) b
-static const char *const iso88591names[] = {
+#define __NAME(a, b) { b, sizeof b - 1 }
+static const struct str_len {
+  const char *str;
+  size_t len;
+} iso88591names[] = {
   FOR_ISO88591_CHARS(__NAME)
 };
 static const unsigned char iso88591chars[] = {
@@ -573,34 +569,28 @@ static const unsigned char iso88591chars[] = {
 #undef __CHAR
 #undef __NAME
 
-struct cmp_char_data {
-  const char *name;
-  size_t len;
-};
-
 static int cmp_char_name(const void *a, const void *b)
 {
-  const struct cmp_char_data *data = a;
-  const char *const *name = b;
-  size_t nlen = strlen(*name);
-  size_t clen = data->len < nlen ? data->len : nlen;
-  int r = memcmp(data->name, *name, clen);
+  const struct str_len *key = a;
+  const struct str_len *entry = b;
+  size_t clen = key->len < entry->len ? key->len : entry->len;
+  int r = memcmp(key->str, entry->str, clen);
   if (r != 0)
     return r;
-  return clen < nlen ? -1 : clen == data->len ? 0 : 1;
+  return clen < entry->len ? -1 : clen == key->len ? 0 : 1;
 }
 
 int lookup_named_character(const char *name, size_t namelen)
 {
-  struct cmp_char_data cdata = {
-    .name = name,
-    .len  = namelen
+  struct str_len cdata = {
+    .str = name,
+    .len = namelen
   };
-  const char *const *cname = bsearch(&cdata, iso88591names,
-                                     VLENGTH(iso88591names),
-                                     sizeof iso88591names[0],
-                                     cmp_char_name);
-  if (cname == NULL)
+  const struct str_len *entry = bsearch(&cdata, iso88591names,
+                                        VLENGTH(iso88591names),
+                                        sizeof iso88591names[0],
+                                        cmp_char_name);
+  if (entry == NULL)
     return -1;
-  return iso88591chars[cname - iso88591names];
+  return iso88591chars[entry - iso88591names];
 }

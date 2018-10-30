@@ -58,6 +58,7 @@ context (in that case the current value is in global variable x).
 
 #include <setjmp.h>
 
+#include "alloc.h"
 #include "error.h"
 #include "mvalues.h"
 
@@ -81,16 +82,21 @@ struct ccontext
 
 #else  /* USE_CCONTEXT */
 
-#ifdef i386
+#define __DEF_VALUE(n, reg) value reg
 struct ccontext {
   ulong *frame_start;
   /* Use ccontext_frame() to extract the real sp/bp for this frame */
   ulong *frame_end_sp;
   ulong *frame_end_bp;
   /* Space to save callee and caller saved registers */
-  value callee[2];
-  value caller[2];
+  struct {
+    FOR_CALLEE_SAVE(__DEF_VALUE, ;);
+  } callee;
+  struct {
+    FOR_CALLER_SAVE(__DEF_VALUE, ;);
+  } caller;
 };
+#undef __DEF_VALUE
 
 static inline void ccontext_frame(const struct ccontext *cc,
                                   ulong **bpp, ulong **spp)
@@ -109,15 +115,13 @@ static inline void ccontext_frame(const struct ccontext *cc,
   *spp = sp;
 }
 
-#endif
-
 #endif /* USE_CCONTEXT */
 
 extern struct ccontext ccontext;
 
 /* Security level of a calling function when directly calling a secure
    or vararg. DEFAULT_SECLEVEL otherwise. */
-extern uword internal_seclevel;
+extern seclev_t internal_seclevel;
 /* Lowest seclevel seen in current call chain. A mudlle int so it
    cheaply can be pushed to the stack. */
 extern value maxseclevel;
@@ -125,28 +129,27 @@ extern value maxseclevel;
    called primitive. */
 extern bool seclevel_valid;
 
-static inline uword get_seclevel(void)
+static inline seclev_t get_seclevel(void)
 {
   assert(seclevel_valid);
   return internal_seclevel;
 }
 
-static inline void set_seclevel(uword seclevel)
+static inline void set_seclevel(seclev_t seclevel)
 {
   internal_seclevel = seclevel;
 }
 
-value seclevel_to_maxseclevel(int seclev);
-uword get_effective_seclevel(void);
+value seclevel_to_maxseclevel(seclev_t seclev);
+seclev_t get_effective_seclevel(void);
 
 /* Does not require a valid seclevel (ie. to be called from a secure primitive)
  * if seclev < LEGACY_SECLEVEL. Useful for OP_FASTSEC OPs. */
-static inline bool effective_seclevel_below(uword seclev)
+static inline bool effective_seclevel_below(seclev_t seclev)
 {
   if (seclev >= LEGACY_SECLEVEL)
     return get_effective_seclevel() < seclev;
-  else
-    return intval(maxseclevel) < seclev;
+  return intval(maxseclevel) < seclev;
 }
 
 
@@ -156,12 +159,12 @@ enum call_class {
   call_bytecode,                /* interpreted byte code closures */
   call_compiled,                /* compiled closures */
   call_c,                       /* primitives */
-  call_primop,                  /* primitive_ext; for displaying
-                                   stack traces only */
+  call_primop,                  /* prim_op; for displaying stack traces only */
   call_string,                  /* a string description; for displaying
                                    stack traces only*/
   call_session,                 /* a new session */
-  call_invalid                  /* invalid interpreter call */
+  call_invalid,                 /* invalid interpreter call */
+  call_invalid_argp             /* invalid call with pointer to args */
 };
 
 
@@ -184,9 +187,9 @@ struct call_stack_c_header {
   struct call_stack s;
   union {
     struct primitive *prim;         /* for call_c */
-    const struct primitive_ext *op; /* for call_primop */
+    const struct prim_op *op;       /* for call_primop */
     const char *name;               /* for call_string */
-    value value;                    /* for call_invalid */
+    value value;                    /* for call_invalid{,_argv} */
   } u;
   int nargs;
 };
@@ -196,18 +199,36 @@ struct call_stack_c {
   value args[];
 };
 
+struct call_stack_c_argp {
+  struct call_stack_c_header c;
+  value *argp;
+};
+
 extern struct call_stack *call_stack;
 
 #ifdef USE_CCONTEXT
 
 static inline struct ccontext *next_ccontext(const struct ccontext *cc)
 {
-  /* See START_INVOKE: the first (invoke) stack frame contains ebx, esi, edi,
-     the non-union field of struct call_stack, parent ccontext, and then invoke
-     arguments. */
-  return (struct ccontext *)((char *)(cc->frame_start - 3)
-                             - sizeof (struct call_stack)
-                             - sizeof *cc);
+#ifdef __i386__
+  /* ebx, esi, edi */
+  const int frame_size = (3 * sizeof (value)
+                          + sizeof (struct call_stack)
+                          + sizeof *cc);
+#elif defined __x86_64__
+  /* ebx, r12-r15 */
+  const int frame_size = MUDLLE_ALIGN(
+    5 * sizeof (value)
+    + sizeof (struct call_stack)
+    + sizeof *cc,
+    16);
+#else
+  #error Unsupported architecture
+#endif
+  /* See START_INVOKE: the first (invoke) stack frame contains callee-save
+     registers, padding (to align to stack alignment), the non-union field of
+     struct call_stack, parent ccontext, and then invoke arguments. */
+  return (struct ccontext *)((char *)cc->frame_start - frame_size);
 }
 
 /* The invoke arguments are below here. */
@@ -225,7 +246,7 @@ struct catch_context
 {
   struct catch_context *parent;
 
-  jmp_buf exception;            /* the return point */
+  sigjmp_buf exception;         /* the return point */
 
   /* How should call traces be shown if errors occur in this context ? */
   enum call_trace_mode call_trace_mode;
@@ -280,11 +301,10 @@ struct session_context
   struct session_context *parent;
   struct oport *_mudout, *_muderr;
   muser_t _muduser;
-  uword old_minlevel;
-  uword old_maxseclevel;
+  seclev_t old_minlevel;
+  seclev_t old_maxseclevel;
   ulong old_xcount;
-  ulong recursion_count;
-#if defined i386 || defined __x86_64__
+#if defined __i386__ || defined __x86_64__
   ulong old_stack_limit;
 #endif
   struct gcpro *old_gcpro;
@@ -298,16 +318,14 @@ extern struct session_context *session_context;
 #define muderr  (session_context->_muderr)
 
 extern ulong xcount;			/* Loop detection */
-extern uword minlevel;			/* Minimum security level */
+extern uint16_t minlevel;               /* Minimum security level */
 
-#if defined i386 || defined __x86_64__
 extern ulong hard_mudlle_stack_limit, mudlle_stack_limit;
-#endif
 
 struct session_info {
-  uword minlevel;
+  uint16_t minlevel;
   /* See session_context.seclevel */
-  uword maxseclevel;
+  seclev_t maxseclevel;
   muser_t muser;
   struct oport *mout, *merr;
 };
@@ -317,7 +335,7 @@ extern const struct session_info cold_session;
 void session_start(struct session_context *newp,
                    const struct session_info *info);
 void cold_session_start(struct session_context *context,
-                        uword seclevel);
+                        seclev_t maxseclevel);
 void session_end(void);
 
 void unlimited_execution(void);
@@ -333,6 +351,8 @@ void reset_context(void);
 
 void context_init(void);
 /* Effects: Initialises module */
+
+void set_mudlle_stack_limit(unsigned long reserved);
 
 extern struct list *mudcalltrace;
 

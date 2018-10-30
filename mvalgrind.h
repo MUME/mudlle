@@ -1,7 +1,7 @@
 #ifndef MVALGRIND_H
 #define MVALGRIND_H
 
-#include "mudlle.h"
+#include "mudlle-config.h"
 
 #ifdef HAVE_VALGRIND_MEMCHECK_H
   #include <valgrind/memcheck.h>

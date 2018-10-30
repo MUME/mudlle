@@ -1,5 +1,4 @@
 #include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 
 #include "alloc.h"
@@ -25,24 +24,33 @@ int main(int argc, char **argv)
   PR(object_flags,         offsetof(struct obj, flags));
 
   PR(pair_size,            sizeof (struct list));
+  PR(pair_car_offset,      offsetof(struct list, car));
+  PR(pair_cdr_offset,      offsetof(struct list, cdr));
+
   PR(variable_size,        sizeof (struct variable));
 
-  PR(mcode_seclevel,       offsetinobj(struct mcode, code.seclevel));
-  PR(function_offset,      offsetinobj(struct mcode, mcode));
+  PR(closure_code_offset,  offsetof(struct closure, code));
 
-  PR(primitive_op,         offsetinobj(struct primitive, op));
-  PR(primitive_call_count, offsetinobj(struct primitive, call_count));
+  PR(mcode_code_offset,    offsetof(struct mcode, mcode));
 
-  PR(primop_op,            offsetof(struct primitive_ext, op));
-  PR(primop_nargs,         offsetof(struct primitive_ext, nargs));
-  PR(primop_seclevel,      offsetof(struct primitive_ext, seclevel));
+  PR(primitive_op,         offsetof(struct primitive, op));
+
+  PR(primop_op,            offsetof(struct prim_op, op));
+  PR(primop_nargs,         offsetof(struct prim_op, nargs));
+  PR(primop_seclevel,      offsetof(struct prim_op, seclevel));
 
 #ifdef USE_CCONTEXT
   PR(cc_frame_start,       offsetof(struct ccontext, frame_start));
   PR(cc_frame_end_sp,      offsetof(struct ccontext, frame_end_sp));
   PR(cc_frame_end_bp,      offsetof(struct ccontext, frame_end_bp));
-  PR(cc_callee,            offsetof(struct ccontext, callee));
-  PR(cc_caller,            offsetof(struct ccontext, caller));
+#define __PR_CALLER(n, reg)                                     \
+  PR(cc_caller_ ## reg, offsetof(struct ccontext, caller.reg))
+  FOR_CALLER_SAVE(__PR_CALLER, ;);
+#undef __PR_CALLER
+#define __PR_CALLEE(n, reg)                                     \
+  PR(cc_callee_ ## reg, offsetof(struct ccontext, callee.reg))
+  FOR_CALLEE_SAVE(__PR_CALLEE, ;);
+#undef __PR_CALLEE
   PR(cc_SIZE,              sizeof (struct ccontext));
 #endif
 

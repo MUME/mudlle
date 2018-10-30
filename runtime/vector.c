@@ -19,22 +19,43 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include "runtime.h"
+#include "check-types.h"
+#include "prims.h"
 #include "vector.h"
 
 struct vector *empty_vector;
 
+static enum runtime_error ct_vector_index(long idx, const char **errmsg,
+                                          struct vector *vec,
+                                          long *dst)
+{
+  if (idx < 0)
+    idx += vector_len(vec);
+  if (idx < 0 || idx >= vector_len(vec))
+    {
+      *errmsg = "vector index out of range";
+      return error_bad_index;
+    }
+  *dst = idx;
+  return error_none;
+}
+
+#define __CT_VEC_IDX_E(v, msg, dst_vec)                                 \
+  ct_vector_index(v, msg, ARGN2 dst_vec, &(ARGN1 dst_vec))
+#define CT_VEC_IDX(dst, vec) CT_INT_P((dst, vec), __CT_VEC_IDX_E)
+
 TYPEDOP(vectorp, "vector?", "`x -> `b. TRUE if `x is a vector", 1, (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
-  return makebool(TYPE(v, type_vector));
+  return makebool(TYPE(v, vector));
 }
 
 TYPEDOP(make_vector, 0, "`n -> `v. Create an all-null vector of length `n,"
         " where 0 <= `n <= `MAX_VECTOR_SIZE.", 1, (value msize),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
-  long size = GETRANGE(msize, 0, MAX_VECTOR_SIZE);
+  long size;
+  CHECK_TYPES(msize, CT_RANGE(size, 0, MAX_VECTOR_SIZE));
   return alloc_vector(size);
 }
 
@@ -42,7 +63,7 @@ TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector",
         1, (struct vector *vec),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "v.n")
 {
-  TYPEIS(vec, type_vector);
+  CHECK_TYPES(vec, vector);
   return makeint(vector_len(vec));
 }
 
@@ -51,15 +72,15 @@ TYPEDOP(vector_fill, "vector_fill!",
 	2, (struct vector *vec, value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vx.1")
 {
-  TYPEIS(vec, type_vector);
-
+  CHECK_TYPES(vec, vector,
+              x,   any);
   ulong len = vector_len(vec);
   /* allow readonly for empty vector */
   if (len == 0)
     return vec;
 
   if (obj_readonlyp(&vec->o))
-    runtime_error(error_value_read_only);
+    RUNTIME_ERROR(error_value_read_only, NULL);
 
   while (len-- > 0)
     vec->data[len] = x;
@@ -69,43 +90,28 @@ TYPEDOP(vector_fill, "vector_fill!",
 
 EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v.\n"
             "Negative `n are counted from the end of `v.",
-	    2, (struct vector *vec, value c),
+	    2, (struct vector *vec, value c), (vec, c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
 {
-  TYPEIS(vec, type_vector);
-  if (!integerp(c))
-    primitive_runtime_error(error_bad_type, &op_vector_ref, 2, vec, c);
-
-  long idx = intval(c);
-  if (idx < 0)
-    idx += vector_len(vec);
-  if (idx < 0 || idx >= vector_len(vec))
-    primitive_runtime_error(error_bad_index, &op_vector_ref, 2, vec, c);
+  long idx;
+  CHECK_TYPES(vec, vector,
+              c,   CT_VEC_IDX(idx, vec));
   return vec->data[idx];
 }
 
 EXT_TYPEDOP(vector_set, "vector_set!",
             "`v `n `x -> `x. Set the `n'th element of `v to `x.\n"
             "Negative `n are counted from the end of `v.\n",
-	    3, (struct vector *vec, value i, value c),
+	    3, (struct vector *vec, value i, value c), (vec, i, c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.3")
 {
-  TYPEIS(vec, type_vector);
+  long idx;
+  CHECK_TYPES(vec, vector,
+              i,   CT_VEC_IDX(idx, vec),
+              c,   any);
   if (obj_readonlyp(&vec->o))
-    primitive_runtime_error(error_value_read_only, &op_vector_set, 3,
-                            vec, i, c);
-  if (!integerp(i))
-    primitive_runtime_error(error_bad_type, &op_vector_set, 3,
-                            vec, i, c);
-
-  long idx = intval(i);
-  if (idx < 0)
-    idx += vector_len(vec);
-  if (idx < 0 || idx >= vector_len(vec))
-    primitive_runtime_error(error_bad_index, &op_vector_set, 3,
-                            vec, i, c);
+    RUNTIME_ERROR(error_value_read_only, NULL);
   vec->data[idx] = c;
-
   return c;
 }
 
@@ -114,18 +120,12 @@ TYPEDOP(vswap, "vswap!",
         3, (struct vector *v, value n0, value n1),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnn.v")
 {
-  TYPEIS(v, type_vector);
-  long a = GETINT(n0), b = GETINT(n1);
+  long a, b;
+  CHECK_TYPES(v, vector,
+              n0, CT_VEC_IDX(a, v),
+              n1, CT_VEC_IDX(b, v));
   if (obj_readonlyp(&v->o))
-    runtime_error(error_value_read_only);
-
-  long vlen = vector_len(v);
-  if (a < 0)
-    a += vlen;
-  if (b < 0)
-    b += vlen;
-  if (a < 0 || a >= vlen || b < 0 || b >= vlen)
-    runtime_error(error_bad_index);
+    RUNTIME_ERROR(error_value_read_only, NULL);
   value e = v->data[a];
   v->data[a] = v->data[b];
   v->data[b] = e;
@@ -135,15 +135,15 @@ TYPEDOP(vswap, "vswap!",
 static const typing vector_tset = { "x*.v", NULL };
 
 FULLOP(vector, 0, "`x0 `x1 ... -> `v. Returns a vector of the arguments",
-       NVARARGS, (struct vector *args, ulong nargs), 0, OP_LEAF | OP_NOESCAPE,
-       vector_tset, static)
+       NVARARGS, (struct vector *args, ulong nargs), 0, 0,
+       OP_LEAF | OP_NOESCAPE, vector_tset, static)
 {
   return args;
 }
 
 FULLOP(sequence, 0,
        "`x0 `x1 ... -> `v. Returns a read-only vector of the arguments",
-       NVARARGS, (struct vector *args, ulong nargs), 0,
+       NVARARGS, (struct vector *args, ulong nargs), 0, 0,
        OP_LEAF | OP_NOESCAPE | OP_CONST,
        vector_tset, static)
 {

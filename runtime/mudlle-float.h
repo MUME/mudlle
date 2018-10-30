@@ -44,4 +44,15 @@ static inline value makefloat(double d)
   return (value)alloc_mudlle_float(d);
 }
 
+#define DEF_FLOAT(var) system_define(#var, makefloat(var))
+
+#ifdef USE_GMP
+#define FLOAT_TYPESET (TSET(integer) | TSET(bigint) | TSET(float))
+#else
+#define FLOAT_TYPESET (TSET(integer) | TSET(float))
+#endif
+
+#define __CT_FLOAT_E(var, msg, dst) get_floatval(&(dst), var)
+#define CT_FLOAT(dst) F(FLOAT_TYPESET, __CT_FLOAT_E, dst)
+
 #endif /* !RUNTIME_MUDLLE_FLOAT_H */

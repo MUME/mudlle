@@ -19,19 +19,22 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "../mudlle-config.h"
+
 #include <stdlib.h>
 #include <limits.h>
 #include <math.h>
 #include <string.h>
 
 #include "bigint.h"
+#include "check-types.h"
 #include "mudlle-float.h"
-#include "runtime.h"
+#include "prims.h"
 
 TYPEDOP(isbigint, "bigint?", "`x -> `b. True if `x is a bigint", 1, (value x),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
-  return makebool(TYPE(x, type_bigint));
+  return makebool(TYPE(x, bigint));
 }
 
 #ifdef USE_GMP
@@ -100,8 +103,8 @@ static struct bigint *get_bigint(value v)
 
       free_mpz_temps();
     }
-  else
-    TYPEIS(v, type_bigint);
+  else if (!TYPE(v, bigint))
+    bad_typeset_error(v, TSET(integer) | TSET(bigint));
   check_bigint(v);
   return v;
 }
@@ -165,8 +168,6 @@ TYPEDOP(bitoa_base, 0, "`bi `n -> `s. Return a string representation for `bi,"
 
 static value atobi(struct string *s, int base)
 {
-  TYPEIS(s, type_string);
-
   value result;
   mpz_t mpz;
   if (mpz_init_set_str(mpz, s->str, base))
@@ -182,6 +183,7 @@ TYPEDOP(atobi, 0, "`s -> `bi. Return the number in `s as a bigint or null"
         " on error.",
         1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_CONST, "s.[bu]")
 {
+  CHECK_TYPES(s, string);
   return atobi(s, 0);
 }
 
@@ -190,7 +192,9 @@ TYPEDOP(atobi_base, 0, "`s `n -> `bi. Return the number in `s encoded in"
         2, (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE | OP_CONST,
         "sn.[bu]")
 {
-  int base = GETRANGE(mbase, 2, 32);
+  int base;
+  CHECK_TYPES(s,     string,
+              mbase, CT_RANGE(base, 2, 32));
   return atobi(s, base);
 }
 
@@ -199,8 +203,8 @@ TYPEDOP(bitoi, 0, "`bi -> `i. Return `bi as an integer (error if overflow)",
 {
   m = get_bigint(m);
 
-  if (mpz_cmp_si(m->mpz, MAX_TAGGED_INT) > 0 ||
-      mpz_cmp_si(m->mpz, MIN_TAGGED_INT) < 0)
+  if (mpz_cmp_si(m->mpz, MAX_TAGGED_INT) > 0
+      || mpz_cmp_si(m->mpz, MIN_TAGGED_INT) < 0)
     runtime_error(error_bad_value);
 
   return makeint(mpz_get_si(m->mpz));
@@ -226,7 +230,7 @@ TYPEDOP(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
         "and > 0 if `bi1 > `bi2", 2, (struct bigint *m1, struct bigint *m2),
         OP_LEAF | OP_NOESCAPE | OP_CONST, "BB.n")
 {
-  GCPRO2(m1, m2);
+  GCPRO(m1, m2);
   m1 = get_bigint(m1);
   m2 = get_bigint(m2);
   UNGCPRO();
@@ -324,7 +328,7 @@ TYPEDOP(bi ## name, sname,                                      \
         2, (struct bigint *bi1, struct bigint *bi2),            \
         OP_LEAF | OP_NOESCAPE | OP_CONST, "BB.b")               \
 {                                                               \
-  GCPRO2(bi1, bi2);                                             \
+  GCPRO(bi1, bi2);                                              \
   bi1 = get_bigint(bi1);                                        \
   bi2 = get_bigint(bi2);                                        \
   UNGCPRO();                                                    \
@@ -427,14 +431,15 @@ BIBINOP(tdiv_r, "bimod", %, true)
 BIBINOP(and,    "biand", &, false)
 BIBINOP(ior,    "bior",  |, false)
 
-value make_int_or_bigint(long l)
+value make_unsigned_int_or_bigint(unsigned long long u)
 {
-  if (l >= MIN_TAGGED_INT && l <= MAX_TAGGED_INT)
-    return makeint(l);
+  if (u <= MAX_TAGGED_INT)
+    return makeint((long)u);
 
 #ifdef USE_GMP
   mpz_t r;
-  mpz_init_set_si(r, l);
+  mpz_init(r);
+  mpz_import(r, 1, 1, sizeof u, 0, 0, &u);
   struct bigint *bi = alloc_bigint(r);
   free_mpz_temps();
   return bi;
@@ -443,14 +448,19 @@ value make_int_or_bigint(long l)
 #endif
 }
 
-value make_unsigned_int_or_bigint(unsigned long u)
+value make_signed_int_or_bigint(long long s)
 {
-  if (u <= MAX_TAGGED_INT)
-    return makeint(u);
+  if (s >= MIN_TAGGED_INT && s <= MAX_TAGGED_INT)
+    return makeint((long)s);
 
 #ifdef USE_GMP
+  /* strange expession to handle LLONG_MIN */
+  unsigned long long u = s < 0 ? -(s + 1) + 1ULL : s;
   mpz_t r;
-  mpz_init_set_ui(r, u);
+  mpz_init(r);
+  mpz_import(r, 1, 1, sizeof u, 0, 0, &u);
+  if (s < 0)
+    mpz_neg(r, r);
   struct bigint *bi = alloc_bigint(r);
   free_mpz_temps();
   return bi;

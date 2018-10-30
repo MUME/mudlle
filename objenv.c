@@ -32,12 +32,11 @@ struct env *alloc_env(ulong size)
 {
   struct env *newp = (struct env *)allocate_record(
     type_internal, grecord_fields(*newp));
-  GCPRO1(newp);
+  GCPRO(newp);
   struct vector *v = alloc_vector(size);
-  newp->values = v;
   UNGCPRO();
+  newp->values = v;
   newp->used = makeint(0);
-  newp->size = makeint(size);
 
   return newp;
 }
@@ -47,22 +46,20 @@ void env_reserve(struct env *env, ulong n)
 */
 {
   ulong used = intval(env->used);
-  ulong size = intval(env->size);
+  ulong size = vector_len(env->values);
 
   if (used + n > size)
     {
       ulong newsize = 2 * size + n;
-      struct vector *newp;
-      GCPRO1(env);
-      newp = alloc_vector(newsize);
-      memcpy(newp->data, env->values->data, size * sizeof(value));
-      env->values = newp;
-      env->size = makeint(newsize);
+      GCPRO(env);
+      struct vector *newp = alloc_vector(newsize);
       UNGCPRO();
+      memcpy(newp->data, env->values->data, size * sizeof (value));
+      env->values = newp;
     }
 }
 
-ulong env_add_entry(struct env *env, value v)
+ulong env_grow_and_add_entry(struct env *env, value v)
 /* Effects: Adds a new value to env, initialised to v.
    Returns: The index of the new value.
    Modifies: env.
@@ -71,11 +68,11 @@ ulong env_add_entry(struct env *env, value v)
   ulong used = intval(env->used);
 
   GCCHECK(v); GCCHECK(env);
-  GCPRO2(v, env);
+  GCPRO(v, env);
   env_reserve(env, 1);
   UNGCPRO();
   env->values->data[used] = v;
-  env->used = (value)((long)env->used + 2);
+  env->used = mudlle_iadd(env->used, 1);
 
   return used;
 }
@@ -84,7 +81,7 @@ ulong env_add_entry(struct env *env, value v)
 void print_env(struct oport *f, struct env *env)
 {
   ulong used = intval(env->used), i;
-  GCPRO1(env);
+  GCPRO(env);
   for (i = 0; i < used; i++)
     {
       pprintf(f, "%lu: ", i);

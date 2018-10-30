@@ -28,6 +28,7 @@
 #include "compile.h"
 #include "error.h"
 #include "global.h"
+#include "lexer.h"
 #include "mvalues.h"
 #include "table.h"
 #include "tree.h"
@@ -36,6 +37,16 @@
 #define GEP GLOBAL_ENV_PREFIX
 
 static struct alloc_block *build_heap;
+
+#define PUSH_BUILD_HEAP(heap)                                   \
+  (void)0;                                                      \
+  struct alloc_block *const old_build_heap = build_heap;        \
+  struct alloc_block *const my_build_heap  = (heap);            \
+  build_heap = my_build_heap
+
+#define POP_BUILD_HEAP()                        \
+  assert(build_heap == my_build_heap);          \
+  build_heap = old_build_heap
 
 static struct component *build_exec(struct component *f, int n, ...);
 static struct component *build_recall(const char *var);
@@ -52,11 +63,17 @@ const char *const builtin_op_names[] = {
 };
 CASSERT_VLEN(builtin_op_names, very_last_builtin);
 
+static bool is_global_var(const char *name)
+{
+  return strncmp(name, GEP, strlen(GEP)) == 0;
+}
+
 struct mfile *new_file(struct alloc_block *heap, enum file_class vclass,
                        const char *name,
                        struct vlist *requires, struct vlist *defines,
                        struct vlist *reads, struct vlist *writes,
-                       struct vlist *statics, struct block *body, int lineno)
+                       struct vlist *statics, struct block *body,
+                       const struct loc *loc)
 {
   struct mfile *newp = allocate(heap, sizeof *newp);
   *newp = (struct mfile){
@@ -68,66 +85,41 @@ struct mfile *new_file(struct alloc_block *heap, enum file_class vclass,
     .writes   = writes,
     .statics  = statics,
     .body     = body,
-    .lineno   = lineno
+    .loc      = *loc,
   };
 
   return newp;
 }
 
-struct function *new_function(struct alloc_block *heap, unsigned typeset,
-                              struct str_and_len help, struct vlist *args,
-                              struct component *avalue, int lineno,
-                              const char *filename, const char *nicename)
+struct function *new_fn(struct alloc_block *heap, struct component *avalue,
+                        const struct loc *loc, const char *filename,
+                        const char *nicename)
 {
   struct function *newp = allocate(heap, sizeof *newp);
-
-  newp->typeset = typeset;
-  newp->help = help;
-  newp->args = args;
-  newp->varargs = false;
-  newp->value = avalue;
-  newp->lineno = lineno;
-  newp->filename = filename;
-  newp->nicename = nicename;
-  newp->varname = NULL;
-
-  return newp;
-}
-
-struct function *new_vfunction(struct alloc_block *heap, unsigned typeset,
-                               struct str_and_len help, const char *arg,
-                               struct component *avalue,
-                               int lineno, const char *filename,
-                               const char *nicename)
-{
-  struct function *newp = allocate(heap, sizeof *newp);
-
-  newp->typeset = typeset;
-  newp->help = help;
-  /* using type_vector implies a useless type check */
-  newp->args = new_vlist(heap, arg, TYPESET_ANY, lineno, NULL);
-  newp->varargs = true;
-  newp->value = avalue;
-  newp->lineno = lineno;
-  newp->filename = filename;
-  newp->nicename = nicename;
-  newp->varname = NULL;
-
+  *newp = (struct function){
+    .typeset  = TYPESET_ANY,
+    .value    = avalue,
+    .filename = filename,
+    .nicename = nicename,
+    .loc      = *loc
+  };
   return newp;
 }
 
 struct block *new_codeblock(struct alloc_block *heap, struct vlist *locals,
                             struct clist *sequence, const char *filename,
-                            const char *nicename, int lineno)
+                            const char *nicename,
+                            const struct loc *loc)
 {
   struct block *newp = allocate(heap, sizeof *newp);
-
-  newp->locals = locals;
-  newp->sequence = sequence;
-  newp->filename = filename;
-  newp->nicename = nicename;
-  newp->lineno = lineno;
-  newp->statics = false;
+  *newp = (struct block){
+    .locals   = locals,
+    .sequence = sequence,
+    .filename = filename,
+    .nicename = nicename,
+    .loc      = *loc,
+    .statics  = false
+  };
 
   return newp;
 }
@@ -138,10 +130,10 @@ struct clist *new_clist(struct alloc_block *heap, struct component *c,
   assert(c != NULL);
 
   struct clist *newp = allocate(heap, sizeof *newp);
-
-  newp->next = next;
-  newp->c = c;
-
+  *newp = (struct clist){
+    .next = next,
+    .c    = c
+  };
   return newp;
 }
 
@@ -149,10 +141,10 @@ struct cstlist *new_cstlist(struct alloc_block *heap, struct constant *cst,
                             struct cstlist *next)
 {
   struct cstlist *newp = allocate(heap, sizeof *newp);
-
-  newp->next = next;
-  newp->cst = cst;
-
+  *newp = (struct cstlist){
+    .next = next,
+    .cst  = cst
+  };
   return newp;
 }
 
@@ -168,16 +160,42 @@ bool cstlist_has_len(struct cstlist *list, ulong l)
 }
 
 struct vlist *new_vlist(struct alloc_block *heap, const char *var,
-                        unsigned typeset, int lineno, struct vlist *next)
+                        unsigned typeset, const struct loc *loc,
+                        struct vlist *next)
 {
   struct vlist *newp = allocate(heap, sizeof *newp);
+  *newp = (struct vlist){
+    .next        = next,
+    .var         = var,
+    .typeset     = typeset,
+    .was_read    = false,
+    .was_written = false,
+    .loc         = *loc
+  };
+  return newp;
+}
 
-  newp->next = next;
-  newp->var = var;
-  newp->typeset = typeset;
-  newp->was_read = newp->was_written = false;
-  newp->lineno = lineno;
+struct vlist *vlist_find(struct vlist *l, const char *s)
+{
+  for (; l; l = l->next)
+    if (strcasecmp(l->var, s) == 0)
+      return l;
+  return NULL;
+}
 
+unsigned vlist_length(struct vlist *l)
+{
+  unsigned n = 0;
+  for (; l; l = l->next)
+    ++n;
+  return n;
+}
+
+static struct constant *alloc_const(struct alloc_block *heap,
+                                    enum constant_class vclass)
+{
+  struct constant *newp = allocate(heap, sizeof *newp);
+  *newp = (struct constant){ .vclass = vclass };
   return newp;
 }
 
@@ -189,133 +207,164 @@ struct cstpair *new_cstpair(struct alloc_block *heap, struct constant *cst1,
   return newp;
 }
 
-struct constant *new_int_constant(struct alloc_block *heap, long l)
+struct constant *new_expr_constant(struct alloc_block *heap,
+                                   struct component *e)
 {
-  return new_constant(heap, cst_int, l);
+  struct constant *newp = alloc_const(heap, cst_expression);
+  newp->u.expression = e;
+  return newp;
 }
 
-struct constant *new_constant(struct alloc_block *heap,
-                              enum constant_class vclass, ...)
+struct constant *new_int_constant(struct alloc_block *heap, long l)
 {
-  va_list args;
-  struct constant *newp = allocate(heap, sizeof *newp);
-
-  newp->vclass = vclass;
-  va_start(args, vclass);
-  switch (vclass)
-    {
-    case cst_int:
-      newp->u.integer = va_arg(args, long);
-      break;
-    case cst_string:
-      newp->u.string = va_arg(args, struct str_and_len);
-      break;
-    case cst_list:
-      {
-        newp->u.constants = va_arg(args, struct cstlist *);
-        struct cstlist *clhead = newp->u.constants;
-        struct cstlist **clp = &newp->u.constants;
-        while (*clp && ((*clp)->cst == NULL
-                        || (*clp)->cst->vclass != cst_expression))
-          clp = &(*clp)->next;
-        struct cstlist *cltail = *clp;
-        if (cltail == NULL)
-          break;
-
-        if (clp == &newp->u.constants)
-          {
-            /* the first expression is the list tail */
-            newp = clhead->cst;
-            cltail = cltail->next;
-          }
-        else if (clp == &newp->u.constants->next)
-          {
-            /* the first expression is the last element before the tail */
-            if (newp->u.constants->cst)
-              newp = newp->u.constants->cst;
-            else
-              newp->u.constants = NULL;
-          }
-        else
-          {
-            /* the first expression is here, so truncate the tail */
-            *clp = NULL;
-          }
-
-        build_heap = heap;
-
-        struct component *l = build_constant(newp);
-        for (; cltail; cltail = cltail->next)
-          {
-            struct component *c = build_constant(cltail->cst);
-            l = build_exec(build_recall(GEP "pcons"), 2, c, l);
-          }
-        newp = allocate(heap, sizeof *newp);
-        newp->vclass = cst_expression;
-        newp->u.expression = l;
-        break;
-      }
-    case cst_array: case cst_table: case cst_ctable:
-      {
-        newp->u.constants = va_arg(args, struct cstlist *);
-        bool dynamic = false;
-        for (struct cstlist *cl = newp->u.constants; cl; cl = cl->next)
-          if (cl->cst->vclass == cst_expression)
-            {
-              dynamic = true;
-              break;
-            }
-        if (!dynamic)
-          break;
-
-        build_heap = heap;
-
-        struct clist *cargs = NULL;
-        for (struct cstlist *cl = newp->u.constants; cl; cl = cl->next)
-          cargs = new_clist(heap, build_constant(cl->cst), cargs);
-        cargs = new_clist(heap, build_recall(GEP "sequence"), cargs);
-        struct component *c = new_component(heap, 0, c_execute, cargs);
-        if (vclass != cst_array)
-          {
-            const char *builder = (vclass == cst_table
-                                   ? GEP "vector_to_ptable"
-                                   : GEP "vector_to_pctable");
-            c = build_exec(build_recall(builder), 1, c);
-          }
-        newp->vclass = cst_expression;
-        newp->u.expression = c;
-        break;
-      }
-    case cst_float:
-      newp->u.mudlle_float = va_arg(args, double);
-      break;
-    case cst_bigint:
-      newp->u.bigint = va_arg(args, struct bigint_const *);
-      break;
-    case cst_symbol:
-      {
-        newp->u.constpair = va_arg(args, struct cstpair *);
-        if (newp->u.constpair->cst1->vclass != cst_expression
-            && newp->u.constpair->cst2->vclass != cst_expression)
-          break;
-
-        build_heap = heap;
-
-        struct component *c = build_exec(
-          build_recall(GEP "make_psymbol"), 2,
-          build_constant(newp->u.constpair->cst1),
-          build_constant(newp->u.constpair->cst2));
-        newp->vclass = cst_expression;
-        newp->u.expression = c;
-        break;
-      }
-    case cst_expression:
-      newp->u.expression = va_arg(args, struct component *);
-      break;
-    default: abort();
-    }
-  va_end(args);
+  struct constant *newp = alloc_const(heap, cst_int);
+  newp->u.integer = l;
   return newp;
+}
+
+struct constant *new_string_constant(struct alloc_block *heap,
+                                     const struct str_and_len *str)
+{
+  struct constant *newp = alloc_const(heap, cst_string);
+  newp->u.string = *str;
+  return newp;
+}
+
+struct constant *new_symbol_constant(struct alloc_block *heap,
+                                     struct cstpair *pair)
+{
+  if (pair->cst1->vclass == cst_expression
+      || pair->cst2->vclass == cst_expression)
+    {
+      PUSH_BUILD_HEAP(heap);
+      struct component *c = build_exec(
+        build_recall(GEP "make_psymbol"), 2,
+        build_constant(pair->cst1),
+        build_constant(pair->cst2));
+      POP_BUILD_HEAP();
+      return new_expr_constant(heap, c);
+    }
+
+  assert(pair->cst1->vclass == cst_string);
+
+  struct constant *newp = alloc_const(heap, cst_symbol);
+  newp->u.constpair = pair;
+  return newp;
+}
+
+struct constant *new_float_constant(struct alloc_block *heap, double d)
+{
+  struct constant *newp = alloc_const(heap, cst_float);
+  newp->u.mudlle_float = d;
+  return newp;
+}
+
+struct constant *new_bigint_constant(struct alloc_block *heap,
+                                     struct bigint_const *bi)
+{
+  struct constant *newp = alloc_const(heap, cst_bigint);
+  newp->u.bigint = bi;
+  return newp;
+}
+
+struct constant *new_list_constant(struct alloc_block *heap,
+                                   struct cstlist *lst)
+{
+  struct constant *newp = alloc_const(heap, cst_list);
+  newp->u.constants = lst;
+
+  struct cstlist *clhead = newp->u.constants;
+  struct cstlist **clp = &newp->u.constants;
+  while (*clp && ((*clp)->cst == NULL
+                  || (*clp)->cst->vclass != cst_expression))
+    clp = &(*clp)->next;
+  struct cstlist *cltail = *clp;
+  if (cltail == NULL)
+    return newp;
+
+  if (clp == &newp->u.constants)
+    {
+      /* the first expression is the list tail */
+      newp = clhead->cst;
+      assert(newp != NULL);
+      cltail = cltail->next;
+    }
+  else if (clp == &newp->u.constants->next)
+    {
+      /* the first expression is the last element before the tail */
+      if (newp->u.constants->cst)
+        newp = newp->u.constants->cst;
+      else
+        newp->u.constants = NULL;
+    }
+  else
+    {
+      /* the first expression is here, so truncate the tail */
+      *clp = NULL;
+    }
+
+  PUSH_BUILD_HEAP(heap);
+  struct component *l = build_constant(newp);
+  for (; cltail; cltail = cltail->next)
+    {
+      struct component *c = build_constant(cltail->cst);
+      l = build_exec(build_recall(GEP "pcons"), 2, c, l);
+    }
+  POP_BUILD_HEAP();
+
+  newp = alloc_const(heap, cst_expression);
+  newp->u.expression = l;
+  return newp;
+}
+
+static struct constant *new_sequence_constant(
+  struct alloc_block *heap, enum constant_class vclass, struct cstlist *lst)
+{
+  assert(vclass == cst_array || vclass == cst_table || vclass == cst_ctable);
+
+  for (struct cstlist *cl = lst; cl; cl = cl->next)
+    if (cl->cst->vclass == cst_expression)
+      goto dynamic;
+
+  {
+    struct constant *newp = alloc_const(heap, vclass);
+    newp->u.constants = lst;
+    return newp;
+  }
+
+ dynamic:
+  PUSH_BUILD_HEAP(heap);
+  struct clist *cargs = NULL;
+  for (struct cstlist *cl = lst; cl; cl = cl->next)
+    cargs = new_clist(heap, build_constant(cl->cst), cargs);
+  cargs = new_clist(heap, build_recall(GEP "sequence"), cargs);
+  struct component *c = new_execute_component(heap, NO_LOC, cargs);
+  if (vclass != cst_array)
+    {
+      const char *builder = (vclass == cst_table
+                             ? GEP "vector_to_ptable"
+                             : GEP "vector_to_pctable");
+      c = build_exec(build_recall(builder), 1, c);
+    }
+  POP_BUILD_HEAP();
+
+  struct constant *newp = alloc_const(heap, cst_expression);
+  newp->u.expression = c;
+  return newp;
+}
+
+struct constant *new_array_constant(struct alloc_block *heap,
+                                    struct cstlist *lst)
+{
+  return new_sequence_constant(heap, cst_array, lst);
+}
+
+struct constant *new_table_constant(struct alloc_block *heap,
+                                    enum constant_class vclass,
+                                    struct cstlist *lst)
+{
+  assert(vclass == cst_table || vclass == cst_ctable);
+  return new_sequence_constant(heap, vclass, lst);
 }
 
 bool cstlist_find_symbol_clash(struct cstlist *list, bool ctable,
@@ -382,79 +431,119 @@ bool cstlist_find_symbol_clash(struct cstlist *list, bool ctable,
   return result;
 }
 
-static struct clist *make_clist(struct alloc_block *heap, int count,
-                                va_list args)
+static struct component *alloc_component(struct alloc_block *heap,
+                                         const struct loc *loc,
+                                         enum component_class vclass)
 {
-  struct clist *first = NULL, **scan = &first;
-
-  while (count-- > 0)
-    {
-      *scan = new_clist(heap, va_arg(args, struct component *), NULL);
-      scan = &(*scan)->next;
-    }
-  return first;
+  struct component *newp = allocate(heap, sizeof *newp);
+  *newp = (struct component){
+    .vclass = vclass,
+    .loc    = *loc
+  };
+  return newp;
 }
 
-struct component *new_component(struct alloc_block *heap, int lineno,
-                        enum component_class vclass, ...)
+static struct component *new_assign_component(
+  struct alloc_block *heap, const struct loc *loc, const char *sym,
+  struct component *e)
 {
-  va_list args;
-  struct component *newp = allocate(heap, sizeof *newp);
+  assert(sym != NULL);
+  struct component *c = alloc_component(heap, loc, c_assign);
+  c->u.assign.symbol = sym;
+  c->u.assign.value = e;
+  return c;
+}
 
-  newp->vclass = vclass;
-  newp->lineno = lineno;
+struct component *new_recall_component(
+  struct alloc_block *heap, const struct loc *loc, const char *sym)
+{
+  assert(sym != NULL);
+  struct component *c = alloc_component(heap, loc, c_recall);
+  c->u.recall = sym;
+  return c;
+}
 
-  va_start(args, vclass);
-  switch (vclass)
-    {
-    case c_assign:
-      newp->u.assign.symbol = va_arg(args, const char *);
-      newp->u.assign.value = va_arg(args, struct component *);
-      break;
-    case c_vref:
-    case c_recall:
-      newp->u.recall = va_arg(args, const char *);
-      break;
-    case c_constant:
-      {
-        struct constant *cst = va_arg(args, struct constant *);
-        if (cst->vclass == cst_expression)
-          newp = cst->u.expression;
-        else
-          newp->u.cst = cst;
-        break;
-      }
-    case c_closure:
-      newp->u.closure = va_arg(args, struct function *);
-      break;
-    case c_block:
-      newp->u.blk = va_arg(args, struct block *);
-      break;
-    case c_execute:
-      newp->u.execute = va_arg(args, struct clist *);
-      break;
-    case c_builtin:
-      newp->u.builtin.fn = va_arg(args, int); /* enum builtin_op */
-      int nargs = va_arg(args, int);
-      newp->u.builtin.args = make_clist(heap, nargs, args);
-      break;
-    case c_labeled: case c_exit:
-      newp->u.labeled.name = va_arg(args, const char *);
-      newp->u.labeled.expression = va_arg(args, struct component *);
-      break;
-    default: abort();
-    }
-  va_end(args);
+static struct component *new_vref_component(
+  struct alloc_block *heap, const struct loc *loc, const char *sym)
+{
+  assert(sym != NULL);
+  struct component *c = alloc_component(heap, loc, c_vref);
+  c->u.recall = sym;
+  return c;
+}
+
+struct component *new_const_component(
+  struct alloc_block *heap, const struct loc *loc, struct constant *cst)
+{
+  if (cst->vclass == cst_expression)
+    return cst->u.expression;
+
+  struct component *c = alloc_component(heap, loc, c_constant);
+  c->u.cst = cst;
+  return c;
+}
+
+struct component *new_closure_component(
+  struct alloc_block *heap, const struct loc *loc, struct function *f)
+{
+  struct component *c = alloc_component(heap, loc, c_closure);
+  c->u.closure = f;
+  return c;
+}
+
+struct component *new_block_component(
+  struct alloc_block *heap, const struct loc *loc, struct block *blk)
+{
+  struct component *c = alloc_component(heap, loc, c_block);
+  c->u.blk = blk;
+  return c;
+}
+
+struct component *new_labeled_component(
+  struct alloc_block *heap, const struct loc *loc, const char *name,
+  struct component *comp)
+{
+  struct component *c = alloc_component(heap, loc, c_labeled);
+  c->u.labeled.name = name;
+  c->u.labeled.expression = comp;
+  return c;
+}
+
+struct component *new_exit_component(
+  struct alloc_block *heap, const struct loc *loc, const char *name,
+  struct component *comp)
+{
+  struct component *c = alloc_component(heap, loc, c_exit);
+  c->u.labeled.name = name;
+  c->u.labeled.expression = comp;
+  return c;
+}
+
+struct component *new_execute_component(
+  struct alloc_block *heap, const struct loc *loc, struct clist *clist)
+{
+  struct component *c = alloc_component(heap, loc, c_execute);
+  c->u.execute = clist;
+  return c;
+}
+
+struct component *new_unop_component(
+  struct alloc_block *heap, const struct loc *loc, enum builtin_op op,
+  struct component *e)
+{
+  struct component *newp = alloc_component(heap, loc, c_builtin);
+  newp->u.builtin.fn = op;
+  newp->u.builtin.args = new_clist(heap, e, NULL);
   return newp;
 }
 
 struct pattern *new_pattern_constant(struct alloc_block *heap,
-                                     struct constant *c, int lineno)
+                                     struct constant *c, const struct loc *loc)
 {
   struct pattern *ap = allocate(heap, sizeof *ap);
   *ap = (struct pattern){
     .vclass = pat_const,
-    .lineno = lineno,
+    .loc    = *loc,
     .u.constval = c
   };
   return ap;
@@ -462,15 +551,48 @@ struct pattern *new_pattern_constant(struct alloc_block *heap,
 
 struct pattern *new_pattern_symbol(struct alloc_block *heap,
                                    struct pattern *sym,
-                                   struct pattern *val, int lineno)
+                                   struct pattern *val, const struct loc *loc)
 {
   struct pattern *ap = allocate(heap, sizeof *ap);
   *ap = (struct pattern){
     .vclass = pat_symbol,
-    .lineno = lineno,
+    .loc    = *loc,
     .u.sym = {
       .name = sym,
       .val  = val
+    }
+  };
+  return ap;
+}
+
+struct pattern *new_pattern_or(struct alloc_block *heap,
+                               struct pattern *lhs,
+                               struct pattern *rhs,
+                               const struct loc *loc)
+{
+  struct pattern *ap = allocate(heap, sizeof *ap);
+  *ap = (struct pattern){
+    .vclass = pat_or,
+    .loc    = *loc,
+    .u.or = {
+      .lhs = lhs,
+      .rhs = rhs
+    }
+  };
+  return ap;
+}
+
+struct pattern *new_pattern_and_expr(struct alloc_block *heap,
+                                     struct pattern *p,
+                                     struct component *c)
+{
+  struct pattern *ap = allocate(heap, sizeof *ap);
+  *ap = (struct pattern){
+    .vclass = pat_and,
+    .loc    = c->loc,
+    .u.and = {
+      .pat  = p,
+      .cond = c
     }
   };
   return ap;
@@ -482,7 +604,7 @@ struct pattern *new_pattern_expression(struct alloc_block *heap,
   struct pattern *ap = allocate(heap, sizeof *ap);
   *ap = (struct pattern){
     .vclass = pat_expr,
-    .lineno = c->lineno,
+    .loc    = c->loc,
     .u.expr = c
   };
   return ap;
@@ -493,70 +615,101 @@ struct pattern *new_pattern_sink(struct alloc_block *heap)
   struct pattern *ap = allocate(heap, sizeof *ap);
   *ap = (struct pattern){
     .vclass = pat_sink,
-    .lineno = 0,
+    .loc    = *NO_LOC,
   };
   return ap;
 }
 
 struct pattern *new_pattern_variable(struct alloc_block *heap, const char *sym,
-                                     enum mudlle_type type, int lineno)
+                                     unsigned typeset, const struct loc *loc)
 {
   struct pattern *ap = allocate(heap, sizeof *ap);
   *ap = (struct pattern){
     .vclass = pat_variable,
-    .lineno = lineno,
+    .loc    = *loc,
     .u.var = {
-      .name = sym,
-      .type = type
+      .name    = sym,
+      .typeset = typeset
     }
   };
   return ap;
 }
 
-struct pattern *new_pattern_compound(struct alloc_block *heap,
-                                     enum pattern_class class,
-                                     struct pattern_list *list,
-                                     bool ellipsis,
-                                     int lineno)
+static bool patlist_is_const(struct pattern_list *list)
 {
-  assert(class == pat_list || class == pat_array);
-
-  if (ellipsis)
-    goto not_const;
-
   for (struct pattern_list *p = list; p != NULL; p = p->next)
     if (p->pat && p->pat->vclass != pat_const)
-      goto not_const;
+      return false;
+  return true;
+}
 
+static struct cstlist *patlist_to_cstlist(struct alloc_block *heap,
+                                          struct pattern_list *list)
+{
   struct cstlist *cl = NULL;
   for (struct pattern_list *p = list; p != NULL; p = p->next)
     cl = new_cstlist(heap, p->pat ? p->pat->u.constval : NULL, cl);
-  cl = reverse_cstlist(cl);
-  return new_pattern_constant(
-    heap,
-    new_constant(heap, class == pat_list ? cst_list : cst_array, cl),
-    lineno);
+  return reverse_cstlist(cl);
+}
+
+struct pattern *new_array_pattern(struct alloc_block *heap,
+                                  struct pattern_list *list,
+                                  bool ellipsis,
+                                  struct pattern_list *tail,
+                                  const struct loc *loc)
+{
+  if (tail != NULL)
+    assert(ellipsis);
+
+  if (ellipsis || !patlist_is_const(list))
+    goto not_const;
+
+  struct cstlist *cl = patlist_to_cstlist(heap, list);
+  return new_pattern_constant(heap, new_array_constant(heap, cl), loc);
 
  not_const: ;
   struct pattern *ap = allocate(heap, sizeof *ap);
   *ap = (struct pattern){
-    .vclass = class,
-    .lineno = lineno,
-    .u.l = {
-      .patlist = list,
+    .vclass = pat_array,
+    .loc    = *loc,
+    .u.ary = {
+      .patlist  = list,
+      .pattail  = tail,
       .ellipsis = ellipsis
     }
   };
   return ap;
 }
 
+struct pattern *new_list_pattern(struct alloc_block *heap,
+                                 struct pattern_list *list,
+                                 const struct loc *loc)
+{
+  if (!patlist_is_const(list))
+    goto not_const;
+
+  struct cstlist *cl = patlist_to_cstlist(heap, list);
+  return new_pattern_constant(heap, new_list_constant(heap, cl), loc);
+
+ not_const: ;
+  struct pattern *ap = allocate(heap, sizeof *ap);
+  *ap = (struct pattern){
+    .vclass = pat_list,
+    .loc    = *loc,
+    .u.lst  = list,
+  };
+  return ap;
+}
+
 struct pattern_list *new_pattern_list(struct alloc_block *heap,
-			     struct pattern *pat,
-			     struct pattern_list *tail)
+                                      struct pattern *pat,
+                                      struct pattern_list *tail)
 {
   struct pattern_list *apl = allocate(heap, sizeof *apl);
-  apl->next = tail;
-  apl->pat = pat;
+  *apl = (struct pattern_list){
+    .next = tail,
+    .pat  = pat
+  };
   return apl;
 }
 
@@ -565,22 +718,24 @@ struct match_node_list *new_match_list(struct alloc_block *heap,
                                        struct match_node_list *tail)
 {
   struct match_node_list *ml = allocate(heap, sizeof *ml);
-  ml->next = tail;
-  ml->match = node;
+  *ml = (struct match_node_list){
+    .next  = tail,
+    .match = node
+  };
   return ml;
 }
 
 struct match_node *new_match_node(struct alloc_block *heap,
-                                  struct pattern *pat, struct component *cond,
-                                  struct component *e, const char *filename,
-                                  int lineno)
+                                  struct pattern *pat, struct component *e,
+                                  const char *filename, const struct loc *loc)
 {
   struct match_node *nd = allocate(heap, sizeof *nd);
-  nd->pattern = pat;
-  nd->expression = e;
-  nd->condition = cond;
-  nd->filename = filename;
-  nd->lineno = lineno;
+  *nd = (struct match_node){
+    .pattern    = pat,
+    .expression = e,
+    .filename   = filename,
+    .loc        = *loc
+  };
   return nd;
 }
 
@@ -596,15 +751,17 @@ static value mudlle_vlist(struct vlist *vars)
 {
   value l = NULL;
   struct string *s = NULL;
+  struct vector *v = NULL;
 
-  GCPRO2(l, s);
+  GCPRO(l, s, v);
   for (vars = reverse_vlist(vars); vars; vars = vars->next)
     {
-      s = make_readonly(alloc_string(vars->var));
-      struct vector *v = alloc_vector(3);
-      v->data[0] = s;
-      v->data[1] = makeint(vars->typeset);
-      v->data[2] = makeint(vars->lineno);
+      s = scache_alloc_str(vars->var);
+      v = alloc_vector(3);
+      SET_VECTOR(v, 0, s);
+      SET_VECTOR(v, 1, makeint(vars->typeset));
+      SET_VECTOR(v, 2, alloc_list(makeint(vars->loc.line),
+                                  makeint(vars->loc.col)));
       l = alloc_list(v, l);
     }
   UNGCPRO();
@@ -614,15 +771,11 @@ static value mudlle_vlist(struct vlist *vars)
 static value mudlle_clist(struct clist *exprs)
 {
   value l = NULL;
-  value c;
-
-  exprs = reverse_clist(exprs);
-  GCPRO1(l);
-  while (exprs)
+  GCPRO(l);
+  for (exprs = reverse_clist(exprs); exprs; exprs = exprs->next)
     {
-      c = mudlle_parse_component(exprs->c);
+      value c = mudlle_parse_component(exprs->c);
       l = alloc_list(c, l);
-      exprs = exprs->next;
     }
   UNGCPRO();
   return l;
@@ -635,22 +788,22 @@ static value mudlle_parse_component(struct component *c)
 
   struct vector *mc = alloc_vector(msize[c->vclass] + 2);
   mc->data[0] = makeint(c->vclass);
-  mc->data[1] = makeint(c->lineno);
 
 #define SET(n, value) SET_VECTOR(mc, 2 + (n), (value))
 
-  GCPRO1(mc);
+  GCPRO(mc);
+  SET_VECTOR(mc, 1, alloc_list(makeint(c->loc.line), makeint(c->loc.col)));
 
   switch (c->vclass)
     {
     case c_assign:
-      SET(0, make_readonly(alloc_string(c->u.assign.symbol)));
+      SET(0, scache_alloc_str(c->u.assign.symbol));
       SET(1, mudlle_parse_component(c->u.assign.value));
       break;
 
     case c_vref:
     case c_recall:
-      SET(0, make_readonly(alloc_string(c->u.recall)));
+      SET(0, scache_alloc_str(c->u.recall));
       break;
 
     case c_constant:
@@ -661,14 +814,13 @@ static value mudlle_parse_component(struct component *c)
       struct function *f = c->u.closure;
       SET(0, makeint(f->typeset));
       SET(1, (f->help.len
-              ? make_readonly(alloc_string_length(f->help.str, f->help.len))
+              ? scache_alloc_str_len(f->help.str, f->help.len)
               : NULL));
       SET(2, mudlle_vlist(reverse_vlist(f->args)));
       SET(3, makeint(f->varargs));
       SET(4, mudlle_parse_component(f->value));
-      SET(5, makeint(f->lineno));
-      SET(6, make_filename(f->filename));
-      SET(7, make_filename(f->nicename));
+      SET(5, scache_alloc_str(f->filename));
+      SET(6, scache_alloc_str(f->nicename));
       break;
     }
 
@@ -688,7 +840,7 @@ static value mudlle_parse_component(struct component *c)
 
     case c_labeled: case c_exit:
       SET(0, (c->u.labeled.name
-              ? make_readonly(alloc_string(c->u.labeled.name))
+              ? scache_alloc_str(c->u.labeled.name)
               : NULL));
       SET(1, mudlle_parse_component(c->u.labeled.expression));
       break;
@@ -705,24 +857,29 @@ static value mudlle_parse_component(struct component *c)
 
 value mudlle_parse(struct alloc_block *heap, struct mfile *f)
 {
-  struct vector *file = alloc_vector(parser_module_fields);
-  GCPRO1(file);
+  init_string_cache();
 
-  struct component *cbody = new_component(heap, f->lineno, c_block, f->body);
+  struct vector *file = alloc_vector(parser_module_fields);
+  GCPRO(file);
+
+  struct component *cbody = new_block_component(heap, &f->loc, f->body);
 
   SET_VECTOR(file, m_class,    makeint(f->vclass));
   SET_VECTOR(file, m_name,     (f->name
-                                ? make_readonly(alloc_string(f->name))
+                                ? scache_alloc_str(f->name)
                                 : makebool(false)));
-  SET_VECTOR(file, m_requires,  mudlle_vlist(f->requires));
+  SET_VECTOR(file, m_requires, mudlle_vlist(f->requires));
   SET_VECTOR(file, m_defines,  mudlle_vlist(f->defines));
   SET_VECTOR(file, m_reads,    mudlle_vlist(f->reads));
   SET_VECTOR(file, m_writes,   mudlle_vlist(f->writes));
   SET_VECTOR(file, m_statics,  mudlle_vlist(f->statics));
   SET_VECTOR(file, m_body,     mudlle_parse_component(cbody));
-  SET_VECTOR(file, m_filename, make_readonly(alloc_string(f->body->filename)));
-  SET_VECTOR(file, m_nicename, make_readonly(alloc_string(f->body->nicename)));
+  SET_VECTOR(file, m_filename, scache_alloc_str(f->body->filename));
+  SET_VECTOR(file, m_nicename, scache_alloc_str(f->body->nicename));
+
   UNGCPRO();
+
+  free_string_cache();
 
   return file;
 }
@@ -946,13 +1103,19 @@ void print_mudlle_file(FILE *out, struct mfile *f)
     }
   {
     struct alloc_block *oops = new_block();
-
-    print_component(out, new_component(oops, f->lineno, c_block, f->body));
+    print_component(out, new_block_component(oops, &f->loc, f->body));
     free_block(oops);
   }
 }
 
 #endif
+
+static inline struct component *set_loc(
+  const struct loc *loc, struct component *c)
+{
+  c->loc = *loc;
+  return c;
+}
 
 static struct clist *build_clist(int n, ...)
 {
@@ -974,7 +1137,7 @@ static struct clist *build_clist(int n, ...)
 
 struct component *new_int_component(struct alloc_block *heap, long n)
 {
-  return new_component(heap, 0, c_constant, new_int_constant(heap, n));
+  return new_const_component(heap, NO_LOC, new_int_constant(heap, n));
 }
 
 static struct component *build_int_component(long n)
@@ -986,24 +1149,22 @@ static struct component *build_string_component(const char *s) UNUSED;
 
 static struct component *build_string_component(const char *s)
 {
-  struct str_and_len sl = {
-    .str = (char *)s,
-    .len = strlen(s)
-  };
-  return new_component(build_heap, 0, c_constant,
-		       new_constant(build_heap, cst_string, sl));
+  return new_const_component(
+    build_heap, NO_LOC,
+    new_string_constant(build_heap,
+                        &(const struct str_and_len){
+                          .str = (char *)s, .len = strlen(s) }));
 }
 
-static struct component *build_assign(int lineno, const char *var,
+static struct component *build_assign(const struct loc *loc, const char *var,
                                       struct component *val)
 {
-  assert(var != NULL);
-  return new_component(build_heap, lineno, c_assign, var, val);
+  return new_assign_component(build_heap, loc, var, val);
 }
 
 static struct component *build_recall(const char *var)
 {
-  return new_component(build_heap, 0, c_recall, var);
+  return new_recall_component(build_heap, NO_LOC, var);
 }
 
 static struct component *build_exec(struct component *f, int n, ...)
@@ -1016,54 +1177,82 @@ static struct component *build_exec(struct component *f, int n, ...)
     res = new_clist(build_heap, va_arg(args, struct component *), res);
   va_end(args);
 
-  return new_component(build_heap, 0, c_execute, reverse_clist(res));
+  return new_execute_component(build_heap, NO_LOC, reverse_clist(res));
 }
 
+struct mvar {
+  const char *name;
+  const struct loc *loc;
+};
+
+#define MVAR(n, l) &(const struct mvar){ .name = (n), .loc = (l) }
+
 /* args are name, typeset, line, name, typeset, line, ... */
-static struct vlist *build_vlist(int n, ...)
+static struct vlist *build_vlist(size_t n, ...)
 {
   va_list args;
-  struct vlist *res = NULL;
-
   va_start(args, n);
-  while (n--)
+  struct vlist *res = NULL;
+  for (size_t i = 0; i < n; ++i)
     {
-      const char *s = va_arg(args, const char *);
-      unsigned typeset = va_arg(args, unsigned);
-      int lineno = va_arg(args, int);
-      if (s == NULL)
+      const struct mvar *mvar = va_arg(args, const struct mvar *);
+      if (mvar->name == NULL)
         continue;
-      res = new_vlist(build_heap, s, typeset, lineno, res);
+      res = new_vlist(build_heap, mvar->name, TYPESET_ANY, mvar->loc, res);
     }
-
   va_end(args);
   return res;
 }
 
-struct component *new_binop_component(struct alloc_block *heap, int lineno,
+struct component *new_binop_component(struct alloc_block *heap,
+                                      const struct loc *loc,
                                       enum builtin_op op,
                                       struct component *e1,
                                       struct component *e2)
 {
   if (op == b_xor)
-    return new_xor_component(heap, lineno, e1, e2);
+    {
+      op = b_bitxor;
+      e1 = new_unop_component(heap, loc, b_not, e1);
+      e2 = new_unop_component(heap, loc, b_not, e2);
+    }
+
   assert(op >= 0 && op < last_builtin);
-  return new_component(heap, lineno, c_builtin, op, 2, e1, e2);
+
+  struct component *newp = alloc_component(heap, loc, c_builtin);
+  newp->u.builtin.fn = op;
+  newp->u.builtin.args = new_clist(heap, e1, new_clist(heap, e2, NULL));
+  return newp;
+}
+
+struct component *new_ternop_component(struct alloc_block *heap,
+                                       const struct loc *loc,
+                                       enum builtin_op op,
+                                       struct component *e1,
+                                       struct component *e2,
+                                       struct component *e3)
+{
+  struct component *newp = alloc_component(heap, loc, c_builtin);
+  newp->u.builtin.fn = op;
+  newp->u.builtin.args = new_clist(
+    heap, e1, new_clist(heap, e2, new_clist(heap, e3, NULL)));
+  return newp;
 }
 
 static struct component *build_unop(enum builtin_op op, struct component *e)
 {
-  return new_component(build_heap, 0, c_builtin, op, 1, e);
+  return new_unop_component(build_heap, NO_LOC, op, e);
 }
 
 static struct component *build_if(struct component *cond,
                                   struct component *ctrue,
                                   struct component *cfalse)
 {
-  return new_component(build_heap, 0, c_builtin,
-                       cfalse ? b_ifelse : b_if,
-                       cfalse ? 3 : 2,
-                       cond, ctrue, cfalse);
+  if (cfalse == NULL)
+    return new_binop_component(build_heap, NO_LOC, b_if, cond, ctrue);
+
+  return new_ternop_component(build_heap, NO_LOC, b_ifelse,
+                              cond, ctrue, cfalse);
 }
 
 static struct component *build_unless(struct component *cond,
@@ -1074,79 +1263,88 @@ static struct component *build_unless(struct component *cond,
 
 static struct component *build_exit(const char *name, struct component *c)
 {
-  return new_component(build_heap, 0, c_exit, name, c);
+  return new_exit_component(build_heap, NO_LOC, name, c);
 }
 
 static struct component *build_binop(enum builtin_op op, struct component *e1,
                                      struct component *e2)
 {
-  return new_binop_component(build_heap, 0, op, e1, e2);
+  return new_binop_component(build_heap, NO_LOC, op, e1, e2);
 }
 
 static struct component *build_codeblock(struct vlist *vl, struct clist *code)
 {
-  return new_component(build_heap, 0, c_block,
-		       new_codeblock(build_heap, vl, code, NULL, NULL, -1));
+  return new_block_component(
+    build_heap, NO_LOC,
+    new_codeblock(build_heap, vl, code, NULL, NULL, NO_LOC));
 }
 
 static struct component *build_constant(struct constant *cst)
 {
-  return new_component(build_heap, 0, c_constant, cst);
+  return new_const_component(build_heap, NO_LOC, cst);
 }
 
-static struct component *build_const_not_equal(struct constant *cst,
+static struct component *build_const_not_equal(const struct loc *loc,
+                                               struct constant *cst,
                                                struct component *e)
 {
-  switch (cst->vclass) {
-  case cst_int:
-  simple:
-    return build_binop(b_ne, e, build_constant(cst));
-  case cst_list:
-    if (cst->u.constants == NULL)
-      goto simple;
-    /* fallthrough */
-  default:
-    return build_unop(
-      b_not,
-      build_exec(build_recall(GEP "equal?"), 2, build_constant(cst), e));
-  }
+  switch (cst->vclass)
+    {
+    case cst_int:
+    simple:
+      return set_loc(loc, build_binop(b_ne, e, build_constant(cst)));
+    case cst_list:
+      if (cst->u.constants == NULL)
+        goto simple;
+      /* fallthrough */
+    default:
+      return set_loc(
+        loc,
+        build_unop(b_not,
+                   set_loc(loc,
+                           build_exec(build_recall(GEP "equal?"),
+                                      2, build_constant(cst), e))));
+    }
 }
 
-static struct component *build_typecheck(struct component *e,
+static struct component *build_typecheck(const struct loc *loc,
+                                         struct component *e,
                                          enum mudlle_type type)
 {
   const char *f;
 
-  switch (type) {
-  case type_integer:   f = GEP "integer?";   break;
-  case type_string:    f = GEP "string?";    break;
-  case type_vector:    f = GEP "vector?";    break;
-  case type_pair:      f = GEP "pair?";      break;
-  case type_symbol:    f = GEP "symbol?";    break;
-  case type_table:     f = GEP "table?";     break;
-  case type_object:    f = GEP "object?";    break;
-  case type_character: f = GEP "character?"; break;
-  case type_gone:      f = GEP "gone?";      break;
-  case type_float:     f = GEP "float?";     break;
-  case type_bigint:    f = GEP "bigint?";    break;
-  case type_null:
-    return build_binop(
-      b_eq, e,
-      build_constant(new_constant(build_heap, cst_list, NULL)));
-  case stype_none:
-    return component_false;
-  case stype_any:
-    return component_true;
-  default:
-    abort();
-  }
-  return build_exec(build_recall(f), 1, e);
+  switch (type)
+    {
+    case type_integer:   f = GEP "integer?";   break;
+    case type_string:    f = GEP "string?";    break;
+    case type_vector:    f = GEP "vector?";    break;
+    case type_pair:      f = GEP "pair?";      break;
+    case type_symbol:    f = GEP "symbol?";    break;
+    case type_table:     f = GEP "table?";     break;
+    case type_object:    f = GEP "object?";    break;
+    case type_character: f = GEP "character?"; break;
+    case type_gone:      f = GEP "gone?";      break;
+    case type_float:     f = GEP "float?";     break;
+    case type_bigint:    f = GEP "bigint?";    break;
+    case type_null:
+      return build_binop(
+        b_eq, e,
+        build_constant(constant_null));
+    case stype_none:
+      return component_false;
+    case stype_any:
+      return component_true;
+    default:
+      abort();
+    }
+  return set_loc(loc, build_exec(build_recall(f), 1, e));
 }
 
-static struct component *build_error(enum runtime_error error)
+static struct component *build_error(const struct loc *loc,
+                                     enum runtime_error error)
 {
-  return build_exec(build_recall(GEP "error"), 1,
-		    build_int_component(error));
+  return set_loc(loc, build_exec(build_recall(GEP "error"), 1,
+                                 build_int_component(error)));
 }
 
 /* true if 'c' is a recall of a single-assignment variable */
@@ -1156,27 +1354,26 @@ static bool is_safe_recall(struct component *c)
 }
 
 static struct component *make_local_var(struct vlist **locals, int level,
-                                        int lineno)
+                                        const struct loc *loc)
 {
   char buf[16];
   sprintf(buf, "$%d", level);
   const char *tmpname = heap_allocate_string(build_heap, buf);
-  *locals = new_vlist(build_heap, tmpname, TYPESET_ANY,
-                      lineno, *locals);
+  *locals = new_vlist(build_heap, tmpname, TYPESET_ANY, loc, *locals);
   return build_recall(tmpname);
 }
 
 static struct component *make_safe_copy(struct component *e,
                                         struct vlist **locals,
                                         struct component **aexpr,
-                                        int level, int lineno)
+                                        int level, const struct loc *loc)
 {
   if (is_safe_recall(e))
     return e;
 
-  struct component *recall = make_local_var(locals, level, lineno);
+  struct component *recall = make_local_var(locals, level, loc);
   assert(recall->vclass == c_recall);
-  *aexpr = build_assign(lineno, recall->u.recall, e);
+  *aexpr = build_assign(loc, recall->u.recall, e);
   return recall;
 }
 
@@ -1192,6 +1389,8 @@ static struct component *build_symbol_name_check(
     {
     case pat_sink:
       return NULL;
+    case pat_and:
+    case pat_or:
     case pat_variable:
       return build_match_block(pat, e, level, psymbols, err, err_data);
     case pat_expr:
@@ -1199,7 +1398,7 @@ static struct component *build_symbol_name_check(
         struct vlist *locals = NULL;
         struct component *lassign = NULL;
         struct component *nexp = make_safe_copy(pat->u.expr, &locals, &lassign,
-                                        level, pat->lineno);
+                                                level, &pat->loc);
         return build_codeblock(
           locals,
           build_clist(
@@ -1208,7 +1407,7 @@ static struct component *build_symbol_name_check(
             build_unless(
               build_binop(
                 b_sc_and,
-                build_typecheck(nexp, type_string),
+                build_typecheck(&pat->loc, nexp, type_string),
                 build_exec(build_recall(GEP "string_iequal?"), 2,
                            nexp, e)),
               err(err_data))));
@@ -1226,264 +1425,446 @@ static struct component *build_symbol_name_check(
     case pat_list:
     case pat_array:
     case pat_symbol:
-      compile_error("symbol names must be strings");
+      compile_error(&pat->loc, "symbol names must be strings");
       return NULL;
     }
   abort();
 }
 
+static int patlist_len(struct pattern_list *l)
+{
+  int n = 0;
+  for (; l != NULL; l = l->next)
+    ++n;
+  return n;
+}
+
+static struct clist *build_patarray_match(
+  struct clist *code, struct component *elocal, struct vlist **psymbols,
+  struct pattern_list *l, int idx, int level,
+  struct component *(*err)(void *data), void *err_data)
+{
+  for (; l != NULL; l = l->next)
+    {
+      --idx;
+      struct component *c = build_match_block(
+        l->pat, build_binop(b_ref, elocal, build_int_component(idx)),
+        level + 1, psymbols, err, err_data);
+      if (c != NULL)
+        code = new_clist(build_heap, c, code);
+    }
+  return code;
+}
+
+static struct component *build_match_array_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  /*
+   *  [
+   *    | tmp |
+   *    tmp = <expression>;
+   *    (vector?(tmp) &&
+   *     vector_length(tmp) == vector_length(<pattern>) &&
+   *     tmp[0] == <pattern>[0] &&
+   *          :
+   *     tmp[N] == <pattern>[N])
+   *  ]
+   */
+
+  struct component *eassign = NULL;
+  struct vlist *vlocals = NULL;
+  struct component *elocal = make_safe_copy(e, &vlocals, &eassign, level,
+                                            &pat->loc);
+
+  int vlen = patlist_len(pat->u.ary.patlist);
+  int tlen = patlist_len(pat->u.ary.pattail);
+
+  struct component *lc = NULL;
+  if (!pat->u.ary.ellipsis || (vlen + tlen) > 0)
+    lc = set_loc(
+      &pat->loc,
+      build_if(
+        build_binop(
+          pat->u.ary.ellipsis ? b_lt : b_ne,
+          build_exec(build_recall(GEP "vector_length"), 1, elocal),
+          build_int_component(vlen + tlen)),
+        err(err_data),
+        NULL));
+
+  struct component *tc = set_loc(
+    &pat->loc,
+    build_unless(
+      build_exec(build_recall(GEP "vector?"), 1, elocal),
+      err(err_data)));
+
+  struct clist *code = build_patarray_match(
+    NULL, elocal, psymbols, pat->u.ary.pattail, 0, level, err, err_data);
+  code = build_patarray_match(
+    code, elocal, psymbols, pat->u.ary.patlist, vlen, level, err,
+    err_data);
+
+  if (lc != NULL)
+    code = new_clist(build_heap, lc, code);
+  code = new_clist(build_heap, tc, code);
+  if (eassign != NULL)
+    code = new_clist(build_heap, eassign, code);
+
+  return build_codeblock(vlocals, code);
+}
+
+static struct component *build_match_list_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  if (pat->u.lst == NULL)
+    return set_loc(&pat->loc,
+                   build_if(build_const_not_equal(&pat->loc, constant_null, e),
+                            err(err_data), NULL));
+
+  /*
+   *  [
+   *    | tmp |
+   *    tmp = <expression>;
+   *    pair?(tmp) &&
+   *    car(tmp) == car(<pattern>) &&
+   *      [
+   *        tmp = cdr(tmp); <pattern> = cdr(<pattern>);
+   *        pair?(tmp) &&
+   *        car(tmp) == car(<pattern>) &&
+   *          :
+   *          [                              \  this is done at
+   *            cdr(tmp) == cdr(<pattern>);  +- the last pair
+   *          ]                              /
+   *      ]
+   *  ]
+   */
+
+  /* the last pair has both car/cdr entries */
+  for (struct pattern_list *apl = pat->u.lst->next; apl; apl = apl->next)
+    ++level;
+  int nlevel = level;
+
+  struct clist *code = NULL;
+  struct vlist *locals = NULL;
+  struct component *exp = NULL;
+  for (struct pattern_list *apl = pat->u.lst->next; ; )
+    {
+      struct component *texp = (apl->next == NULL && is_safe_recall(e)
+                                ? e
+                                : make_local_var(&locals, --level,
+                                                 &pat->loc));
+
+      if (exp == NULL)
+        {
+          struct component *getcdr = build_exec(build_recall(GEP "cdr"), 1,
+                                                texp);
+          struct component *c =
+            (pat->u.lst->pat == NULL
+             ? build_if(build_const_not_equal(&pat->loc, constant_null,
+                                              getcdr),
+                        err(err_data), NULL)
+             : build_match_block(pat->u.lst->pat, getcdr,
+                                 nlevel, psymbols, err, err_data));
+          if (c)
+            code = new_clist(build_heap, c, code);
+        }
+      else
+        {
+          code = new_clist(
+            build_heap,
+            build_assign(NO_LOC, exp->u.recall,
+                         build_exec(build_recall(GEP "cdr"), 1, texp)),
+            code);
+        }
+      exp = texp;
+
+      struct component *mc = build_match_block(
+        apl->pat,
+        build_exec(build_recall(GEP "car"), 1, exp),
+        nlevel, psymbols, err, err_data);
+      if (mc != NULL)
+        code = new_clist(build_heap, mc, code);
+
+      struct component *pc = set_loc(
+        &apl->pat->loc,
+        build_unless(
+          build_exec(build_recall(GEP "pair?"), 1, exp),
+          err(err_data)));
+      code = new_clist(build_heap, pc, code);
+
+      apl = apl->next;
+      if (apl == NULL)
+        break;
+    }
+
+  if (!is_safe_recall(e))
+    code = new_clist(build_heap, build_assign(NO_LOC, exp->u.recall, e),
+                     code);
+
+  return build_codeblock(reverse_vlist(locals), code);
+}
+
+static struct component *build_match_variable_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  assert(pat->u.var.typeset == TYPESET_ANY);
+
+  if (vlist_find(*psymbols, pat->u.var.name))
+    {
+      compile_error(&pat->loc,
+                    "repeated variable name in match pattern (%s)",
+                    pat->u.var.name);
+      return NULL;
+    }
+
+  if (!is_global_var(pat->u.var.name))
+    *psymbols = new_vlist(
+      build_heap, pat->u.var.name, TYPESET_ANY, &pat->loc,
+      *psymbols);
+
+  return build_assign(&pat->loc, pat->u.var.name, e);
+}
+
+static struct component *build_match_symbol_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  struct vlist *locals = NULL;
+  struct component *aexp = NULL;
+  e = make_safe_copy(e, &locals, &aexp, level, &pat->loc);
+  return build_codeblock(
+    locals,
+    build_clist(
+      4,
+      aexp,
+      build_unless(build_typecheck(&pat->loc, e, type_symbol),
+                   err(err_data)),
+      build_symbol_name_check(
+        pat->u.sym.name,
+        build_exec(build_recall(GEP "symbol_name"), 1, e),
+        level + 1,
+        psymbols, err, err_data),
+      build_match_block(
+        pat->u.sym.val,
+        build_exec(build_recall(GEP "symbol_get"), 1, e),
+        level + 2,
+        psymbols, err, err_data)));
+}
+
+static struct component *next_error(void *count)
+{
+  ++*(int *)count;
+  return build_exit("$next", component_undefined);
+}
+
+static struct component *build_match_or_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  struct vlist *locals = NULL;
+  struct component *aexp = NULL;
+  e = make_safe_copy(e, &locals, &aexp, level, &pat->loc);
+
+  struct vlist *orig_psyms = *psymbols;
+
+  int lhs_count = 0;
+  struct component *lhs_comp = build_match_block(
+    pat->u.or.lhs, e, level + 1,
+    psymbols, next_error, &lhs_count);
+
+  struct component *rhs_comp = NULL;
+  if (lhs_count == 0)
+    {
+      /* lhs always succeeds */
+      compile_warning(&pat->u.or.rhs->loc, "pattern not reachable");
+    }
+  else
+    {
+      /* temporarily restore used symbols to allow the same symbol being
+         defined in lhs || rhs */
+      struct vlist *lhs_psyms = *psymbols;
+      *psymbols = orig_psyms;
+
+      rhs_comp = build_match_block(
+        pat->u.or.rhs, e, level + 1,
+        psymbols, err, err_data);
+
+      struct vlist *pl = *psymbols;
+      *psymbols = lhs_psyms;
+
+      for (struct vlist *next; pl != orig_psyms; pl = next)
+        {
+          next = pl->next;
+          if (!vlist_find(*psymbols, pl->var))
+            {
+              pl->next = *psymbols;
+              *psymbols = pl;
+            }
+          pl = next;
+        }
+    }
+
+  return new_labeled_component(
+    build_heap, &pat->loc,
+    "$found", build_codeblock(
+      locals,
+      build_clist(
+        3,
+        aexp,
+        new_labeled_component(
+          build_heap, &pat->loc,
+          "$next", build_codeblock(
+            NULL,
+            build_clist(
+              2,
+              lhs_comp,
+              build_exit("$found", build_constant(constant_null))))),
+        rhs_comp)));
+}
+
+static struct component *build_match_expr_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  return set_loc(
+    &pat->loc,
+    build_unless(set_loc(&pat->loc,
+                         build_exec(build_recall(GEP "equal?"),
+                                    2, pat->u.expr, e)),
+                 err(err_data)));
+}
+
+static struct component *build_match_and_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  return build_codeblock(
+    NULL,
+    build_clist(
+      2,
+      build_match_block(pat->u.and.pat, e, level,
+                        psymbols, err, err_data),
+      build_unless(pat->u.and.cond, err(err_data))));
+}
+
+static struct component *build_match_const_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  return set_loc(
+    &pat->loc,
+    build_if(build_const_not_equal(&pat->loc, pat->u.constval, e),
+             err(err_data), NULL));
+}
+
+static struct component *build_match_sink_block(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data)
+{
+  return NULL;
+}
+
+typedef struct component *(*build_match_block_fn)(
+  struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
+  struct component *(*err)(void *data), void *err_data);
+
 static struct component *build_match_block(
   struct pattern *pat, struct component *e, int level, struct vlist **psymbols,
   struct component *(*err)(void *data), void *err_data)
 {
-  struct component *result;
+  static const build_match_block_fn fns[] = {
+    [pat_const]    = &build_match_const_block,
+    [pat_list]     = &build_match_list_block,
+    [pat_array]    = &build_match_array_block,
+    [pat_symbol]   = &build_match_symbol_block,
+    [pat_variable] = &build_match_variable_block,
+    [pat_sink]     = &build_match_sink_block,
+    [pat_expr]     = &build_match_expr_block,
+    [pat_and]      = &build_match_and_block,
+    [pat_or]       = &build_match_or_block,
+  };
+  return fns[pat->vclass](pat, e, level, psymbols, err, err_data);
+}
 
-  switch (pat->vclass) {
-  case pat_sink:
-    return NULL;
-  case pat_variable:
+static enum mudlle_type constant_type(struct constant *c)
+{
+  switch (c->vclass)
     {
-      for (struct vlist *sym = *psymbols; sym; sym = sym->next)
-	if (strcasecmp(sym->var, pat->u.var.name) == 0)
-	  {
-	    compile_error("repeated variable name in match pattern (%s)",
-                          pat->u.var.name);
-	    return NULL;
-	  }
-
-      *psymbols = new_vlist(
-        build_heap, pat->u.var.name, TYPESET_ANY, pat->lineno, *psymbols);
-
-      result = build_assign(0, pat->u.var.name, e);
-      if (pat->u.var.type != stype_any)
-        result = build_codeblock(
-          NULL,
-          build_clist(
-            2, result,
-            build_unless(build_typecheck(build_recall(pat->u.var.name),
-                                         pat->u.var.type),
-                         err(err_data))));
-      break;
+    case cst_string:     return type_string;
+    case cst_list:       return c->u.constants == NULL ? type_null : type_pair;
+    case cst_array:      return type_vector;
+    case cst_int:        return type_integer;
+    case cst_float:      return type_float;
+    case cst_bigint:     return type_bigint;
+    case cst_ctable:     return type_table;
+    case cst_table:      return type_table;
+    case cst_symbol:     return type_symbol;
+    case cst_expression: return stype_any;
     }
-  case pat_const:
-    result = build_if(build_const_not_equal(pat->u.constval, e),
-                      err(err_data), NULL);
-    break;
-  case pat_array:
+  abort();
+}
+
+static unsigned match_block_typeset(struct pattern *pat)
+{
+  switch (pat->vclass)
     {
-      /*
-       *  [
-       *    | tmp |
-       *    tmp = <expression>;
-       *    (vector?(tmp) &&
-       *     vector_length(tmp) == vector_length(<pattern>) &&
-       *     tmp[0] == <pattern>[0] &&
-       *          :
-       *     tmp[N] == <pattern>[N])
-       *  ]
-       */
-
-      struct component *eassign = NULL;
-      struct vlist *vlocals = NULL;
-      struct component *elocal = make_safe_copy(e, &vlocals, &eassign, level,
-                                        pat->lineno);
-
-      int vlen = 0;
-      for (struct pattern_list *apl = pat->u.l.patlist; apl; apl = apl->next)
-        ++vlen;
-
-      struct component *lc = NULL;
-      if (!pat->u.l.ellipsis || vlen > 0)
-        {
-          lc = build_if(
-            build_binop(
-              pat->u.l.ellipsis ? b_lt : b_ne,
-              build_exec(build_recall(GEP "vector_length"), 1, elocal),
-              build_int_component(vlen)),
-            err(err_data),
-            NULL);
-          lc->lineno = pat->lineno;
-        }
-
-      struct component *tc = build_unless(
-        build_exec(build_recall(GEP "vector?"), 1, elocal),
-        err(err_data));
-      tc->lineno = pat->lineno;
-
-      struct clist *code = NULL;
-      int n = vlen;
-      for (struct pattern_list *apl = pat->u.l.patlist; apl; apl = apl->next)
-	{
-          --n;
-	  struct component *c = build_match_block(
-	    apl->pat, build_binop(b_ref, elocal, build_int_component(n)),
-            level + 1, psymbols, err, err_data);
-          if (c != NULL)
-            code = new_clist(build_heap, c, code);
-	}
-
-      if (lc != NULL)
-        code = new_clist(build_heap, lc, code);
-      code = new_clist(build_heap, tc, code);
-      if (eassign != NULL)
-        code = new_clist(build_heap, eassign, code);
-
-      result = build_codeblock(vlocals, code);
-      break;
+    case pat_const:
+      return P(constant_type(pat->u.constval));
+    case pat_list:
+      return pat->u.lst == NULL ? P(type_null) : P(type_pair);
+    case pat_array:
+      return P(type_vector);
+    case pat_symbol:
+      return P(type_symbol);
+    case pat_and:
+      return match_block_typeset(pat->u.and.pat);
+    case pat_or:
+      return (match_block_typeset(pat->u.or.lhs)
+              | match_block_typeset(pat->u.or.rhs));
+    case pat_variable:
+    case pat_sink:
+    case pat_expr:
+      return TYPESET_ANY;
     }
-  case pat_list:
-    {
-      if (pat->u.l.patlist == NULL)
-	{
-	  result = build_if(
-            build_const_not_equal(
-              new_constant(build_heap, cst_list, NULL), e),
-            err(err_data), NULL);
-	  break;
-	}
-
-      /*
-       *  [
-       *    | tmp |
-       *    tmp = <expression>;
-       *    pair?(tmp) &&
-       *    car(tmp) == car(<pattern>) &&
-       *      [
-       *        tmp = cdr(tmp); <pattern> = cdr(<pattern>);
-       *        pair?(tmp) &&
-       *        car(tmp) == car(<pattern>) &&
-       *          :
-       *          [                              \  this is done at
-       *            cdr(tmp) == cdr(<pattern>);  +- the last pair
-       *          ]                              /
-       *      ]
-       *  ]
-       */
-
-      for (struct pattern_list *apl = pat->u.l.patlist->next;
-           apl;
-           apl = apl->next)
-        ++level;
-      int nlevel = level;
-
-      struct clist *code = NULL;
-      struct vlist *locals = NULL;
-      struct component *exp = NULL;
-      for (struct pattern_list *apl = pat->u.l.patlist->next;
-           apl;
-           apl = apl->next)
-	{
-          struct component *texp = (apl->next == NULL && is_safe_recall(e)
-                            ? e
-                            : make_local_var(&locals, --level, pat->lineno));
-
-          if (exp == NULL)
-            {
-              struct component *getcdr = build_exec(build_recall(GEP "cdr"), 1,
-                                            texp);
-              struct component *c =
-                (pat->u.l.patlist->pat == NULL
-                 ? build_if(build_const_not_equal(
-                              new_constant(build_heap, cst_list, NULL),
-                              getcdr),
-                            err(err_data), NULL)
-                 : build_match_block(pat->u.l.patlist->pat, getcdr,
-                                     nlevel, psymbols, err, err_data));
-              if (c)
-                code = new_clist(build_heap, c, code);
-            }
-          else
-            {
-              code = new_clist(
-                build_heap,
-                build_assign(0, exp->u.recall,
-                             build_exec(build_recall(GEP "cdr"), 1, texp)),
-                code);
-            }
-          exp = texp;
-
-          struct component *mc = build_match_block(
-            apl->pat,
-            build_exec(build_recall(GEP "car"), 1, exp),
-            nlevel, psymbols, err, err_data);
-          if (mc != NULL)
-            code = new_clist(build_heap, mc, code);
-
-          struct component *pc = build_unless(
-            build_exec(build_recall(GEP "pair?"), 1, exp),
-            err(err_data));
-          pc->lineno = apl->pat->lineno;
-          code = new_clist(build_heap, pc, code);
-        }
-
-      if (!is_safe_recall(e))
-        code = new_clist(build_heap, build_assign(0, exp->u.recall, e), code);
-
-      result = build_codeblock(reverse_vlist(locals), code);
-      break;
-    }
-  case pat_expr:
-    result = build_unless(build_exec(build_recall(GEP "equal?"),
-                                     2, pat->u.expr, e),
-                          err(err_data));
-    break;
-  case pat_symbol:
-    {
-      struct vlist *locals = NULL;
-      struct component *aexp = NULL;
-      e = make_safe_copy(e, &locals, &aexp, level, pat->lineno);
-      result = build_codeblock(
-        locals,
-        build_clist(
-          4,
-          aexp,
-          build_unless(build_typecheck(e, type_symbol), err(err_data)),
-          build_symbol_name_check(
-            pat->u.sym.name,
-            build_exec(build_recall(GEP "symbol_name"), 1, e),
-            level + 1,
-            psymbols, err, err_data),
-          build_match_block(
-            pat->u.sym.val,
-            build_exec(build_recall(GEP "symbol_get"), 1, e),
-            level + 2,
-            psymbols, err, err_data)));
-      break;
-    }
-  default:
-    abort();
-  }
-  result->lineno = pat->lineno;
-  return result;
+  abort();
 }
 
 static struct component *no_match_error(void *data)
 {
-  return build_error(error_no_match);
+  const struct loc *loc = data;
+  return build_error(loc, error_no_match);
 }
 
 struct component *new_pattern_component(struct alloc_block *heap,
                                         struct pattern *pat,
                                         struct component *e)
 {
-  build_heap = heap;
   struct vlist *psymbols = NULL;
+
   /* Warning: if the match fails, this might leave only some of the variables
    * in the pattern filled. But it's a feature, right? */
-  return build_codeblock(
+  PUSH_BUILD_HEAP(heap);
+  struct component *c = build_codeblock(
     NULL,
     build_clist(
       2,
-      build_match_block(pat, e, 0, &psymbols, no_match_error, NULL),
+      build_match_block(pat, e, 0, &psymbols,
+                        no_match_error, &pat->loc),
       component_undefined));
+  POP_BUILD_HEAP();
+
+  return c;
 }
 
-struct component *new_dereference(struct alloc_block *heap, int lineno,
-                                  struct component *e)
+struct component *new_dereference(
+  struct alloc_block *heap, const struct loc *loc, struct component *e)
 {
-  build_heap = heap;
-  struct component *c = build_exec(build_recall(GEP "dereference"), 1, e);
-  c->lineno = lineno;
+  PUSH_BUILD_HEAP(heap);
+  struct component *c = set_loc(
+    loc, build_exec(build_recall(GEP "dereference"), 1, e));
+  POP_BUILD_HEAP();
   return c;
 }
 
@@ -1503,21 +1884,24 @@ static struct component *is_dereference(struct component *e)
   return cl->next->c;
 }
 
-struct component *new_reference(struct alloc_block *heap, int lineno,
+struct component *new_reference(struct alloc_block *heap,
+                                const struct loc *loc,
                                 struct component *e)
 {
-  build_heap = heap;
+  if (e->vclass == c_recall)
+    return new_vref_component(heap, loc, e->u.recall);
+
+  struct component *result = NULL;
 
   if (e->vclass == c_builtin && e->u.builtin.fn == b_ref)
     {
       struct clist *args = e->u.builtin.args;
-      return build_exec(build_recall(GEP "make_ref"), 2,
-                        args->c, args->next->c);
-
+      PUSH_BUILD_HEAP(heap);
+      result = build_exec(build_recall(GEP "make_ref"), 2,
+                          args->c, args->next->c);
+      POP_BUILD_HEAP();
+      return result;
     }
-
-  if (e->vclass == c_recall)
-    return new_component(heap, lineno, c_vref, e->u.recall);
 
   if (e->vclass == c_execute)
     {
@@ -1528,13 +1912,20 @@ struct component *new_reference(struct alloc_block *heap, int lineno,
           || args == NULL
           || args->next != NULL)
         goto error;
+
       const char *name = f->u.recall;
-      if (strncasecmp(name, GEP, strlen(GEP)) == 0)
+      if (is_global_var(name))
         name += strlen(GEP);
 
       if (strcasecmp(name, "symbol_get") == 0)
-        return build_exec(build_recall(GEP "make_symbol_ref"),
-                          1, args->c);
+        {
+          PUSH_BUILD_HEAP(heap);
+          result = build_exec(build_recall(GEP "make_symbol_ref"),
+                              1, args->c);
+          POP_BUILD_HEAP();
+          return result;
+        }
+
       int idx;
       if (strcasecmp(name, "car") == 0)
         idx = 0;
@@ -1542,12 +1933,15 @@ struct component *new_reference(struct alloc_block *heap, int lineno,
         idx = 1;
       else
         goto error;
-      return build_exec(build_recall(GEP "make_pair_ref"),
-                        2, args->c, build_int_component(idx));
+      PUSH_BUILD_HEAP(heap);
+      result = build_exec(build_recall(GEP "make_pair_ref"),
+                          2, args->c, build_int_component(idx));
+      POP_BUILD_HEAP();
+      return result;
     }
 
  error:
-  compile_error("cannot create a reference to that");
+  compile_error(loc, "cannot create a reference to that");
   return NULL;
 }
 
@@ -1563,7 +1957,8 @@ struct component *new_for_component(struct alloc_block *heap,
                                     struct component *eexit,
                                     struct component *eloop,
                                     struct component *e,
-                                    const char *filename, int lineno)
+                                    const char *filename,
+                                    const struct loc *loc)
 {
   /*
    *  <break> [
@@ -1579,26 +1974,26 @@ struct component *new_for_component(struct alloc_block *heap,
    */
   struct clist *code = NULL;
 
-  build_heap = heap;
+  PUSH_BUILD_HEAP(heap);
 
   if (eloop)
     code = new_clist(build_heap, eloop, code);
 
   code = new_clist(build_heap,
-                   new_component(build_heap, e->lineno, c_labeled,
-                                 "continue", e),
+                   new_labeled_component(build_heap, &e->loc,
+                                         "continue", e),
                    code);
 
   if (eexit)
     {
       struct component *c = build_if(build_unop(b_not, eexit),
-                             build_exit("break", component_undefined),
-                             NULL);
+                                     build_exit("break", component_undefined),
+                                     NULL);
       code = new_clist(build_heap, c, code);
     }
 
   struct component *c = build_codeblock(NULL, code);
-  c = build_unop(b_loop, c);
+  c = new_unop_component(build_heap, loc, b_loop, c);
 
   code = new_clist(build_heap, c, NULL);
   if (einit)
@@ -1606,22 +2001,17 @@ struct component *new_for_component(struct alloc_block *heap,
 
   c = build_codeblock(vars, code);
   c->u.blk->filename = filename;
-  c->u.blk->lineno = lineno;
-  return new_component(build_heap, c->lineno, c_labeled, "break", c);
-}
+  c->u.blk->loc = *loc;
 
-static struct component *next_error(void *count)
-{
-  ++*(int *)count;
-  return build_exit("$next", component_undefined);
+  POP_BUILD_HEAP();
+
+  return new_labeled_component(heap, &c->loc, "break", c);
 }
 
 struct component *new_match_component(struct alloc_block *heap,
                                       struct component *e,
                                       struct match_node_list *matches)
 {
-  build_heap = heap;
-
   /*
    *   <$match> [
    *     | $exp |
@@ -1629,56 +2019,46 @@ struct component *new_match_component(struct alloc_block *heap,
    *     $exp = <match-expression>
    *     <$next> [                               \
    *       | <pattern-variables> |                |
-   *       if (<pattern-match> [&& <condition>])  +- repeat for each match node
+   *       if (<pattern-match>)                   +- repeat for each match node
    *         exit<$match> <pattern-expression>;   |
    *     ]                                       /
    *     false
    *   ]
    */
 
-  struct vlist *vl = build_vlist(1, "$exp", TYPESET_ANY, e->lineno);
+  PUSH_BUILD_HEAP(heap);
+
+  struct vlist *vl = build_vlist(1, MVAR("$exp", &e->loc));
   struct clist *code = build_clist(1, component_false);
   for (; matches; matches = matches->next)
     {
       struct vlist *psymbols = NULL;
       int next_count = 0;
-      struct component *matchcode = build_match_block(matches->match->pattern,
-                                              build_recall("$exp"), 0,
-                                              &psymbols,
-                                              next_error, &next_count);
-      struct component *cexit
-        = build_exit("$match", matches->match->expression);
+      struct component *matchcode = build_match_block(
+        matches->match->pattern, build_recall("$exp"), 0,
+        &psymbols, next_error, &next_count);
+      struct component *cexit = set_loc(
+        &matches->match->loc,
+        build_exit("$match", matches->match->expression));
 
-      struct clist *cl = build_clist(
-        3,
-        matchcode,
-        (matches->match->condition
-         ? build_unless(matches->match->condition, next_error(&next_count))
-         : NULL),
-        cexit);
+      struct clist *cl = build_clist(2, matchcode, cexit);
 
       struct component *cblock = build_codeblock(reverse_vlist(psymbols), cl);
       cblock->u.blk->filename = matches->match->filename;
-      cblock->u.blk->lineno = matches->match->lineno;
+      cblock->u.blk->loc = matches->match->loc;
 
       if (next_count)
-        cblock = new_component(build_heap, 0, c_labeled, "$next", cblock);
+        cblock = new_labeled_component(build_heap, NO_LOC, "$next", cblock);
 
       code = new_clist(build_heap, cblock, code);
     }
 
-  code = new_clist(build_heap, build_assign(0, "$exp", e), code);
+  code = new_clist(build_heap, build_assign(NO_LOC, "$exp", e), code);
 
-  return new_component(build_heap, 0, c_labeled, "$match",
-		       build_codeblock(vl, code));
-}
-
-struct component *new_xor_component(struct alloc_block *heap, int lineno,
-                                    struct component *e0,
-                                    struct component *e1)
-{
-  build_heap = heap;
-  return build_binop(b_bitxor, build_unop(b_not, e0), build_unop(b_not, e1));
+  struct component *result = new_labeled_component(
+    build_heap, NO_LOC, "$match", build_codeblock(vl, code));
+  POP_BUILD_HEAP();
+  return result;
 }
 
 static struct component *comp_id(struct component *e)
@@ -1688,32 +2068,20 @@ static struct component *comp_id(struct component *e)
 
 static struct component *comp_set_tmp(struct component *e)
 {
-  return build_assign(0, "$tmp", e);
+  return build_assign(NO_LOC, "$tmp", e);
 }
 
-struct component *new_assign_expression(struct alloc_block *heap,
-                                        struct component *e0,
-                                        enum builtin_op op,
-                                        struct component *e1, bool postfix,
-                                        int lineno)
+/* for +=, |=, ++, etc. */
+struct component *new_assign_modify_expr(struct alloc_block *heap,
+                                         struct component *e0,
+                                         enum builtin_op op,
+                                         struct component *e1, bool postfix,
+                                         bool assignment,
+                                         const struct loc *loc)
 {
-  build_heap = heap;
+  struct component *result = NULL;
 
-  if (op == b_invalid)
-    {
-      if (e0->vclass == c_builtin && e0->u.builtin.fn == b_ref)
-        {
-          struct clist *args = e0->u.builtin.args;
-          return new_component(heap, lineno, c_builtin, b_set, 3,
-                               args->c, args->next->c, e1);
-        }
-      if (e0->vclass == c_recall)
-        return build_assign(lineno, e0->u.recall, e1);
-      struct component *r = is_dereference(e0);
-      if (r == NULL)
-        goto error;
-      return build_set_ref(r, e1);
-    }
+  PUSH_BUILD_HEAP(heap);
 
   struct component *(*set_tmp)(struct component *)
     = postfix ? comp_set_tmp : comp_id;
@@ -1723,61 +2091,213 @@ struct component *new_assign_expression(struct alloc_block *heap,
   if (e0->vclass == c_builtin && e0->u.builtin.fn == b_ref)
     {
       struct clist *args = e0->u.builtin.args;
-      struct vlist *vl = build_vlist(3,
-                             tmp_name, TYPESET_ANY, e0->lineno,
-                             "$ref", TYPESET_ANY, args->c->lineno,
-                             "$exp", TYPESET_ANY, args->next->c->lineno);
-      struct clist *cl = build_clist(
-        4,
-        build_assign(lineno, "$exp", args->c),
-        build_assign(lineno, "$ref", args->next->c),
-        new_component(heap, lineno, c_builtin, b_set, 3,
-                      build_recall("$exp"),
-                      build_recall("$ref"),
-                      build_binop(op,
-                                  set_tmp(build_binop(b_ref,
-                                                      build_recall("$exp"),
-                                                      build_recall("$ref"))),
-                                  e1)),
-        ret);
-      return build_codeblock(vl, cl);
+      struct component *lexp = args->c, *lref = args->next->c;
+      struct vlist *vl;
+      struct clist *cl;
+      if (lref->vclass == c_constant && lref->u.cst->vclass == cst_string)
+        {
+          vl = build_vlist(
+            2,
+            MVAR(tmp_name, &e0->loc),
+            MVAR("$sym", &lref->loc));
+          cl = build_clist(
+            3,
+            build_assign(loc, "$sym",
+                         build_exec(build_recall(GEP "symbol_ref"), 2,
+                                    lexp, lref)),
+            set_loc(
+              loc,
+              build_exec(
+                build_recall(GEP "symbol_set!"), 2,
+                build_recall("$sym"),
+                build_binop(op,
+                            set_tmp(build_exec(
+                                      build_recall(GEP "symbol_get"), 1,
+                                      build_recall("$sym"))),
+                            e1))),
+            ret);
+        }
+      else
+        {
+          vl = build_vlist(
+            3,
+            MVAR(tmp_name, &e0->loc),
+            MVAR("$ref", &lref->loc),
+            MVAR("$exp", &lexp->loc));
+          cl = build_clist(
+            4,
+            build_assign(loc, "$exp", lexp),
+            build_assign(loc, "$ref", lref),
+            new_ternop_component(
+              heap, loc, b_set,
+              build_recall("$exp"),
+              build_recall("$ref"),
+              build_binop(op,
+                          set_tmp(build_binop(b_ref,
+                                              build_recall("$exp"),
+                                              build_recall("$ref"))),
+                          e1)),
+            ret);
+        }
+      result = build_codeblock(vl, cl);
+      goto done;
     }
 
   if (e0->vclass == c_recall)
     {
-      struct vlist *vl = build_vlist(1, tmp_name, TYPESET_ANY, e0->lineno);
+      struct vlist *vl = build_vlist(
+        1, MVAR(tmp_name, &e0->loc));
       struct clist *cl = build_clist(
         2,
-        build_assign(lineno, e0->u.recall, build_binop(op, set_tmp(e0), e1)),
+        build_assign(loc, e0->u.recall, build_binop(op, set_tmp(e0), e1)),
         ret);
       /* optimize for common case */
       if (vl == NULL && cl->next == NULL)
-        return cl->c;
-      return build_codeblock(vl, cl);
+        result = cl->c;
+      else
+        result = build_codeblock(vl, cl);
+      goto done;
     }
 
   struct component *r = is_dereference(e0);
-  if (r != NULL)
+  if (r == NULL)
     {
-      struct vlist *vl = build_vlist(2,
-                             tmp_name, TYPESET_ANY, e0->lineno,
-                             "$ref", TYPESET_ANY, e0->lineno);
-      struct clist *cl = build_clist(
-        3,
-        build_assign(lineno, "$ref", r),
-        build_set_ref(
-          build_recall("$ref"),
-          build_binop(op,
-                      set_tmp(new_dereference(heap, lineno,
-                                              build_recall("$ref"))),
-                      e1)),
-        ret);
-      return build_codeblock(vl, cl);
+      compile_error(&e0->loc,
+                    "can only %s variables or references",
+                    (assignment
+                     ? "assign to"
+                     : (op == b_add ? "increment" : "decrement")));
+      goto done;
     }
 
- error:
-  compile_error("can only assign to variables or references");
-  return NULL;
+  struct vlist *vl = build_vlist(
+    2,
+    MVAR(tmp_name, &e0->loc),
+    MVAR("$ref", &e0->loc));
+  struct clist *cl = build_clist(
+    3,
+    build_assign(loc, "$ref", r),
+    build_set_ref(
+      build_recall("$ref"),
+      build_binop(op,
+                  set_tmp(new_dereference(heap, loc,
+                                          build_recall("$ref"))),
+                  e1)),
+    ret);
+  result = build_codeblock(vl, cl);
+
+ done:
+  POP_BUILD_HEAP();
+  return result;
+}
+
+struct component *new_assign_expression(struct alloc_block *heap,
+                                        struct component *e0,
+                                        struct component *e1,
+                                        const struct loc *loc,
+                                        const struct loc *dstloc)
+{
+  if (e0->vclass == c_builtin && e0->u.builtin.fn == b_ref)
+    {
+      struct clist *args = e0->u.builtin.args;
+      return new_ternop_component(heap, loc, b_set,
+                                  args->c, args->next->c, e1);
+    }
+
+  PUSH_BUILD_HEAP(heap);
+
+  struct component *result = NULL;
+
+  if (e0->vclass == c_recall)
+    {
+      if (e1->vclass == c_closure)
+        e1->loc = *dstloc;
+      result = build_assign(loc, e0->u.recall, e1);
+    }
+  else
+    {
+      struct component *r = is_dereference(e0);
+      if (r == NULL)
+        compile_error(&e0->loc, "can only assign to variables or references");
+      else
+        result = build_set_ref(r, e1);
+    }
+
+  POP_BUILD_HEAP();
+
+  return result;
+}
+
+bool set_function_args(struct alloc_block *heap,
+                       struct function *func,
+                       struct pattern_list *args)
+{
+  PUSH_BUILD_HEAP(heap);
+
+  bool result = false;
+
+  /* dummy list head for function argument names */
+  struct vlist *arglocals = new_vlist(heap, "$arglocals", TYPESET_ANY,
+                                      NO_LOC, NULL);
+  struct vlist *locals = arglocals;
+
+  struct clist *clist = NULL;
+  int argn = 0;
+  for (struct pattern_list *arg = args; arg; arg = arg->next, ++argn)
+    {
+      struct pattern *pat = arg->pat;
+      if (pat->vclass == pat_variable
+          && !is_global_var(pat->u.var.name))
+        {
+          if (vlist_find(locals, pat->u.var.name))
+            {
+              compile_error(&pat->loc, "duplicate argument name %s",
+                            pat->u.var.name);
+              goto done;
+            }
+          arglocals->next = new_vlist(heap, pat->u.var.name,
+                                      pat->u.var.typeset,
+                                      &pat->loc,
+                                      arglocals->next);
+          func->args = new_vlist(heap, pat->u.var.name, pat->u.var.typeset,
+                                 &pat->loc, func->args);
+          continue;
+        }
+
+      char buf[16];
+      sprintf(buf, "$arg%d", argn);
+      const char *argname = heap_allocate_string(heap, buf);
+
+      func->args = new_vlist(heap, argname, match_block_typeset(pat),
+                             &pat->loc, func->args);
+      struct component *c = build_match_block(
+        pat, build_recall(argname), 0, &locals, no_match_error,
+        &pat->loc);
+      if (erred)
+        goto done;
+
+      if (c != NULL)
+        clist = new_clist(heap, c, clist);
+    }
+
+  if (locals != arglocals || clist != NULL)
+    {
+      for (struct vlist **l = &locals; ; l = &(*l)->next)
+        if (*l == arglocals)
+          {
+            *l = NULL;
+            break;
+          }
+
+      clist = new_clist(heap, func->value, clist);
+      clist = reverse_clist(clist);
+      func->value = build_codeblock(locals, clist);
+    }
+  result = true;
+
+ done:
+  POP_BUILD_HEAP();
+  return result;
 }
 
 struct block *new_toplevel_codeblock(struct alloc_block *heap,
@@ -1787,11 +2307,13 @@ struct block *new_toplevel_codeblock(struct alloc_block *heap,
   if (statics == NULL)
     return body;
 
-  build_heap = heap;
-  struct clist *cl = build_clist(1, new_component(heap, body->lineno,
-                                                  c_block, body));
-  body = new_codeblock(build_heap, statics, cl, body->filename, body->nicename,
-                       body->lineno);
+  PUSH_BUILD_HEAP(heap);
+  struct clist *cl = build_clist(
+    1, new_block_component(heap, &body->loc, body));
+  POP_BUILD_HEAP();
+
+  body = new_codeblock(heap, statics, cl, body->filename, body->nicename,
+                       &body->loc);
   body->statics = true;
   return body;
 }

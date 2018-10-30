@@ -19,10 +19,12 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#ifdef linux
+#ifdef __linux__
   /* needed for REG_xxx constants for signal contexts */
   #define _GNU_SOURCE
 #endif
+
+#include "../mudlle-config.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -30,7 +32,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../alloc.h"
 #include "../context.h"
+#include "../global.h"
 #include "../module.h"
 
 #include "arith.h"
@@ -74,7 +78,7 @@ static void system_set(ulong idx, value val)
 
 void system_string_define(struct string *name, value val)
 {
-  GCPRO1(val);
+  GCPRO(val);
   ulong idx = mglobal_lookup(name);
   UNGCPRO();
   system_set(idx, val);
@@ -87,7 +91,7 @@ void system_write(struct string *name, value val)
      as a 'define' of the system module.
 */
 {
-  GCPRO1(val);
+  GCPRO(val);
   ulong aindex = mglobal_lookup(name);
   UNGCPRO();
 
@@ -109,7 +113,7 @@ struct vector *define_mstring_vector(struct string *name,
 
   struct vector *v = alloc_vector(count);
 
-  GCPRO1(v);
+  GCPRO(v);
   for (int n = 0; n < count; ++n)
     SET_VECTOR(v, n, make_readonly(alloc_string(vec[n])));
   UNGCPRO();
@@ -126,7 +130,7 @@ void define_int_vector(struct string *name, const int *vec, int count)
   assert(name->o.garbage_type == garbage_static_string);
 
   struct vector *v = alloc_vector(count);
-  GCPRO1(v);
+  GCPRO(v);
   for (int n = 0; n < count; ++n)
     v->data[n] = makeint(vec[n]);
   UNGCPRO();
@@ -144,9 +148,9 @@ void define_int_vector(struct string *name, const int *vec, int count)
     }                                                           \
 } while (0)
 
-static void validate_typing(const struct primitive_ext *op)
+static void validate_typing(const struct prim_op *op)
 {
-  static const char allowed[] = "fnzZsvluktryxo123456789SdDbB";
+  static const char allowed[] = "fnzZsvluktryxo123456789dDbB";
 
   for (const char *const *type = op->type; *type; ++type)
     {
@@ -200,11 +204,11 @@ static void validate_typing(const struct primitive_ext *op)
 
 static struct {
   size_t size, used;
-  const struct primitive_ext **ops;
+  const struct prim_op **ops;
   bool locked;
 } primitives;
 
-void runtime_define(const struct primitive_ext *op)
+void runtime_define(const struct prim_op *op)
 {
   assert(op->nargs <= MAX_PRIMITIVE_ARGS);
   assert(!primitives.locked);
@@ -228,8 +232,8 @@ void runtime_define(const struct primitive_ext *op)
 
 static int cmp_ops(const void *_a, const void *_b)
 {
-  ulong a = (ulong)(*(const struct primitive_ext *const *)_a)->op;
-  ulong b = (ulong)(*(const struct primitive_ext *const *)_b)->op;
+  ulong a = (ulong)(*(const struct prim_op *const *)_a)->op;
+  ulong b = (ulong)(*(const struct prim_op *const *)_b)->op;
   return a < b ? -1 : a > b;
 }
 
@@ -244,13 +248,13 @@ static void sort_primitives(void)
   primitives.locked = true;
 }
 
-const struct primitive_ext *lookup_primitive(ulong adr)
+const struct prim_op *lookup_primitive(ulong adr)
 {
   assert(primitives.locked);
-  struct primitive_ext key;
+  struct prim_op key;
   key.op = (value (*)())adr;
   void *keyptr = &key;
-  const struct primitive_ext **op = bsearch(
+  const struct prim_op **op = bsearch(
     &keyptr, primitives.ops, primitives.used,
     sizeof primitives.ops[0], cmp_ops);
   return op ? (*op) : NULL;
@@ -278,35 +282,39 @@ static void catchint(int sig)
 }
 #endif  /* MUDLLE_INTERRUPT */
 
-#if defined i386 && !defined NOCOMPILER
+#if (defined __i386__ || defined __x86_64__) && !defined NOCOMPILER
 
-#    undef USE_SYS_UCONTEXT
-#    if defined __GLIBC__ && (defined REG_EIP || __GLIBC_MINOR__ >= 3)
-#        include <sys/ucontext.h>
-#        define USE_SYS_UCONTEXT
-#    elif defined __MACH__
-#        include <sys/ucontext.h>
-#    elif defined SA_SIGINFO
-#        include <asm/ucontext.h>
-#    elif __GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
-#        define sigcontext sigcontext_struct
-#        include <asm/sigcontext.h>
-#    elif __GLIBC__ != 2 && __GLIBC_MINOR__ != 2
-#        include <sigcontext.h>
-#    endif
+#undef USE_SYS_UCONTEXT
+#if __GLIBC__ == 2 && (defined REG_EIP || __GLIBC_MINOR__ >= 3)
+#  include <sys/ucontext.h>
+#  define USE_SYS_UCONTEXT
+#elif defined __MACH__
+#  include <sys/ucontext.h>
+#elif defined SA_SIGINFO
+#  include <asm/ucontext.h>
+#elif __GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 1)
+#  define sigcontext sigcontext_struct
+#  include <asm/sigcontext.h>
+#elif __GLIBC__ != 2 && __GLIBC_MINOR__ != 2
+#  include <sigcontext.h>
+#endif
 
 #ifdef __MACH__
-    typedef mcontext_t reg_context_t;
-    #define GETREG(ctx, reg, REG) (*(ctx))->__ss.__ ## reg
-    #define UCONTEXT_T ucontext_t
+  #define REG_CONTEXT_T mcontext_t
+  #define GETREG(ctx, reg, REG) (*(ctx))->__ss.__ ## reg
+  #define UCONTEXT_T ucontext_t
 #elif defined USE_SYS_UCONTEXT
-    typedef mcontext_t reg_context_t;
-    #define GETREG(ctx, reg, REG) (ctx)->gregs[REG_ ## REG]
+  #define REG_CONTEXT_T mcontext_t
+  #define GETREG(ctx, reg, REG) (ctx)->gregs[REG_ ## REG]
+  #if __GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 27)
+    #define UCONTEXT_T struct ucontext_t
+  #else
     #define UCONTEXT_T struct ucontext
+  #endif
 #else
-    typedef struct sigcontext reg_context_t;
-    #define GETREG(ctx, reg, REG) (ctx)->reg
-    #define UCONTEXT_T struct ucontext
+  #define REG_CONTEXT_T struct sigcontext
+  #define GETREG(ctx, reg, REG) (ctx)->reg
+  #define UCONTEXT_T struct ucontext
 #endif
 
 #include <stddef.h>
@@ -319,6 +327,7 @@ static struct sigaction oldbusact;
 #endif
 #endif
 
+/* export for gdb */
 void got_real_segv(int sig);
 void got_real_segv(int sig)
 {
@@ -342,59 +351,102 @@ void got_real_segv(int sig)
 #endif
 }
 
-static void check_segv(int sig, reg_context_t *scp)
+#if ((defined __i386__ || __x86_64__) && !defined NOCOMPILER    \
+     && defined SA_SIGINFO)
+ #define USE_ALTSTACK 1
+static char my_signal_stack[MINSIGSTKSZ + 8 * 1024];
+#else
+ #undef USE_ALTSTACK
+#endif
+
+static void check_segv(int sig, REG_CONTEXT_T *scp)
 {
-  const ubyte *eip = (const ubyte *)GETREG(scp, eip, EIP);
+#ifdef USE_ALTSTACK
+  unsigned long sp = get_stack_pointer();
+  if (sp >= (unsigned long)&my_signal_stack
+      && sp < (unsigned long)&my_signal_stack + sizeof my_signal_stack)
+    {
+      /* will be restored by safe_mcatch() */
+      hard_mudlle_stack_limit = mudlle_stack_limit
+        = (unsigned long)&my_signal_stack + 1024;
+    }
+#endif  /* USE_ALTSTACK */
+
+#ifdef __i386__
+  #define GET_PC(scp) GETREG(scp, eip, EIP)
+  #define GET_SP(scp) GETREG(scp, esp, ESP)
+  #define GET_BP(scp) GETREG(scp, ebp, EBP)
+  #define GET_ARG0(scp) GETREG(scp, eax, EAX)
+  #define GET_ARG1(scp) GETREG(scp, ecx, ECX)
+  #define GET_ARG2(scp) GETREG(scp, edx, EDX)
+#elif defined __x86_64__
+  #define GET_PC(scp) GETREG(scp, rip, RIP)
+  #define GET_SP(scp) GETREG(scp, rsp, RSP)
+  #define GET_BP(scp) GETREG(scp, rbp, RBP)
+  #define GET_ARG0(scp) GETREG(scp, rdi, RDI)
+  #define GET_ARG1(scp) GETREG(scp, rsi, RSI)
+  #define GET_ARG2(scp) GETREG(scp, rdx, RDX)
+#else
+  #error Unsupported architecture
+#endif
+  const uint8_t *pc = (const uint8_t *)GET_PC(scp);
 
   CASSERT_EXPR(offsetof (struct obj, size) == 0);
 
-  if ((eip[0] == 0x80           /* cmpb $imm,object_type(reg) */
-       && (eip[1] & 0xf8) == 0x78
-       && eip[2] == 5)          /* offsetof(struct obj, type) */
-      || ((eip[0] == 0x81        /* cmpl $imm,object_size(reg) */
-           || eip[0] == 0x83)    /* cmpl $imm8,object_size(reg) */
-          && (eip[1] & 0xf8) == 0x38)
-      || (eip[0] == 0x0f        /* movzbl object_type(%ecx),%eax */
-          && eip[1] == 0xb6
-          && (eip[2] & 0xc0) == 0x40
-          && eip[3] == 5)       /* offsetof(struct obj, type) */
-      || (eip[0] == 0x8b        /* mov (reg0),reg1 for size */
-          && (eip[1] & 0xc0) == 0)
-      || (eip[0] == 0x8b        /* mov car/cdr(reg0),reg1 */
-          && (eip[1] & 0xc0) == 0x40
-          && (eip[2] == offsetof(struct list, car)
-              || eip[2] == offsetof(struct list, cdr))))
+#ifdef __x86_64__
+  /* skip any REX prefix */
+  if ((pc[0] & 0xf0) == 0x40)
+    ++pc;
+#endif
+
+  const int obj_type_ofs = sizeof (ulong) + 1;
+
+  if ((pc[0] == 0x80           /* cmpb $imm,object_type(reg) */
+       && (pc[1] & 0xf8) == 0x78
+       && pc[2] == obj_type_ofs)
+      || ((pc[0] == 0x81        /* cmpl $imm,object_size(reg) */
+           || pc[0] == 0x83)    /* cmpl $imm8,object_size(reg) */
+          && (pc[1] & 0xf8) == 0x38)
+      || (pc[0] == 0x0f        /* movzbl object_type(%ecx),%eax */
+          && pc[1] == 0xb6
+          && (pc[2] & 0xc0) == 0x40
+          && pc[3] == obj_type_ofs)
+      || (pc[0] == 0x8b        /* mov (reg0),reg1 for size */
+          && (pc[1] & 0xc0) == 0)
+      || (pc[0] == 0x8b        /* mov car/cdr(reg0),reg1 */
+          && (pc[1] & 0xc0) == 0x40
+          && (pc[2] == offsetof(struct list, car)
+              || pc[2] == offsetof(struct list, cdr))))
     {
       /* mudlle code */
-      if (eip >= gcblock && eip < gcblock + gcblocksize)
+      if (pc >= gcblock && pc < gcblock + gcblocksize)
 	{
-	  ccontext.frame_end_sp = (ulong *)GETREG(scp, esp, ESP);
-	  ccontext.frame_end_bp = (ulong *)GETREG(scp, ebp, EBP);
-          /* make stack trace printing start from the right place */
-	  ccontext.frame_end_sp[-1] = (ulong)eip;
+	  ccontext.frame_end_sp = (ulong *)GET_SP(scp);
+	  ccontext.frame_end_bp = (ulong *)GET_BP(scp);
+          /* Make stack trace printing start from the right place.
+             1 is subtracted in error.c as other PCs are return addresses */
+	  ccontext.frame_end_sp[-1] = (ulong)pc + 1;
 	  runtime_error(error_bad_type);
 	}
       /* bref and bset */
-      if (eip >= (ubyte *)bref && eip < (ubyte *)bwglobal)
+      if (pc >= (uint8_t *)bref && pc < (uint8_t *)bwglobal)
 	{
-	  ccontext.frame_end_sp = (ulong *)GETREG(scp, esp, ESP) + 1;
-	  ccontext.frame_end_bp = (ulong *)GETREG(scp, ebp, EBP);
-          bool is_set = eip >= (ubyte *)bset;
+	  ccontext.frame_end_sp = (ulong *)GET_SP(scp) + 1;
+	  ccontext.frame_end_bp = (ulong *)GET_BP(scp);
+          bool is_set = pc >= (uint8_t *)bset;
           if (is_set)
-            set_runtime_error(error_bad_type,
-                              (value)GETREG(scp, eax, EAX),
-                              (value)GETREG(scp, ecx, ECX),
-                              (value)GETREG(scp, edx, EDX));
+            set_bad_type_error((value)GET_ARG0(scp),
+                               (value)GET_ARG1(scp),
+                               (value)GET_ARG2(scp));
           else
-            ref_runtime_error(error_bad_type,
-                              (value)GETREG(scp, eax, EAX),
-                              (value)GETREG(scp, ecx, ECX));
+            ref_bad_type_error((value)GET_ARG0(scp),
+                               (value)GET_ARG1(scp));
 	}
       /* bcall */
-      if (eip >= (ubyte *)bcall && eip < (ubyte *)bcall_secure)
+      if (pc >= (uint8_t *)bcall && pc < (uint8_t *)bcall_secure)
 	{
-	  ccontext.frame_end_sp = (ulong *)GETREG(scp, esp, ESP) + 1;
-	  ccontext.frame_end_bp = (ulong *)GETREG(scp, ebp, EBP);
+	  ccontext.frame_end_sp = (ulong *)GET_SP(scp) + 1;
+	  ccontext.frame_end_bp = (ulong *)GET_BP(scp);
 	  runtime_error(error_bad_function);
 	}
     }
@@ -415,9 +467,9 @@ static void catchsegv(int sig, struct sigcontext scp)
 }
 #endif
 
-#endif  /* i386 && !NOCOMPILER */
+#endif  /* (__i386__ || __x86_64__) && !NOCOMPILER */
 
-void flag_check_failed(const struct primitive_ext *op, const char *name)
+void flag_check_failed(const struct prim_op *op, const char *name)
 {
   abort();
 }
@@ -435,10 +487,9 @@ void runtime_init(void)
 #endif
 #endif
 
-#if defined(i386) && !defined(NOCOMPILER)
+#if (defined __i386__ || defined __x86_64__) && !defined NOCOMPILER
 #ifdef SA_SIGINFO
   {
-    static char my_signal_stack[MINSIGSTKSZ + 8 * 1024];
     stack_t my_stack = {
       .ss_sp    = my_signal_stack,
       .ss_flags = 0,

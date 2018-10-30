@@ -41,7 +41,7 @@ enum module_status module_status(const char *name);
      module_protected: module loaded & protected
 */
 
-void module_set(const char *name, enum module_status status, int seclev);
+void module_set(const char *name, enum module_status status, seclev_t seclev);
 /* Requires: status != module_unloaded
    Effects: Sets module status after load attempt
 */
@@ -54,16 +54,6 @@ bool module_unload(const char *name);
      Sets to null all variables that belonged to name, and resets their status
      to var_normal
    Returns: false if name was protected
-*/
-
-enum module_status module_load(const char *name);
-/* Effects: Attempts to load module name by calling mudlle hook
-     Error/warning messages are sent to muderr
-     Sets erred to true in case of error
-     Updates module status
-   Modifies: erred
-   Requires: module_status(name) == module_unloaded
-   Returns: New module status
 */
 
 enum module_status module_require(const char *name);

@@ -31,7 +31,7 @@
 struct locals_list
 {
   struct locals_list *next;
-  uword index;
+  uint16_t index;
   struct vlist *locals;
   bool statics;
 };
@@ -41,8 +41,8 @@ struct env_stack
   struct fncode *fn;
   struct env_stack *next, *prev;
   struct locals_list *locals;
-  uword size, max_size;		/* Current & max length of locals */
-  uword loop_depth;             /* Counts loop layers */
+  uint16_t size, max_size;      /* Current & max length of locals */
+  uint16_t loop_depth;          /* Counts loop layers */
   struct variable_list *closure;
 };
 
@@ -63,7 +63,7 @@ static struct variable_list *new_varlist(struct alloc_block *heap,
 }
 
 static struct locals_list *new_locals_list(struct alloc_block *heap,
-                                           struct vlist *vars, uword idx,
+                                           struct vlist *vars, uint16_t idx,
                                            struct locals_list *next,
                                            bool statics)
 {
@@ -77,15 +77,6 @@ static struct locals_list *new_locals_list(struct alloc_block *heap,
   return newp;
 }
 
-static uword vlist_length(struct vlist *scan)
-{
-  uword nlocals = 0;
-
-  for (; scan; scan = scan->next) nlocals++;
-
-  return nlocals;
-}
-
 void env_reset(void)
 {
   env_stack = NULL;
@@ -95,7 +86,7 @@ void env_push(struct vlist *locals, struct fncode *fn)
 {
   struct env_stack *newp = allocate(fnmemory(fn), sizeof *newp);
 
-  uword nlocals = vlist_length(locals);
+  uint16_t nlocals = vlist_length(locals);
   *newp = (struct env_stack){
     .fn       = fn,
     .next     = env_stack,
@@ -109,7 +100,7 @@ void env_push(struct vlist *locals, struct fncode *fn)
   env_stack = newp;
 }
 
-struct variable_list *env_pop(uword *nb_locals)
+struct variable_list *env_pop(uint16_t *nb_locals)
 {
   struct variable_list *closure = env_stack->closure;
 
@@ -119,7 +110,7 @@ struct variable_list *env_pop(uword *nb_locals)
   return closure;
 }
 
-void env_block_push(struct vlist *locals, bool statics)
+bool env_block_push(struct vlist *locals, bool statics)
 {
   /* Add locals */
   env_stack->locals = new_locals_list(fnmemory(env_stack->fn), locals,
@@ -127,17 +118,22 @@ void env_block_push(struct vlist *locals, bool statics)
                                       statics);
 
   /* Update size info, clears vars if necessary */
-  uword nsize = env_stack->size + vlist_length(locals);
-  uword last_set = nsize;
+  unsigned nsize = env_stack->size + vlist_length(locals);
+  if (nsize > MAX_LOCAL_VARS)
+    return false;
+
+  uint16_t last_set = nsize;
   if (env_stack->max_size < nsize)
     {
       if (env_stack->loop_depth == 0)
         last_set = env_stack->max_size;
       env_stack->max_size = nsize;
     }
-  for (uword i = env_stack->size; i < last_set; i++)
+  for (uint16_t i = env_stack->size; i < last_set; i++)
     ins1(op_clear_local, i, env_stack->fn);
   env_stack->size = nsize;
+
+  return true;
 }
 
 void env_block_pop(void)

@@ -19,6 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "mudlle-config.h"
+
 #include <string.h>
 #include <stdlib.h>
 
@@ -31,6 +33,7 @@
 #include "mcompile.h"
 #include "module.h"
 #include "mvalues.h"
+#include "print.h"
 #include "strbuf.h"
 #include "tree.h"
 #include "utils.h"
@@ -41,18 +44,18 @@ struct glist {
   struct glist *next;
   ulong n;
   bool used;
-  int lineno;
+  struct loc loc;
 };
 
-static struct glist *new_glist(struct alloc_block *heap, ulong n, int lineno,
-                               struct glist *next)
+static struct glist *new_glist(struct alloc_block *heap, ulong n,
+                               const struct loc *loc, struct glist *next)
 {
   struct glist *newp = allocate(heap, sizeof *newp);
   *newp = (struct glist){
     .next = next,
-    .n = n,
+    .n    = n,
     .used = false,
-    .lineno = lineno
+    .loc  = *loc
   };
 
   return newp;
@@ -81,20 +84,20 @@ static struct string *this_module;
 /* A list of imported modules */
 struct mlist {
   struct mlist *next;
-  const char *name;
+  struct vlist *var;
   enum module_status status;
   bool used;
 };
 
 static struct mlist *imported_modules;
 
-static struct mlist *new_mlist(struct alloc_block *heap, const char *name,
+static struct mlist *new_mlist(struct alloc_block *heap, struct vlist *var,
                                enum module_status status, struct mlist *next)
 {
   struct mlist *newp = allocate(heap, sizeof *newp);
   *newp = (struct mlist){
     .next   = next,
-    .name   = name,
+    .var    = var,
     .status = status,
     .used   = false
   };
@@ -107,7 +110,7 @@ static enum module_status imported(const char *name, int do_mark)
 */
 {
   for (struct mlist *mods = imported_modules; mods; mods = mods->next)
-    if (strcasecmp(mods->name, name) == 0)
+    if (strcasecmp(mods->var->var, name) == 0)
       {
 	if (do_mark)
 	  mods->used = 1;
@@ -119,7 +122,7 @@ static enum module_status imported(const char *name, int do_mark)
 
 static struct mfile *current_mfile;
 
-bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
+bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
 /* Effects: Start processing module f:
      - unload f
      - load required modules
@@ -136,7 +139,6 @@ bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
 
   struct mlist *lmodules = NULL;
 
-  yylineno = 0;
   if (f->name)
     {
       if (module_status(f->name) == module_loaded
@@ -157,12 +159,12 @@ bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
       if (mstatus < module_loaded)
 	{
 	  if (mstatus == module_loading)
-	    log_error("loop in requires of %s", mods->var);
+	    log_error(&mods->loc, "loop in requires of %s", mods->var);
 	  else
-	    log_error("failed to load %s", mods->var);
+	    log_error(&mods->loc, "failed to load %s", mods->var);
           goto early_errout;
 	}
-      lmodules = new_mlist(heap, mods->var, mstatus, lmodules);
+      lmodules = new_mlist(heap, mods, mstatus, lmodules);
     }
 
   current_mfile = f;
@@ -179,35 +181,34 @@ bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
   /* Change status of variables */
   for (struct vlist *defines = f->defines; defines; defines = defines->next)
     {
-      yylineno = defines->lineno;
-
       ulong n = global_lookup(defines->var);
       struct string *omod;
       enum vstatus ostatus = module_vstatus(n, &omod);
 
       if (ostatus == var_system_write)
-        log_error("cannot define %s: cannot be written from mudlle",
+        log_error(&defines->loc,
+                  "cannot define %s: cannot be written from mudlle",
                   defines->var);
       else if ((ostatus == var_write && seclev < SECLEVEL_GLOBALS)
                || ostatus == var_system_write)
-	log_error("cannot define %s: exists and is writable", defines->var);
+	log_error(&defines->loc,
+                  "cannot define %s: exists and is writable", defines->var);
       else if (!module_vset(n, var_module, this_module))
-        log_error("cannot define %s: belongs to module %s", defines->var,
+        log_error(&defines->loc,
+                  "cannot define %s: belongs to module %s", defines->var,
                   omod->str);
       else if (ostatus == var_write)
- 	compile_warning("%s was writable", defines->var);
+ 	compile_warning(&defines->loc, "%s was writable", defines->var);
 
-      definable = new_glist(heap, n, defines->lineno, definable);
+      definable = new_glist(heap, n, &defines->loc, definable);
     }
 
   for (struct vlist *writes = f->writes; writes; writes = writes->next)
     {
-      yylineno = writes->lineno;
-
       ulong n = global_lookup(writes->var);
 
       if (in_glist(n, definable, false))
-        log_error("cannot write and define %s", writes->var);
+        log_error(&writes->loc, "cannot write and define %s", writes->var);
 
       if (!module_vset(n, var_write, NULL))
 	{
@@ -216,14 +217,17 @@ bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
 	  switch (vs)
 	    {
 	    case var_system_write:
-	      log_error("cannot write %s from mudlle", writes->var);
+	      log_error(&writes->loc,
+                        "cannot write %s from mudlle", writes->var);
 	      break;
 	    case var_system_mutable:
-              compile_warning("%s is always writable", writes->var);
+              compile_warning(&writes->loc, "%s is always writable",
+                              writes->var);
               break;
 	    case var_module:
-	      assert(TYPE(belongs, type_string));
-	      log_error("cannot write %s: belongs to module %s", writes->var,
+	      assert(TYPE(belongs, string));
+	      log_error(&writes->loc,
+                        "cannot write %s: belongs to module %s", writes->var,
 			belongs->str);
 	      break;
             case var_normal:
@@ -233,38 +237,32 @@ bool mstart(struct alloc_block *heap, struct mfile *f, int seclev)
           continue;
 	}
 
-      writable = new_glist(heap, n, f->lineno, writable);
+      writable = new_glist(heap, n, &f->loc, writable);
     }
 
   for (struct vlist *reads = f->reads; reads; reads = reads->next)
     {
-      yylineno = reads->lineno;
-
       ulong n = global_lookup(reads->var);
 
       if (in_glist(n, definable, false))
-        log_error("cannot read and define %s", reads->var);
+        log_error(&reads->loc, "cannot read and define %s", reads->var);
 
-      readable = new_glist(heap, n, reads->lineno, readable);
+      readable = new_glist(heap, n, &reads->loc, readable);
     }
 
   for (struct vlist *statics = f->statics; statics; statics = statics->next)
     {
-      yylineno = statics->lineno;
-
       ulong n;
       if (!global_exists(statics->var, &n))
         continue;
 
       if (in_glist(n, definable, false))
-        log_error("cannot define static %s", statics->var);
+        log_error(&statics->loc, "cannot define static %s", statics->var);
       if (in_glist(n, writable, false))
-        log_error("cannot write static %s", statics->var);
+        log_error(&statics->loc, "cannot write static %s", statics->var);
       if (in_glist(n, readable, false))
-        log_error("cannot read static %s", statics->var);
+        log_error(&statics->loc, "cannot read static %s", statics->var);
     }
-
-  yylineno = 0;
 
   if (erred)
     goto errout;
@@ -284,7 +282,8 @@ void mstop(struct mfile *f)
   current_mfile = NULL;
 }
 
-void mrecall(ulong n, const char *name, struct fncode *fn)
+void mrecall(const struct loc *loc, ulong n, const char *name,
+             struct fncode *fn)
 /* Effects: Generate code to recall variable n
 */
 {
@@ -312,15 +311,16 @@ void mrecall(ulong n, const char *name, struct fncode *fn)
             }
         }
       else if (!all_readable && imported(mod->str, 1) == module_unloaded)
-        log_error("read of global %s (module %s)", name, mod->str);
+        log_error(loc, "read of global %s (module %s)", name, mod->str);
     }
   else if (!all_readable)
-    log_error("read of global %s", name);
+    log_error(loc, "read of global %s", name);
 
-   ins2(op_recall + vclass_global, n, fn);
+   ins2(op_recall_global, n, fn);
 }
 
-void mexecute(ulong n, const char *name, int count, struct fncode *fn)
+void mexecute(const struct loc *loc, ulong n, const char *name, int count,
+              struct fncode *fn)
 /* Effects: Generates code to call function in variable n, with count
      arguments
 */
@@ -348,59 +348,73 @@ void mexecute(ulong n, const char *name, int count, struct fncode *fn)
 
           imported(mod->str, 1);
 
-          if (TYPE(gvar, type_primitive))
+          if (TYPE(gvar, primitive))
             {
-              if (count >= 1 && count <= 2 &&
-                  ((struct primitive *)gvar)->op->nargs == count)
+              if (count >= 1 && count <= 2
+                  && ((struct primitive *)gvar)->op->nargs == count)
                 {
-                  if (count == 1) ins2(op_execute_primitive1, n, fn);
-                  else ins2(op_execute_primitive2, n, fn);
+                  if (count == 1)
+                    ins2(op_execute_primitive_1arg, n, fn);
+                  else
+                    ins2(op_execute_primitive_2arg, n, fn);
                 }
               else
                 {
                   /* Could merge, but can't be bothered... */
-                  ins2(op_recall + vclass_global, n, fn);
-                  ins1(op_execute_primitive, count, fn);
+                  ins2(op_recall_global, n, fn);
+                  if (count <= ARG1_MAX)
+                    ins1(op_execute_primitive, count, fn);
+                  else
+                    ins2(op_execute_primitive2, count, fn);
                 }
               return;
             }
 
-          if (TYPE(gvar, type_secure))
+          if (TYPE(gvar, secure))
             {
               /* Could merge, but can't be bothered... */
-              ins2(op_recall + vclass_global, n, fn);
-              ins1(op_execute_secure, count, fn);
+              ins2(op_recall_global, n, fn);
+              if (count <= ARG1_MAX)
+                ins1(op_execute_secure, count, fn);
+              else
+                ins2(op_execute_secure2, count, fn);
               return;
             }
 
-          if (TYPE(gvar, type_varargs))
+          if (TYPE(gvar, varargs))
             {
               /* Could merge, but can't be bothered... */
-              ins2(op_recall + vclass_global, n, fn);
-              ins1(op_execute_varargs, count, fn);
+              ins2(op_recall_global, n, fn);
+              if (count <= ARG1_MAX)
+                ins1(op_execute_varargs, count, fn);
+              else
+                ins2(op_execute_varargs2, count, fn);
               return;
             }
         }
       else if (!all_readable && imported(mod->str, 1) == module_unloaded)
-        log_error("read of global %s (module %s)", name, mod->str);
+        log_error(loc, "read of global %s (module %s)", name, mod->str);
     }
   else if (!all_readable)
-    log_error("read of global %s", name);
+    log_error(loc,"read of global %s", name);
 
  skip_checks:
   if (count == 1)
-    ins2(op_execute_global1, n, fn);
+    ins2(op_execute_global_1arg, n, fn);
   else if (count == 2)
-    ins2(op_execute_global2, n, fn);
+    ins2(op_execute_global_2arg, n, fn);
   else
     {
       /* Could have an op_execute_global */
-      ins2(op_recall + vclass_global, n, fn);
-      ins1(op_execute, count, fn);
+      ins2(op_recall_global, n, fn);
+      if (count <= ARG1_MAX)
+        ins1(op_execute, count, fn);
+      else
+        ins2(op_execute2, count, fn);
     }
 }
 
-bool mwritable(ulong n, const char *name)
+bool mwritable(const struct loc *loc, ulong n, const char *name)
 {
   if (all_writable || in_glist(n, writable, true))
     {
@@ -411,11 +425,12 @@ bool mwritable(ulong n, const char *name)
     }
   if (GMUTABLE(n))
     return true;
-  log_error("write of global %s", name);
+  log_error(loc, "write of global %s", name);
   return false;
 }
 
-void massign(ulong n, const char *name, struct fncode *fn)
+void massign(const struct loc *loc, ulong n, const char *name,
+             struct fncode *fn)
 /* Effects: Generate code to assign to variable n
 */
 {
@@ -434,27 +449,27 @@ void massign(ulong n, const char *name, struct fncode *fn)
 	ins2(op_define, n, fn);
       }
     else
-      log_error("write of global %s (module %s)", name, mod->str);
-  else if (mwritable(n, name))
-    ins2(op_assign + vclass_global, n, fn);
+      log_error(loc, "write of global %s (module %s)", name, mod->str);
+  else if (mwritable(loc, n, name))
+    ins2(op_assign_global, n, fn);
 }
 
-void mwarn_module(int seclev, struct block *b)
+void mwarn_module(seclev_t seclev, struct block *b)
 {
   assert(current_mfile != NULL);
 
   for (struct mlist *ml = imported_modules; ml; ml = ml->next)
     if (!ml->used)
-      warning_line(b->filename, b->nicename, 0,
-                   "symbols from required module %s were never used",
-                   ml->name);
+      warning_loc(b->filename, b->nicename, &ml->var->loc,
+                  "symbols from required module %s were never used",
+                  ml->var->var);
 
   for (struct glist *gl = readable; gl; gl = gl->next)
     {
       if (!gl->used)
-        warning_line(b->filename, b->nicename, gl->lineno,
-                     "readable global %s was never read",
-                     GNAME(gl->n)->str);
+        warning_loc(b->filename, b->nicename, &gl->loc,
+                    "readable global %s was never read",
+                    GNAME(gl->n)->str);
       struct string *belongs;
       if (module_vstatus(gl->n, &belongs) == var_module)
         {
@@ -462,27 +477,28 @@ void mwarn_module(int seclev, struct block *b)
           struct strbuf sblev = SBNULL;
           if (mlev < seclev)
             {
-                sb_printf(&sblev, " (lvl %d)", mlev);
+              sb_addstr(&sblev, " (lvl ");
+              sb_add_seclevel(&sblev, mlev);
+              sb_addstr(&sblev, ")");
             }
-          warning_line(b->filename, b->nicename, gl->lineno,
-                       "reads global variable %s defined in %s%s",
-                       GNAME(gl->n)->str,
-                       belongs->str, sb_str(&sblev));
+          warning_loc(b->filename, b->nicename, &gl->loc,
+                      "reads global variable %s defined in %s%s",
+                      GNAME(gl->n)->str, belongs->str, sb_str(&sblev));
           sb_free(&sblev);
         }
     }
 
   for (struct glist *gl = writable; gl; gl = gl->next)
     if (!gl->used)
-      warning_line(b->filename, b->nicename, gl->lineno,
-                   "writable global %s was never written",
-                   GNAME(gl->n)->str);
+      warning_loc(b->filename, b->nicename, &gl->loc,
+                  "writable global %s was never written",
+                  GNAME(gl->n)->str);
 
   for (struct glist *gl = definable; gl; gl = gl->next)
     if (!gl->used)
-      warning_line(b->filename, b->nicename, gl->lineno,
-                   "definable variable %s was never defined",
-                   GNAME(gl->n)->str);
+      warning_loc(b->filename, b->nicename, &gl->loc,
+                  "definable variable %s was never defined",
+                  GNAME(gl->n)->str);
 }
 
 void mcompile_init(void)

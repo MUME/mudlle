@@ -37,8 +37,8 @@
 #undef exit
 #undef realloc
 
-ubyte *posgen0, *endgen0, *datagen0;
-ubyte *startgen1, *endgen1, *datagen1;
+uint8_t *posgen0, *endgen0, *datagen0;
+uint8_t *startgen1, *endgen1, *datagen1;
 
 #define MAXNAME 32
 
@@ -65,18 +65,18 @@ void load_profile_data(void)
   /* Read GC data */
   fd = open("lib/mudlle-memory.dump", O_RDONLY);
 
-  if (read(fd, &startgen1, sizeof startgen1) != sizeof startgen1 ||
-      read(fd, &endgen1, sizeof endgen1) != sizeof endgen1 ||
-      startgen1 > endgen1)
+  if (read(fd, &startgen1, sizeof startgen1) != sizeof startgen1
+      || read(fd, &endgen1, sizeof endgen1) != sizeof endgen1
+      || startgen1 > endgen1)
     {
       perror("read data");
       exit(2);
     }
   datagen1 = malloc(endgen1 - startgen1);
-  if (read(fd, datagen1, endgen1 - startgen1) != endgen1 - startgen1 ||
-      read(fd, &posgen0, sizeof posgen0) != sizeof posgen0 ||
-      read(fd, &endgen0, sizeof endgen0) != sizeof endgen0 ||
-      posgen0 > endgen0)
+  if (read(fd, datagen1, endgen1 - startgen1) != endgen1 - startgen1
+      || read(fd, &posgen0, sizeof posgen0) != sizeof posgen0
+      || read(fd, &endgen0, sizeof endgen0) != sizeof endgen0
+      || posgen0 > endgen0)
     {
       perror("read data");
       exit(2);
@@ -94,7 +94,7 @@ void *cp(void *ptr)
 /* Returns: ptr converted to the current address of generations 0 & 1
 */
 {
-  ubyte *p = ptr;
+  uint8_t *p = ptr;
 
   if (p >= posgen0 && p < endgen0) return datagen0 + (p - posgen0);
   else if (p >= startgen1 && p < endgen1) return datagen1 + (p - startgen1);
@@ -111,7 +111,7 @@ int order_primitives(const void *_p1, const void *_p2)
   return (int)(((struct pp *)_p2)->count - ((struct pp *)_p1)->count);
 }
 
-static ubyte *primitive_scan(ubyte *ptr, ubyte *end)
+static uint8_t *primitive_scan(uint8_t *ptr, uint8_t *end)
 {
   struct obj *obj;
   struct primitive *op;
@@ -135,7 +135,7 @@ static ubyte *primitive_scan(ubyte *ptr, ubyte *end)
 
 void profile_primitives(int show_unused)
 {
-  ubyte *scan, *end0 = datagen0 + (endgen0 - posgen0),
+  uint8_t *scan, *end0 = datagen0 + (endgen0 - posgen0),
     *end1 = datagen1 + (endgen1 - startgen1);
   int i;
 
@@ -192,7 +192,7 @@ int order_mudlle_ratio(const void *_p1, const void *_p2)
   return ((struct pm *)_p2)->ratio - ((struct pm *)_p1)->ratio;
 }
 
-static ubyte *mudlle_scan(ubyte *ptr, ubyte *end, int show_unused)
+static uint8_t *mudlle_scan(uint8_t *ptr, uint8_t *end, int show_unused)
 {
   struct obj *obj;
 
@@ -231,7 +231,7 @@ static ubyte *mudlle_scan(ubyte *ptr, ubyte *end, int show_unused)
 
 void profile_mudlle(int show_unused, int sort_method)
 {
-  ubyte *scan, *end0 = datagen0 + (endgen0 - posgen0),
+  uint8_t *scan, *end0 = datagen0 + (endgen0 - posgen0),
     *end1 = datagen1 + (endgen1 - startgen1);
   int i;
 

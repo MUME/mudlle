@@ -37,11 +37,22 @@ defines
   mc:var_make_closure, mc:var_make_kglobal, mc:v_global_define, mc:v_function,
   mc:v_fvalue, mc:v_static, mc:v_sparent,
   mc:in_reg, mc:get_reg,
-  mc:reset_var_cache
-reads mc:fname
+  mc:reset_var_cache,
 
+  mc:vl_var, mc:vl_typeset, mc:vl_loc,
+
+  mc:no_loc, mc:maybe_set_loc, mc:set_loc, mc:get_loc,
+  mc:loc_line, mc:loc_column
+
+reads mc:fname
 [
 // Variable handling.
+
+// Variable lists are lists of vector(name/var, typeset, (line . column)).
+// phase1 changes name into a variable (see below)
+mc:vl_var = 0;                  // name from the parser
+mc:vl_typeset = 1;
+mc:vl_loc = 2;
 
 // Variables are represented by a vector, as follows:
 // Variable structure:
@@ -110,6 +121,9 @@ mc:v_function = 6;              // local function
 // these are always resolved by phase1
 mc:v_static = 7;
  mc:v_sparent = 2;               // corresponding local/closure
+
+mc:no_loc = '(-1 . -1);
+
 [
   | globals, kglobals, dglobals, vindex, make_global, string_cache |
 
@@ -125,14 +139,15 @@ mc:v_static = 7;
   mc:reset_var_cache();
 
   make_global =
-    fn (globals, type)
-      fn (name, n)
+    fn (table globals, int type)
+      fn (string name, n)
 	[
 	  | gv |
 
 	  gv = globals[name];
 	  if (gv != null)
 	    [
+              assert(vector?(gv));
 	      gv[mc:v_uses] = null; // reset in case of bug
 	      gv // reuse previously created global var
 	    ]
@@ -189,35 +204,35 @@ mc:v_static = 7;
       vector(mc:v_closure, name, parent, ++vindex, false, null, false);
     ];
 
-  mc:var_base = fn "var1 -> var2. Returns the real local variable of closure var var1" (v)
+  mc:var_base = vector fn "var1 -> var2. Returns the real local variable of closure var var1" (vector v)
     [
       while (v[mc:v_class] == mc:v_closure)
         v = v[mc:v_cparent];
       v
     ];
 
-  mc:var_value = fn "var -> x. Returns value of constant variable var, or null for non-consts." (v)
+  mc:var_value = fn "var -> x. Returns value of constant variable var, or null for non-consts." (vector v)
     if (v[mc:v_class] == mc:v_constant)
       v[mc:v_kvalue]
     else
       null;
 
-  mc:var_const_value = fn "var -> x. Returns value of constant variable var" (v)
+  mc:var_const_value = fn "var -> x. Returns value of constant variable var" (vector v)
     v[mc:v_kvalue];
 
-  mc:alias_base = fn "var1 -> var2. Returns the variable var1 is aliased to" (v)
+  mc:alias_base = fn "var1 -> var2. Returns the variable var1 is aliased to" (vector v)
     [
       | n |
 
-      while ((n = v[mc:v_alias]) != null) v = n;
+      while (vector?(n = v[mc:v_alias])) v = n;
       v
     ];
 
-  mc:alias = fn "var1 var2 -> . Makes var1 an alias for var2" (v1, v2)
+  mc:alias = fn "var1 var2 -> . Makes var1 an alias for var2" (vector v1, vector v2)
     v1[mc:v_alias] = v2;
 
 
-  mc:svar = fn (var)
+  mc:svar = fn (vector var)
     [
       | class, base, loc |
 
@@ -262,12 +277,23 @@ mc:v_static = 7;
         base
     ];
 
-  mc:in_reg = fn (var)
+  mc:in_reg = fn (vector var)
     var[mc:v_location] && var[mc:v_location][mc:v_lclass] == mc:v_lregister;
 
-  mc:get_reg = fn (var)
+  mc:get_reg = fn (vector var)
     if (mc:in_reg(var)) var[mc:v_location][mc:v_lrnumber]
     else -1;
+];
+
+[
+  mc:loc_line = car;
+  mc:loc_column = cdr;
+
+  | cloc |
+  cloc = mc:no_loc;
+  mc:set_loc = fn (pair p) cloc = p;
+  mc:maybe_set_loc = fn (pair p) if (mc:loc_line(p) > 0) cloc = p;
+  mc:get_loc = fn () cloc;
 ];
 
 ];

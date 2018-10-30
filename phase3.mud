@@ -20,13 +20,12 @@
  */
 
 library phase3 // optimisation
-requires system, sequences, dlist, misc, graph,
-  compiler, vars, ins3, flow, optimise
+requires compiler, dlist, flow, graph, ins3, misc, optimise, sequences, vars
 
 defines mc:phase3, mc:myself
 
 reads mc:verbose, mc:infer_types
-writes mc:lineno, mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
+writes mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 
 // VARIABLE CLASSES: Some notes on their effects on optimisation
 //   A function f uses:
@@ -200,16 +199,14 @@ writes mc:lineno, mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 	      nlocal = local[mc:v_number];
 
 	      graph_nodes_exists?(fn (n) [
-                | indirect |
-                indirect = false;
-                mc:scan_ambiguous(fn (il, ambiguous, x) [
+                mc:scan_ambiguous(fn (il, ambiguous, indirect) [
                   if (!indirect &&
                       nlocal == il[mc:il_defined_var] &&
                       bit_set?(ambiguous, nlocal))
-                    indirect = local[mc:v_indirect] = true
-                ], null, graph_node_get(n), mc:new_varset(ifn),
+                    indirect = local[mc:v_indirect] = true;
+                  indirect
+                ], false, graph_node_get(n), mc:new_varset(ifn),
                                   mc:f_ambiguous_rw);
-                indirect
               ], cdr(ifn[mc:c_fvalue]));
 	    ];
 
@@ -235,7 +232,7 @@ writes mc:lineno, mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 	      | il, ins, args, dvar, ndvar, class |
 
 	      il = dget(scan);
-              mc:lineno = il[mc:il_lineno];
+              mc:set_loc(il[mc:il_loc]);
 	      ins = il[mc:il_ins];
 	      class = ins[mc:i_class];
 	      if (ndvar = il[mc:il_defined_var]) dvar = vmap[ndvar]

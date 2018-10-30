@@ -20,9 +20,8 @@
  */
 
 library dlist // Doubly-linked, circular list
-requires system
-defines dcons!, dremove!, dmerge!, dnext, dsnext, dprev, dsprev,
-  dget, dset!, dlength, dlist_to_list
+defines dcons!, dremove!, dmerge!, dnext, dsnext, dprev, dsprev, dget, dset!,
+  dlength, dlist_to_list
 [
 // representation uses a triple cell: [ contents next prev ]
 // an empty list is represented by null

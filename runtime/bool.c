@@ -22,7 +22,7 @@
 #include <string.h>
 
 #include "bool.h"
-#include "runtime.h"
+#include "prims.h"
 
 TYPEDOP(not, "!", "`b1 -> `b2. Returns the logical negation of `b1.",
         1, (value v),

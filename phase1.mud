@@ -20,10 +20,10 @@
  */
 
 library phase1 // Phase 1: name resolution
-requires system, sequences, dlist, misc, compiler, vars, ins3
+requires compiler, dlist, ins3, misc, sequences, vars
 defines mc:phase1
-reads mc:this_module, mc:describe_seclev
-writes mc:this_function, mc:lineno
+reads mc:this_module, mc:describe_seclev, mc:erred
+writes mc:this_function
 
 // Takes a parse tree as returned by mudlle_parse, and makes the following
 // changes:
@@ -69,13 +69,14 @@ writes mc:this_function, mc:lineno
     env_global_prefix, assv, warn_bad_module_variables,
     ksymbol_get, kget_static, kmake_variable_ref, ksymbol_set!,
     kmake_symbol_ref,
-    es_blocks, es_args, es_closure, es_fn |
+    es_blocks, es_nlocals, es_args, es_closure, es_fn |
 
   // environment stack (topenv) indices
   es_blocks  = 0;
   es_args    = 1;
   es_closure = 2;               // closure vars
   es_fn      = 3;
+  es_nlocals = 4;
 
   ksymbol_get        = mc:make_kglobal("symbol_get");
   ksymbol_set!       = mc:make_kglobal("symbol_set!");
@@ -83,7 +84,7 @@ writes mc:this_function, mc:lineno
   kmake_variable_ref = mc:make_kglobal("make_variable_ref");
   kmake_symbol_ref   = mc:make_kglobal("make_symbol_ref");
 
-  comp_null = list(vector(mc:c_recall, -1, mc:var_make_constant(null)));
+  comp_null = list(vector(mc:c_recall, mc:no_loc, mc:var_make_constant(null)));
 
   // find vector v in l, for which v[0] == n
   assv = fn (n, l)
@@ -110,11 +111,11 @@ writes mc:this_function, mc:lineno
     //   called args
     [
       | vargs |
-
       mc:this_function = f;
-      vargs = lmap(fn (v) mc:var_make_local(v[0]), f[mc:c_fargs]);
-      env = dcons!(topenv = vector(null, vargs, null, f), env);
-      env_add_block(f[mc:c_fargs], vargs);
+      vargs = f[mc:c_fargs];
+      lforeach(fn (v) v[mc:vl_var] = mc:var_make_local(v[mc:vl_var]), vargs);
+      env = dcons!(topenv = vector(null, vargs, null, f, '(0)), env);
+      env_add_block(vargs);
     ];
 
   env_toplevel? = fn ()
@@ -124,16 +125,15 @@ writes mc:this_function, mc:lineno
   // remove function at top of env and return vector of its
   // argument, local and closure vars
   env_leave_function = fn ()
-    // Types : result : [ list of var, list of var, list of var ]
+    // Types : result : list of args . list of locs
     // Modifies: env, topenv
     // Requires: All blocks of the top-level function must be exited
     // Effects: Pops the top level function from the environment stack
     // Returns: args, where args is a list of variables representing the
     //   function's parameters
     [
-      | oldtop |
-
-      oldtop = topenv;
+      | args |
+      args = topenv[es_args];
       env = dremove!(env, env);
       if (env != null)
 	[
@@ -143,7 +143,7 @@ writes mc:this_function, mc:lineno
       else
         mc:this_function = null;
 
-      oldtop[es_args]
+      args
     ];
 
   env_enter_block = fn (locals, top?)
@@ -154,29 +154,27 @@ writes mc:this_function, mc:lineno
     //   specified local variables.
     // Returns: a list of components initialising the variables to null
     [
-      | vlocals |
-      vlocals = lmap(fn (v) mc:var_make_local(v[0]), locals);
+      lforeach(fn (v) v[mc:vl_var] = mc:var_make_local(v[mc:vl_var]), locals);
       if (top?)
-        vlocals = lmap!(mc:var_make_static, vlocals);
-      env_add_block(locals, vlocals);
-      lmap(fn (vl) [
-        | line, cl |
-        line = car(locals)[2];
-        locals = cdr(locals);
+        lforeach(fn (v) v[mc:vl_var] = mc:var_make_static(v[mc:vl_var]),
+                 locals);
+      env_add_block(locals);
+      lmap(fn (@[var _ loc]) [
+        | cl |
         if (top?)
           [
-            assert(vl[mc:v_class] == mc:v_static);
-            vl = vl[mc:v_sparent];
+            assert(var[mc:v_class] == mc:v_static);
+            var = var[mc:v_sparent];
             cl = list(vector(
-              mc:c_execute, line,
-              list(list(vector(mc:c_recall, line, kget_static)),
-                   list(vector(mc:c_recall, line,
-                               mc:var_make_constant(vl[mc:v_name]))))));
+              mc:c_execute, loc,
+              list(list(vector(mc:c_recall, loc, kget_static)),
+                   list(vector(mc:c_recall, loc,
+                               mc:var_make_constant(var[mc:v_name]))))));
           ]
         else
           cl = comp_null;
-        vector(mc:c_assign, line, vl, cl)
-      ], vlocals)
+        vector(mc:c_assign, loc, var, cl)
+      ], locals)
     ];
 
   env_leave_block = fn ()
@@ -185,42 +183,58 @@ writes mc:this_function, mc:lineno
     //   function
     // Effects: The top level block of the current function is exited
     [
-      table_foreach(fn (sym) [
-        | var, err |
-        var = car(symbol_get(sym));
-        err = match (var[mc:mv_used])
-          [
-            0 => "unused";
-            ,mc:muse_read => "never written";
-            ,mc:muse_write => "never read";
-            ,(mc:muse_read | mc:muse_write) => exit<function> null;
-            _ => fail();
-          ];
-        mc:lineno = var[mc:mv_lineno];
-        mc:warning("local variable %s is %s", var[mc:mv_name], err);
-      ], car(topenv[es_blocks]));
-      topenv[es_blocks] = cdr(topenv[es_blocks])
+      if (!mc:erred)
+        table_foreach(fn (sym) [
+          | var, err |
+          var = car(symbol_get(sym));
+          err = match (var[mc:mv_used])
+            [
+              0 => "unused";
+              ,mc:muse_read => "never written";
+              ,mc:muse_write => "never read";
+              ,(mc:muse_read | mc:muse_write) => exit<function> null;
+              _ => fail();
+            ];
+          mc:set_loc(var[mc:mv_loc]);
+          mc:warning("local variable %s is %s", var[mc:mv_name], err);
+        ], car(topenv[es_blocks]));
+
+      topenv[es_blocks] = cdr(topenv[es_blocks]);
+      topenv[es_nlocals] = cdr(topenv[es_nlocals]);
     ];
 
   // Add a new block of local vars
-  env_add_block = fn (names, vars)
+  env_add_block = fn (vars)
     [
-      | vtable |
+      | vtable, nv |
+
+      assert(vector?(topenv));
+
       vtable = make_table();
-      while (names != null)
+      nv = car(topenv[es_nlocals]);
+      while (vars != null)
 	[
-          | name, lineno, var |
-          @([name _ lineno] . names) = names;
-          @(var . vars) = vars;
+          | var, loc, name |
+          @([var _ loc] . vars) = vars;
           // cons(mc:mv_xxx vector, mc:v_xxx vector)
-	  vtable[name] = vector(null, name, 0, lineno) . var;
+
+          if (nv == mc:max_local_vars)
+            [
+              mc:set_loc(loc);
+              mc:error("too many local variables");
+            ];
+
+          ++nv;
+	  name = var[mc:v_name];
+	  vtable[name] = vector(null, name, 0, loc) . var;
 	];
-      topenv[es_blocks] = vtable . topenv[es_blocks]
+      topenv[es_blocks] = vtable . topenv[es_blocks];
+      topenv[es_nlocals] = nv . topenv[es_nlocals];
     ];
 
   env_global_prefix = ":";
 
-  env_lookup = fn (name, write)
+  env_lookup = vector fn (name, write)
     // Types: name : string
     //        result : var
     //	      write : boolean
@@ -314,9 +328,10 @@ writes mc:this_function, mc:lineno
       lforeach
 	(fn (required)
 	 [
-	   | name, s |
+	   | name, s, loc |
 
-	   @[name _ mc:lineno] = required;
+	   @[name _ loc] = required;
+           mc:set_loc(loc);
 	   s = module_status(name);
 
 	   if (s < module_loaded)
@@ -324,7 +339,7 @@ writes mc:this_function, mc:lineno
 	       mc:error("%s not loaded", name);
 	       all_loaded = false
 	     ];
-	   required_modules[name] = vector(s, mc:lineno, null);
+	   required_modules[name] = vector(s, mc:get_loc(), null);
 	 ],
 	 m[mc:m_requires]);
 
@@ -337,9 +352,10 @@ writes mc:this_function, mc:lineno
       definable = lmap
 	(fn (var)
 	 [
-	   | status, name, n |
+	   | status, name, n, loc |
 
-           @[name _ mc:lineno] = var;
+           @[name _ loc] = var;
+           mc:set_loc(loc);
 	   n = global_lookup(name);
 	   status = module_vstatus(n);
 
@@ -355,15 +371,16 @@ writes mc:this_function, mc:lineno
 	   else if (status == var_system_write || status == var_system_mutable)
 	     mc:error("cannot define %s in mudlle", name);
 
-	   vector(n, name, 0, mc:lineno)
+	   vector(n, name, 0, mc:get_loc())
 	 ],
 	 m[mc:m_defines]);
 
       /* writes must not belong to a module */
       writable = lreduce(fn (var, l) [
-        | status, name, n |
+        | status, name, n, loc |
 
-        @[name _ mc:lineno] = var;
+        @[name _ loc] = var;
+        mc:set_loc(loc);
         n = global_lookup(name);
         status = module_vstatus(n);
 
@@ -385,13 +402,14 @@ writes mc:this_function, mc:lineno
         if (string?(status))
           mc:warning("cannot write %s: belongs to module %s", name, status);
 
-        vector(n, name, 0, mc:lineno) . l
+        vector(n, name, 0, mc:get_loc()) . l
       ], null, m[mc:m_writes]);
 
       /* reads */
-      readable = lreduce(fn (var, l) [
-        | name, n, status |
-        @[name _ mc:lineno] = var;
+      readable = lreduce(fn (@[name _ loc], l) [
+        mc:set_loc(loc);
+
+        | n, status |
 
         n = global_lookup(name);
         status = module_vstatus(n);
@@ -405,13 +423,11 @@ writes mc:this_function, mc:lineno
             exit<function> l;
           ];
 
-        vector(global_lookup(name), name, 0, mc:lineno) . l
+        vector(global_lookup(name), name, 0, mc:get_loc()) . l
       ], null, m[mc:m_reads]);
 
       statics = m[mc:m_statics];
-      lforeach(fn (var) [
-        | name |
-        @[name _ _] = var;
+      lforeach(fn (@[name _ _]) [
         | n |
         // avoid global_lookup here as that would create a global
         n = global_table()[name];
@@ -420,7 +436,7 @@ writes mc:this_function, mc:lineno
           match (assv(n, cdr(l)))
             [
               [ _ _ _ line ] => [
-                mc:lineno = line;
+                mc:set_loc(line);
                 mc:error("cannot %s static %s", car(l), name);
               ];
             ]
@@ -460,7 +476,7 @@ writes mc:this_function, mc:lineno
       m = required_modules[mod];
       if (m == null)
 	// implicitly import m
-	required_modules[mod] = vector(module_status(mod), -1,  v . null)
+	required_modules[mod] = vector(module_status(mod), mc:no_loc, v . null)
       else if (!memq(v, m[2]))
 	m[2] = v . m[2];
       v
@@ -476,8 +492,10 @@ writes mc:this_function, mc:lineno
       v = import(mc:var_make_kglobal(name, n), mod);
       // inline integers, floats and null
       val = global_value(n);
-      if (integer?(val) || float?(val) || val == null) mc:var_make_constant(val)
-      else v
+      if (val == null || integer?(val) || float?(val))
+        mc:var_make_constant(val)
+      else
+        v
     ];
 
   mlookup = fn (name, write)
@@ -494,6 +512,17 @@ writes mc:this_function, mc:lineno
 	  // now: name is not imported
 	  if (assv(n, definable))
 	    [
+              | st |
+              st = module_vstatus(n);
+              if (string?(st) && module_status(st) == module_protected)
+                [
+                  | val |
+                  val = global_value(n);
+                  // inline simple constants in their own library
+                  if (val == null || integer?(val) || float?(val))
+                    exit<function> mc:var_make_constant(val);
+                ];
+
 	      // local define, a dglobal except at top-level
 	      if (!env_toplevel?())
 		exit<function> mc:var_make_dglobal(name, n);
@@ -563,21 +592,17 @@ writes mc:this_function, mc:lineno
   resolve_block = fn (vars, comps, top?)
     [
       | components, init |
-
       init = env_enter_block(vars, top?);
-      components = lappend(init,
-                           mappend(resolve_component, comps));
+      components = lappend(init, mappend(resolve_component, comps));
       env_leave_block();
-
       components
     ];
 
-  resolve_component = fn (c)
+  resolve_component = fn (vector c)
     [
       | class, prevline, result |
-      prevline = mc:lineno;
-      if (c[mc:c_lineno] > 0)
-	mc:lineno = c[mc:c_lineno];
+      prevline = mc:get_loc();
+      mc:maybe_set_loc(c[mc:c_loc]);
 
       class = c[mc:c_class];
       result = if (class == mc:c_assign)
@@ -591,9 +616,9 @@ writes mc:this_function, mc:lineno
             [
               var = var[mc:v_sparent];
               c = vector(
-                mc:c_execute, c[mc:c_lineno],
-                list(list(vector(mc:c_recall, c[mc:c_lineno], ksymbol_set!)),
-                     list(vector(mc:c_recall, c[mc:c_lineno], var)),
+                mc:c_execute, c[mc:c_loc],
+                list(list(vector(mc:c_recall, c[mc:c_loc], ksymbol_set!)),
+                     list(vector(mc:c_recall, c[mc:c_loc], var)),
                      val));
             ];
 
@@ -616,8 +641,8 @@ writes mc:this_function, mc:lineno
               fun = if (class == mc:c_vref) kmake_symbol_ref else ksymbol_get;
               c[mc:c_rsymbol] = var = var[mc:v_sparent];
               c[mc:c_class] = mc:c_recall;
-              c = vector(mc:c_execute, c[mc:c_lineno],
-                         list(list(vector(mc:c_recall, -1, fun)),
+              c = vector(mc:c_execute, c[mc:c_loc],
+                         list(list(vector(mc:c_recall, mc:no_loc, fun)),
                               list(c)))
             ]
           else if (vref?)
@@ -625,22 +650,24 @@ writes mc:this_function, mc:lineno
               | arg |
               if (var[mc:v_class] == mc:v_global)
                 arg = resolve_component(
-                  vector(mc:c_execute, -1,
-                         list(vector(mc:c_recall, -1,
+                  vector(mc:c_execute, mc:no_loc,
+                         list(vector(mc:c_recall, mc:no_loc,
                                      env_global_prefix + "global_lookup"),
-                              vector(mc:c_constant, -1, var[mc:v_name]))))
+                              vector(mc:c_constant, mc:no_loc,
+                                     var[mc:v_name]))))
               else
                 arg = list(c);
               c = vector(
-                mc:c_execute, c[mc:c_lineno],
-                list(list(vector(mc:c_recall, -1, kmake_variable_ref)),
+                mc:c_execute, c[mc:c_loc],
+                list(list(vector(mc:c_recall, mc:no_loc,
+                                 kmake_variable_ref)),
                      arg))
             ];
 
 	  list(c)
 	]
       else if (class == mc:c_constant)
-	list(vector(mc:c_recall, -1,
+	list(vector(mc:c_recall, mc:no_loc,
 		    mc:var_make_constant(c[mc:c_cvalue])))
       else if (class == mc:c_closure)
 	[
@@ -651,27 +678,25 @@ writes mc:this_function, mc:lineno
 	  args = env_leave_function();
 
 	  // add a "function" label
-	  components = list(vector(mc:c_labeled, -1,
+	  components = list(vector(mc:c_labeled, mc:no_loc,
 				   "function",
 				   components));
 
-	  list(vector(mc:c_closure, c[mc:c_flineno],
+	  list(vector(mc:c_closure, c[mc:c_loc],
 		      c[mc:c_freturn_typeset],
 		      c[mc:c_fhelp],
 		      args,	// parameters
 		      c[mc:c_fvarargs],
 		      components,
-		      c[mc:c_flineno],
 		      c[mc:c_ffilename],
 		      c[mc:c_fnicename],
-		      lmap(fn (v) v[1], c[mc:c_fargs]), // arg types
+                      mc:itypeset_from_typeset(c[mc:c_freturn_typeset]),
+                      false,	// noescape
 		      false,	// var name
 		      null, null, null, null, null, null, // var lists
 		      null,
 		      0,
-		      null,
-                      0,          // flags
-                      mc:itypeset_from_typeset(c[mc:c_freturn_typeset])))
+		      null))
 	]
       else if (class == mc:c_execute)
 	[
@@ -698,14 +723,14 @@ writes mc:this_function, mc:lineno
       else
         fail();
 
-      mc:lineno = prevline;
+      mc:set_loc(prevline);
       result
     ];
 
   warn_bad_module_variables = fn (int seclev)
     [
       lforeach(fn (var) [
-        mc:lineno = var[mc:mv_lineno];
+        mc:set_loc(var[mc:mv_loc]);
         if (~var[mc:mv_used] & mc:muse_read)
           mc:warning("readable global %s was never %s",
                      var[mc:mv_name],
@@ -732,24 +757,23 @@ writes mc:this_function, mc:lineno
           ]
       ], readable);
       lforeach(fn (var) [
-        mc:lineno = var[mc:mv_lineno];
+        mc:set_loc(var[mc:mv_loc]);
         if (~var[mc:mv_used] & mc:muse_write)
           mc:warning("writable global %s was never %s",
                      var[mc:mv_name],
                      if (var[mc:mv_used]) "written" else "used")
       ], writable);
-      table_foreach(fn (imp) [
-        | syms |
-        @[_ mc:lineno syms] = symbol_get(imp);
+      table_foreach(fn (@<name = [_ loc syms]>) [
+        mc:set_loc(loc);
         if (syms == null)
           mc:warning("symbols from required module %s were never used",
-                     symbol_name(imp));
+                     name);
       ], required_modules);
     ];
 
   mc:phase1 = fn (m, int seclev)
     [
-      | components, fname, nname, top_var |
+      | components, fname, nname, top_var, loc |
 
       top_var = vector(mc:v_global, "top-level");
 
@@ -758,16 +782,17 @@ writes mc:this_function, mc:lineno
 
       mstart(m, seclev);
       env_init();
-      env_enter_function(vector(mc:c_closure, -1,
-				mc:typeset_any, // return typeset
+      loc = m[mc:m_body][mc:c_loc];
+      env_enter_function(vector(mc:c_closure, loc,
+				typeset_any,    // return typeset
 				null,           // help
 				null,           // arguments
 				false,          // vararg?
 				null,           // value
-                                m[mc:m_body][mc:c_lineno], // lineno
 				fname,          // filename
 				nname,          // nicename
-				null,           // argtypes
+                                itype_any,      // return itype
+				false,		// noescape
 				top_var));      // variable name
       components = resolve_block(m[mc:m_statics], list(m[mc:m_body]), true);
       env_leave_function();
@@ -776,22 +801,20 @@ writes mc:this_function, mc:lineno
 
       // make a top-level function
       m[mc:m_body] =
-	vector(mc:c_closure, -1,
-	       mc:typeset_any,                  // return typeset
+	vector(mc:c_closure, loc,
+	       typeset_any,                     // return typeset
 	       null,                            // help
 	       null,                            // arguments
 	       false,                           // vararg?
 	       components,                      // value
-	       -1,                              // lineno
 	       fname,                           // filename
 	       nname,                           // nicename
-	       null,                            // argtypes
+	       itype_any,                       // return itypeset
+	       false,				// noescape
 	       top_var,                         // variable name
 	       null, null, null, null, null, null, // var lists
 	       null,                            // misc
 	       0,                               // # fnvars
-	       null,                            // # allvars
-               0,                               // flags
-               itype_any)
+	       null)                            // # allvars
     ];
 ];

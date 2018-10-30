@@ -20,30 +20,30 @@
  */
 
 library link // A linker.
-requires compiler, vars, system, sequences, misc
+requires compiler, misc, sequences, vars
 defines mc:prelink, mc:display_as
-reads mc:describe_seclev
+reads mc:describe_seclev, mc:compiler_mcode_version
 writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 [
 
-  | make_code, seen_code, prelink, mstart, mc_error, mc_warning, append!,
-    pmodule_name, pmodule_imports, pmodule_defines,
-    pmodule_writes, pmodule_body, prelinked_module_fields, pfn_code, pfn_help,
-    pfn_varname, pfn_filename, pfn_lineno, pfn_subfns, pfn_constants,
-    pfn_builtins, pfn_globals, pfn_kglobals, pfn_primitives,
-    pfn_rel_primitives, pfn_return_typeset, pfn_return_itype, pfn_linenos,
-    pfn_arg_typesets, pfn_seclevs,
-    pfn_flags, pfn_nicename, prelinked_function_fields,
-    check_presence, check_dependencies, dependencies,
-    depend_immutable, depend_primitive, depend_type,
-    depend_closure, depend_value, depend_vstatus, dependency,
-    check_dependency, check_present, map, foreach, pmodule_protect,
-    pmodule_class, pmodule_reads,
+  | make_code, seen_code, prelink, mstart,
+    pmodule_name, pmodule_imports, pmodule_defines, pmodule_writes,
+    pmodule_protect, pmodule_class, pmodule_reads, pmodule_body,
+    pmodule_version, prelinked_module_fields,
+    pfn_code, pfn_help, pfn_varname, pfn_filename, pfn_loc, pfn_subfns,
+    pfn_constants, pfn_builtins, pfn_globals, pfn_kglobals, pfn_kglobal_code,
+    pfn_primitives, pfn_rel_primitives, pfn_return_typeset, pfn_return_itype,
+    pfn_linenos, pfn_arguments, pfn_seclevs, pfn_flags, pfn_nicename,
+    prelinked_function_fields,
+    check_presence, check_dependencies, dependencies, depend_immutable,
+    depend_primitive, depend_type, depend_closure, depend_value,
+    depend_vstatus, dependency, check_dependency, check_present,
     set_this_filenames,
-    prelinked_fns, myassq,
-    describe_seclev |
-
-  myassq = assq;
+    prelinked_fns,
+    describe_seclev,
+    my:assq, my:lappend!, my:lforeach, my:lmap, my:mc:error, my:mc:loc_line,
+    my:mc:warning, my:mcode_version, my:vmap,
+    word_size |
 
   // Linker:
 
@@ -63,7 +63,9 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
   pmodule_reads = 5;		// read symbols (list of string)
   pmodule_writes = 6;		// written symbols (list of string)
   pmodule_body = 7;		// top-level function (prelinked function)
-  prelinked_module_fields = 8;
+  pmodule_version = 8;          // mc:arch | (mc:mcode_version << 8)
+
+  prelinked_module_fields = 9;
 
   // The dependencies for a module is the set of symbols (defines) imported
   // from modules that it requires, along with any checks on the actual values
@@ -80,39 +82,52 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
   //     if protected: list of dependencies (see end of this file)
 
   // All the functions are also transformed into a "prelinked" form:
-  pfn_code = 0;			// machine code (string)
-  pfn_help = 1;			// help (string or null)
-  pfn_varname = 2;		// varname (string or null)
-  pfn_nicename = 3;		// pretty-printed filename (string or null)
-  pfn_lineno = 4;		// line number (int)
+  pfn_code = 0;		   // machine code (string)
+  pfn_help = 1;		   // help (string or null)
+  pfn_varname = 2;	   // varname (string or null)
+  pfn_nicename = 3;	   // pretty-printed filename (string or null)
+  pfn_loc = 4;             // (line . column)
   // references (all of the form list of <info> . offset,
   // where offset is an integer offset into code
-  pfn_subfns = 5;		// sub-functions (list of pfn . offset)
-  pfn_constants = 6;		// constants (list of value . offset)
-  pfn_builtins = 7;		// builtins (list of string . offset)
-  pfn_globals = 8;		// globals (list of string . offset)
-  pfn_kglobals = 9;		// constant globals (list of string . offset)
-  pfn_primitives = 10;		// absolute prims (list of string . offset)
-  pfn_rel_primitives = 11;	// relative prims (list of string . offset)
-  pfn_seclevs = 12;	        // seclevs (list of offset)
-  pfn_return_typeset = 13;      // return typeset
-  pfn_return_itype = 14;        // return itype
-  pfn_linenos = 15;             // line number information
-  pfn_arg_typesets = 16;        // vector of arg typesets; false for vararg
-  pfn_flags = 17;               // clf_xxx flags
-  pfn_filename = 18;		// filename (string or null)
-  prelinked_function_fields = 19;
+  pfn_subfns = 5;	   // sub-functions list(pfn . offset)
+  pfn_constants = 6;	   // constants list(value . offset)
+  pfn_builtins = 7;	   // builtins list(string . offset)
+  pfn_globals = 8;	   // globals list(string . offset)
+  pfn_kglobals = 9;	   // constant globals list(string . offset)
+  pfn_kglobal_code = 10;   // constant global code list(string . offset)
+  pfn_primitives = 11;	   // absolute prims list(string . offset)
+  pfn_rel_primitives = 12; // (x86) relative prims list(string . offset)
+                           // (x64) number of PC-relative addresses after code
+  pfn_seclevs = 13;	   // seclevs list(offset)
+  pfn_return_typeset = 14; // return typeset
+  pfn_return_itype = 15;   // return itype
+  pfn_linenos = 16;        // DWARF line number information
+  pfn_arguments = 17;      // vector(name|false . typeset); name for varargs
+  pfn_flags = 18;          // clf_xxx flags
+  pfn_filename = 19;	   // filename (string or null)
+
+  prelinked_function_fields = 20;
 
   // Linking
   // -------
 
   // linkrun can unload anything, hence it should only depend on stuff in
   // system and local vars while running
-  mc_error = mc:error;
-  mc_warning = mc:warning;
-  append! = lappend!;
-  map = lmap;
-  foreach = lforeach;
+  my:assq        = assq;
+  my:lappend!    = lappend!;
+  my:lforeach    = lforeach;
+  my:lmap        = lmap;
+  my:vmap        = vmap;
+  my:mc:error    = mc:error;
+  my:mc:loc_line = mc:loc_line;
+  my:mc:warning  = mc:warning;
+
+  my:mcode_version = if (integer?(mc:compiler_mcode_version))
+    mc:compiler_mcode_version
+  else
+    mc:mcode_version;
+
+  word_size = (INTBITS + 1) / 8;
 
   describe_seclev = fn (int lev)
     if (function?(mc:describe_seclev))
@@ -122,7 +137,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 
   mc:display_as = fn "`v -> . Displays GNU assembler corresponding to prelinked object file `v." (prelink)
     [
-      | all_fn_names, all_fns, fns, print_fn, fname, sname |
+      | all_fn_names, all_fns, fns, print_fn, func_name, sname |
       all_fn_names = make_table();
 
       sname = fn (s)
@@ -137,17 +152,17 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
             ?_
         ], s);
 
-      fname = fn (f)
+      func_name = fn (f)
         [
           | p |
-          p = myassq(f, all_fns);
+          p = my:assq(f, all_fns);
           if (p)
             exit<function> cdr(p);
 
           | s, base, n |
           s = f[pfn_varname];
           s = base = if (s == null)
-            format("fn_%d", f[pfn_lineno])
+            format("fn_%d", my:mc:loc_line(f[pfn_loc]))
           else
             sname(s);
           n = 0;
@@ -161,12 +176,10 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       print_fn = fn (f)
         [
           | data |
-          data = lreduce(fn (s, d) [
-            | o |
-            @(s . o) = s;
-            if (!myassq(s, all_fns))
+          data = lreduce(fn (@(s . o), d) [
+            if (!my:assq(s, all_fns))
               fns = s . fns;
-            s = fname(s);
+            s = func_name(s);
             if (o < 0)
               [
                 s = "closure_" + s;
@@ -174,17 +187,8 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
               ];
             (s . o) . d
           ], data, f[pfn_subfns]);
-          data = lreduce(fn (c, d) [
-            | o, n |
-            @(c . o) = c;
-            if (o < 0)
-              [
-                n = fname(c);
-                o = -o
-              ]
-            else
-              n = "cst_" + type_names[typeof(c)];
-            (n . o) . d
+          data = lreduce(fn (@(c . o), d) [
+            (("cst_" + type_names[typeof(c)]) . o) . d
           ], data, f[pfn_constants]);
           data = lappend(f[pfn_builtins], data);
           data = lreduce(fn (g, d) [
@@ -195,23 +199,16 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
                 (name . 1) => "mgidx_" + name;
                 name => "glb_" + name;
               ];
-            (n . cdr(g)) . d
+            ((n . 4) . cdr(g)) . d
           ], data, f[pfn_globals]);
-          data = lreduce(fn (k, d) [
-            | o |
-            @(k . o) = k;
-            if (o < 0)
-              [
-                k = "code_" + k;
-                o = -o
-              ];
-            (k . o) . d
-          ], data, f[pfn_kglobals]);
+          data = lappend(f[pfn_kglobals], data);
+          data = lreduce(fn (@(k . o), d) [
+            (("code-" + k) . o) . d
+          ], data, f[pfn_kglobal_code]);
           data = lappend(f[pfn_primitives], data);
-          data = lappend(f[pfn_rel_primitives], data);
-          data = lreduce(fn (l, d) [
-            | o |
-            @(l . o) = l;
+          if (!integer?(f[pfn_rel_primitives]))
+            data = lappend(f[pfn_rel_primitives], data);
+          data = lreduce(fn (@(l . o), d) [
             (('["seclev" "mseclev" "maxlev"][l] . '[2 4 4][l]) . o)
               . d
           ], data, f[pfn_seclevs]);
@@ -220,29 +217,56 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 
           data = lqsort(fn (a, b) cdr(a) < cdr(b), data);
 
-          dformat(".align 16\n.globl %s\n%s:\n", fname(f), fname(f));
+          | fname |
+          fname = func_name(f);
+          dformat(".align 16\n.globl %s\n%s:\n", fname, fname);
 
-          | code |
+          | code, nextra |
           code = f[pfn_code];
-          for (|i, l| [ i = 0; l = slength(code) ]; ; )
+          nextra = if (integer?(f[pfn_rel_primitives]))
+            [
+              // pad if necessary
+              ((-slength(code) & (word_size - 1))
+               + f[pfn_rel_primitives] * ((INTBITS + 1) / 8))
+            ]
+          else
+            0;
+          for (|i, l, cl| [ i = 0; cl = slength(code); l = cl + nextra ]; ; )
             [
               | e |
               e = min(cdar(data), l);
               | prefix |
               prefix = ".byte ";
-              while (i < e)
+              <at_e> while (i < e)
                 [
-                  dformat("%s%d", prefix, code[i++]);
+                  if (i == cl)
+                    [
+                      dformat("\n.size %s, . - %s\n", fname, fname);
+                      if (nextra > 0)
+                        [
+                          dformat("\n.align %d\n", word_size);
+                          i = (i + word_size - 1) & -word_size;
+                          if (i == e)
+                            exit<at_e> null;
+                        ];
+                      prefix = ".byte ";
+                    ];
+                  dformat("%s%d", prefix, if (i < cl) code[i] else 0);
+                  ++i;
                   prefix = ", ";
                 ];
               display("\n");
               if (i == l) exit<break> null;
-              i += 4;
-              match (caar(data))
+              | arg |
+              arg = caar(data);
+              if (!pair?(arg))
+                arg = arg . ((INTBITS + 1) / 8);
+              match (arg)
                 [
-                  (s . 2) => [ dformat(".word %s\n", sname(s)); i -= 2 ];
-                  (s . 4) => dformat(".long %s\n", sname(s));
-                  s => dformat(".long %s\n", sname(s));
+                  (s . 2) => [ dformat(".word %s\n", sname(s)); i += 2 ];
+                  (s . 4) => [ dformat(".long %s\n", sname(s)); i += 4 ];
+                  (s . 8) => [ dformat(".quad %s\n", sname(s)); i += 8 ];
+                  _ => fail();
                 ];
               data = cdr(data);
             ];
@@ -276,17 +300,18 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	[
 	  if (!mc:erred) // run only if no errors
 	    [
-	      | code |
+	      | code, codev |
 
               seen_code = null;
 	      code = make_code(prelinked_module[pmodule_body], seclev, true);
+              codev = my:lmap(fn (x) cdr(cdr(x)), seen_code);
+              register_mcode_module(codev);
               seen_code = null;
               res = true;
               | val |
 	      val = with_maxseclevel(
                 seclev,
-                fn() trap_error(code, fn (n) res = null,
-                                call_trace_barrier, true));
+                fn() trap_error(code, fn (n) res = null, call_trace_barrier));
               if (res == true)
                 res = true . val;
 	    ];
@@ -333,7 +358,8 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
     [
       if (vlength(m) != prelinked_module_fields
           || vlength(m[pmodule_body]) != prelinked_function_fields
-          || !vector?(m[pmodule_body][pfn_arg_typesets]))
+          || (m[pmodule_version] & 0xff) != mc:arch
+          || (m[pmodule_version] >> 8) < mc:mcode_version)
         [
           dformat("%s: object file has bad version\n", m[pmodule_name]);
           exit<function> false;
@@ -364,28 +390,25 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       if (seclev < SECLEVEL_GLOBALS)
         [
           if (m[pmodule_class] == mc:m_plain)
-            mc_error("cannot create 'plain' modules at seclevel %s"
-                     +" (use a module or lib instead)",
-                     describe_seclev(seclev));
+            my:mc:error("cannot create 'plain' modules at seclevel %s"
+                        +" (use a module or lib instead)",
+                        describe_seclev(seclev));
 
           if (m[pmodule_writes] != null)
-            mc_error("cannot write globals at seclevel %s",
-                     describe_seclev(seclev));
+            my:mc:error("cannot write globals at seclevel %s",
+                        describe_seclev(seclev));
 
           if (m[pmodule_reads] != null)
-            mc_error("cannot read globals at seclevel %s",
-                     describe_seclev(seclev));
+            my:mc:error("cannot read globals at seclevel %s",
+                        describe_seclev(seclev));
         ];
 
 
       // load & check imported modules
       table_foreach
-	(fn (mod)
+	(fn (@<iname = minfo>)
 	 [
-	   | mstatus, iname, minfo, erred |
-
-	   iname = symbol_name(mod);
-	   minfo = symbol_get(mod);
+	   | mstatus, erred |
 	   erred = mc:erred;
 	   mstatus = module_require(iname);
 	   mc:this_module = null; // could be set by module_require
@@ -395,22 +418,22 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	   if (mstatus < module_loaded)
 	     [
 	       if (mstatus == module_loading)
-		 mc_error("loop in requires of %s", iname)
+		 my:mc:error("loop in requires of %s", iname)
 	       else
-		 mc_error("failed to load %s", iname);
+		 my:mc:error("failed to load %s", iname);
 	     ]
 	   else if (car(minfo) == module_loaded)
 	     check_presence(cdr(minfo), iname)
 	   else if (car(minfo) == module_protected)
 	     if (mstatus != module_protected)
-	       mc_error("%s is not protected anymore", iname)
+	       my:mc:error("%s is not protected anymore", iname)
 	     else
 	       check_dependencies(cdr(minfo), iname);
 	 ],
 	 m[pmodule_imports]);
 
       // Change status of variables
-      foreach
+      my:lforeach
 	(fn (var)
 	 [
 	   | n, vstatus |
@@ -419,15 +442,15 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	   vstatus = module_vstatus(n);
 
 	   if (vstatus == var_write && seclev < SECLEVEL_GLOBALS)
-	     mc_error("cannot define %s: exists and is writable", var)
+	     my:mc:error("cannot define %s: exists and is writable", var)
 	   else if (!module_vset!(n, mname))
-	     mc_error("cannot define %s: %s", var, module_describe(vstatus))
+	     my:mc:error("cannot define %s: %s", var, module_describe(vstatus))
 	   else if (vstatus == var_write)
-	     mc_warning("%s was writable", var);
+	     my:mc:warning("%s was writable", var);
 	 ],
 	 m[pmodule_defines]);
 
-      foreach
+      my:lforeach
 	(fn (var)
 	 [
 	   | n |
@@ -435,7 +458,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 	   n = global_lookup(var);
 
 	   if (!module_vset!(n, var_write))
-             mc_error("cannot write %s: %s", var,
+             my:mc:error("cannot write %s: %s", var,
                       module_describe(module_vstatus(n)));
 	 ],
 	 m[pmodule_writes]);
@@ -446,13 +469,13 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
   check_presence = fn (vars, mod)
     // Types: vars: list of string, mod: string
     // Effects: Checks that all of vars belong to module mod
-    foreach(fn (v) check_present(v, global_lookup(v), mod), vars);
+    my:lforeach(fn (v) check_present(v, global_lookup(v), mod), vars);
 
   check_dependencies = fn (deps, mod)
     // Types: deps: list of dependencies, mod: string
     // Effects: Checks that all vars belong to module mod and that the
     //   depdendencies are respected
-    foreach(fn (d)
+    my:lforeach(fn (d)
 	     [
 	       | n, v |
 
@@ -467,7 +490,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       // seen_code is a list of (prelinked . (closure . mcode))
 
       | found |
-      if (found = myassq(prelinked_fn, seen_code))
+      if (found = my:assq(prelinked_fn, seen_code))
         exit<function> [
           found = cdr(found);
           if (want_closure)
@@ -488,22 +511,22 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 
       // make code for all sub-functions
       csts = prelinked_fn[pfn_constants];
-      csts = append!(map(fn (kglobal) [
-        | name, val, ofs |
-        @(name . ofs) = kglobal;
-        val = global_value(global_lookup(name));
-        if (ofs < 0)
-          [
-            if (!(closure?(val) && (closure_flags(val) & clf_noclosure)))
-              error(error_abort);
-            val = closure_code(val);
-            ofs = -ofs;
-          ];
-        val . ofs
+
+      csts = my:lappend!(my:lmap(fn (@(name . ofs)) [
+        global_value(global_lookup(name)) . ofs
       ], prelinked_fn[pfn_kglobals]), csts);
-      csts = append!(map(fn (p) [
-        | f, c?, ofs |
-        @(f . ofs) = p;
+
+      csts = my:lappend!(my:lmap(fn (@(name . ofs)) [
+        | cl |
+        cl = global_value(global_lookup(name));
+        // assert() may not be available
+        if (!(closure?(cl) && (closure_flags(cl) & clf_noclosure)))
+          error(error_abort);
+        closure_code(cl) . ofs
+      ], prelinked_fn[pfn_kglobal_code]), csts);
+
+      csts = my:lappend!(my:lmap(fn (@(f . ofs)) [
+        | c? |
         if (ofs < 0)
           [
             c? = true;
@@ -518,7 +541,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       f = link(
         prelinked_fn[pfn_code], seclev, prelinked_fn[pfn_help],
         prelinked_fn[pfn_varname],
-        prelinked_fn[pfn_filename], prelinked_fn[pfn_lineno],
+        prelinked_fn[pfn_filename], prelinked_fn[pfn_loc],
         csts,
         prelinked_fn[pfn_builtins],
         prelinked_fn[pfn_globals],
@@ -528,7 +551,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
         prelinked_fn[pfn_return_typeset],
         prelinked_fn[pfn_return_itype],
         prelinked_fn[pfn_linenos],
-        prelinked_fn[pfn_arg_typesets],
+        prelinked_fn[pfn_arguments],
         prelinked_fn[pfn_flags],
         prelinked_fn[pfn_nicename]);
       if (want_closure)
@@ -557,14 +580,16 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
     // Returns: Prelinked module
     [
       prelinked_fns = null;
-      vector(mod[mc:m_class],
-             !!protect,
-             mod[mc:m_name],
-             dependencies(mod[mc:m_requires]),
-             lmap(fn (v) v[mc:mv_name], mod[mc:m_defines]),
-             lmap(fn (v) v[mc:mv_name], mod[mc:m_reads]),
-             lmap(fn (v) v[mc:mv_name], mod[mc:m_writes]),
-             prelink(mod[mc:m_body]));
+      sequence(
+        mod[mc:m_class],
+        !!protect,
+        mod[mc:m_name],
+        dependencies(mod[mc:m_requires]),
+        lmap(fn (v) v[mc:mv_name], mod[mc:m_defines]),
+        lmap(fn (v) v[mc:mv_name], mod[mc:m_reads]),
+        lmap(fn (v) v[mc:mv_name], mod[mc:m_writes]),
+        prelink(mod[mc:m_body]),
+        mc:arch | (my:mcode_version << 8))
     ];
 
   dependencies = fn (imports)
@@ -596,9 +621,9 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
     // Types: top: assembled intermediate function
     // Returns: Prelinked form of function top
     [
-      | info, arg_typesets, arg_typesets_from_list, flags, pfn_marker |
+      | info, arguments, args_from_list, flags, pfn_marker |
 
-      match (myassq(top, prelinked_fns))
+      match (my:assq(top, prelinked_fns))
         [
           ,false => null;           // fallthrough
           (_ . v) && vector?(v) => exit<function> v;
@@ -610,17 +635,32 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       pfn_marker = top . false;
       prelinked_fns = pfn_marker . prelinked_fns;
 
-      arg_typesets_from_list = fn (args)
+      args_from_list = fn (list args)
         [
           | v |
           v = make_vector(llength(args));
-          for (|i| i = 0; args != null; [ ++i; args = cdr(args) ])
-            v[i] = car(args);
+          for (|i| i = 0; args != null; ++i)
+            [
+              | var, ts, name |
+              @([ var ts _ ] . args) = args;
+              name = var[mc:v_name];
+              if (name[0] == ?$)
+                name = false;
+              v[i] = '(,name . ,ts);
+            ];
           check_immutable(protect(v))
         ];
 
-      arg_typesets = if (top[mc:c_fvarargs]) null
-      else arg_typesets_from_list(top[mc:c_fargtypesets]);
+      if (top[mc:c_fvarargs])
+        [
+          | var |
+          @([var _ _]) = top[mc:c_fargs];
+          arguments = var[mc:v_name];
+        ]
+      else
+        arguments = args_from_list(top[mc:c_fargs]);
+
+      assert(immutable?(arguments));
 
       info = cdr(top[mc:c_fvalue]);
 
@@ -630,28 +670,33 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       if (top[mc:c_fclosure] == null)
         flags |= clf_noclosure;
 
-      set_cdr!(pfn_marker, vector(
-        car(top[mc:c_fvalue]),     // code as string
-        top[mc:c_fhelp],           // help string
-        if (top[mc:c_fvar]) top[mc:c_fvar][mc:v_name] else null,
-       // variable function stored in
-        top[mc:c_fnicename],
-        top[mc:c_flineno],
-        lmap(fn (foffset) prelink(car(foffset)) . cdr(foffset),
-             info[mc:a_subfns]),   // sub-functions
-        info[mc:a_constants],      // constants
-        info[mc:a_builtins],       // builtins
-        info[mc:a_globals],        // globals (offsets)
-        info[mc:a_kglobals],       // globals (constant)
-        info[mc:a_primitives],     // absolute primitives
-        info[mc:a_rel_primitives], // relative primitives
-        info[mc:a_seclevs],        // seclevels
-        top[mc:c_freturn_typeset], // return typeset
-        top[mc:c_freturn_itype],   // return itype
-        info[mc:a_linenos],        // line numbers
-        arg_typesets,              // argument types
-        flags,                     // flags
-        top[mc:c_ffilename]))
+      | linenos, var, subfns |
+      linenos = dwarf_line_number_info(info[mc:a_linenos]);
+      var     = if (top[mc:c_fvar]) top[mc:c_fvar][mc:v_name] else null;
+      subfns  = lmap(fn (foffset) prelink(car(foffset)) . cdr(foffset),
+                     info[mc:a_subfns]);
+
+      set_cdr!(pfn_marker, sequence(
+        car(top[mc:c_fvalue]),      // code as string
+        top[mc:c_fhelp],            // help string
+        var,                        // variable function stored in
+        top[mc:c_fnicename],        // human-friendly file name
+        top[mc:c_loc],              // location (line . column)
+        subfns,                     // sub-functions
+        info[mc:a_constants],       // constants
+        info[mc:a_builtins],        // builtins
+        info[mc:a_globals],         // globals (offsets)
+        info[mc:a_kglobals],        // globals (constant)
+        info[mc:a_kglobal_code],    // globals (code object)
+        info[mc:a_primitives],      // absolute primitives
+        info[mc:a_rel_primitives],  // relative primitives
+        info[mc:a_seclevs],         // seclevels
+        top[mc:c_freturn_typeset],  // return typeset
+        top[mc:c_freturn_itype],    // return itype
+        linenos,                    // line numbers
+        arguments,                  // arguments
+        flags,                      // flags
+        top[mc:c_ffilename]))       // file name on disk
     ];
 
 
@@ -668,6 +713,17 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
   				// equal?()
   depend_closure = 8;		// closure with argument and return types
   depend_vstatus = 10;          // depend on module_vstatus()
+
+  | closure_arg_depends |
+  closure_arg_depends = fn (c)
+    [
+      | val |
+      val = closure_arguments(c);
+      if (vector?(val))
+        protect(my:vmap(cdr, val))
+      else
+        null
+    ];
 
   dependency = fn (v)
     // Types: v: global constant or var_system_xxx variable
@@ -699,7 +755,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
         vector(name,
                depend_closure | immutable_flag,
                closure_return_typeset(val),
-               closure_arguments(val),
+               closure_arg_depends(val),
                closure_flags(val))
       else if (type == type_integer || type == type_float)
 	vector(name, depend_value, val)
@@ -738,33 +794,33 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
       dtype = d[1] & ~depend_immutable;
 
       if ((d[1] & depend_immutable) && !immutable?(val))
-	mc_error("%s is not immutable anymore", name)
+	my:mc:error("%s is not immutable anymore", name)
       else if (dtype == depend_primitive)
 	[
 	  if (typeof(val) != d[2] ||
 	      primitive_nargs(val) != d[3] ||
 	      d[4] & ~COMPILER_SAFE_OP_FLAGS & ~primitive_flags(val) ||
               !equal?(d[5], primitive_type(val)))
-	    mc_error("primitive %s has suffered an incompatible change", name);
+	    my:mc:error("primitive %s has suffered an incompatible change", name);
 	]
       else if (dtype == depend_closure)
 	[
 	  if (vector_length(d) != 5 ||
               !closure?(val) ||
               (~d[2] & closure_return_typeset(val)) ||
-              !check_cargs(d[3], closure_arguments(val)) ||
+              !check_cargs(d[3], closure_arg_depends(val)) ||
               (d[4] & ~closure_flags(val)))
-	    mc_error("closure %s has suffered an incompatible change", name);
+	    my:mc:error("closure %s has suffered an incompatible change", name);
 	]
       else if (dtype == depend_value)
 	[
 	  if (!equal?(val, d[2]))
-	    mc_error("%s is not %w anymore", name, d[2]);
+	    my:mc:error("%s is not %w anymore", name, d[2]);
 	]
       else if (dtype == depend_type)
 	[
 	  if (typeof(val) != d[2])
-	    mc_error("the type of %s has changed (was %s, now %s)",
+	    my:mc:error("the type of %s has changed (was %s, now %s)",
 		  name, type_names[d[2]], type_names[typeof(val)]);
 	]
       else if (dtype == depend_vstatus)
@@ -774,7 +830,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
           if (equal?(module_vstatus(n), ovstat))
             null
           else if (ovstat == var_system_write || ovstat == var_system_mutable)
-            mc_error("%s is not a system variable anymore", name)
+            my:mc:error("%s is not a system variable anymore", name)
           else
             fail()
         ]
@@ -793,7 +849,7 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
         vstatus = "system";
       if (equal?(vstatus, mod))
         exit<function> true;
-      mc_error("%s does not belong to %s anymore", vname, mod);
+      my:mc:error("%s does not belong to %s anymore", vname, mod);
       false
     ];
 

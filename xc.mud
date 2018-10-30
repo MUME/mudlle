@@ -19,11 +19,14 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+| arch |
+arch = if (INTBITS == 31) "x86" else "x64";
+
 // Load interrpeted x86 compiler
 garbage_collect(700000);
 load("lib.mud") &&
 load("noinf.mud") &&
-load("x86.mud") &&
+load(arch + ".mud") &&
 load("compile.mud") &&
 load("interface.mud") &&
 load("dihash.mud") &&

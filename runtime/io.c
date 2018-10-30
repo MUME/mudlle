@@ -19,17 +19,21 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "../mudlle-config.h"
+
 #include <ctype.h>
 #include <time.h>
 #include <unistd.h>
 
-#include <sys/time.h>
-#include <sys/times.h>
-#ifndef WIN32
-#  include <sys/resource.h>
-#endif
+#include <sys/resource.h>
+
+#include "io.h"
+#include "mudlle-float.h"
+#include "mudlle-string.h"
+#include "prims.h"
 
 #include "../call.h"
+#include "../charset.h"
 #include "../context.h"
 #include "../interpret.h"
 #include "../mparser.h"
@@ -38,14 +42,10 @@
 #include "../strbuf.h"
 #include "../utils.h"
 
-#include "io.h"
-#include "mudlle-float.h"
-#include "runtime.h"
-
 
 struct oport *get_oport(struct oport *oport)
 {
-  if (TYPE(oport, type_oport))
+  if (TYPE(oport, oport))
     return oport;
   return NULL;
 }
@@ -60,11 +60,11 @@ TYPEDOP(newline, 0, "-> . Print a newline", 0, (void),
 
 static value pprint(struct oport *p, enum prt_level level, value v)
 {
-  GCPRO1(v);
+  GCPRO(v);
   p = get_oport(p);
-  if (p)
-    output_value(p, level, false, v);
   UNGCPRO();
+  if (p)
+    output_value(p, level, v);
   undefined();
 }
 
@@ -95,111 +95,138 @@ TYPEDOP(pexamine, 0, "`oport `x -> . Print a representation of `x to"
   return pprint(p, prt_examine, x);
 }
 
-TYPEDOP(write, 0, "`x -> . Print a representation of `x", 1, (value v),
+TYPEDOP(write, 0, "`x -> . Print a representation of `x to the standard"
+        " oport. Cf. `read_constant() which almost does the reverse.",
+        1, (value v),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "x.")
 {
-  output_value(mudout, prt_write, false, v);
+  output_value(mudout, prt_write, v);
   if (mudout) pflush(mudout);
   undefined();
 }
 
-TYPEDOP(display, 0, "`x -> . Display a representation of `x", 1, (value v),
+TYPEDOP(pwrite_constant, 0, "`oport `x `b -> . Print a representation of `x to"
+        " `oport that can be read using `read_constant().\n"
+        "If `b is true, replaces any non-serializable value with null.\n"
+        "Throws an error if `x cannot be represented as a constant.\n"
+        "Does nothing if `oport is not an output port.",
+        3, (struct oport *p, value v, value replace_gone),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "xxx.")
+{
+  GCPRO(v);
+  p = get_oport(p);
+  UNGCPRO();
+  if (p != NULL && !print_constant(p, v, MAX_STRING_SIZE,
+                                   istrue(replace_gone)))
+    runtime_error(error_bad_value);
+  undefined();
+}
+
+TYPEDOP(display, 0, "`x -> . Display a representation of `x to the standard"
+        " oport.", 1, (value v),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "x.")
 {
-  output_value(mudout, prt_display, false, v);
+  output_value(mudout, prt_display, v);
   if (mudout) pflush(mudout);
   undefined();
 }
 
-TYPEDOP(examine, 0, "`x -> . Examine a representation of `x", 1, (value v),
+TYPEDOP(examine, 0, "`x -> . Examine a representation of `x to the standard"
+        " oport.", 1, (value v),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "x.")
 {
-  output_value(mudout, prt_examine, false, v);
+  output_value(mudout, prt_examine, v);
   if (mudout) pflush(mudout);
   undefined();
 }
-
-#ifndef WIN32
-static long clk_per_sec;
 
 TYPEDOP(ctime, 0, "-> `n. Returns the number of milliseconds of CPU"
-        " time (use difference only)",
+        " time. Only use the difference between two calls.",
 	0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
-  struct tms tms;
-  times(&tms);
-  unsigned long long t = tms.tms_utime;
+  clock_t c = clock();
+  if (c == (clock_t)-1)
+    return makeint(-1);
+
+  unsigned long long t = c;
   t *= 1000;
-  t /= clk_per_sec;
+  t /= CLOCKS_PER_SEC;
   return makeint((long)t);
 }
-#endif
 
 
 TYPEDOP(time, 0,
 	"-> `n. Returns the number of seconds since the 1st of January"
         " 1970 UTC. On 32-bit systems, negative values are used for values"
         " greater than `MAXINT (following Jan 10 13:37:03 2004 UTC).\n"
-        "Cf. `time_after().",
+        "Cf. `time_after?() and `time_diff().",
 	0, (void),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return makeint(time(NULL));
 }
 
-static enum runtime_error get_msecs(value m, time_t *t)
+enum runtime_error ct_time_p(long l, const char **errmsg, time_t *dst)
 {
-  if (!integerp(m))
-    return error_bad_type;
-  long l = GETINT(m);
   if (l < 0)
     {
       /* negative values are treated as 31-bit overflows */
       l += 1UL << 31;
       if (l < 0)
-        return error_bad_value;
+        {
+          *errmsg = "negative time out of range";
+          return error_bad_value;
+        }
     }
-  *t = l;
-  if (*t != l)
-    return error_bad_value;
+  *dst = l;
+  if (*dst != l)
+    {
+      *errmsg = "time out of range";
+      return error_bad_value;
+    }
   return error_none;
 }
 
-TYPEDOP(time_afterp, "time_after?",
-	"`n0 `n1 -> `b. Returns true if time `n0 is after time `n1, as"
-        " returned from `time().",
+#define __CT_TIME_E(v, msg, dst) ct_time_p(v, msg, &dst)
+#define CT_TIME(dst) CT_INT_P(dst, __CT_TIME_E)
+
+TYPEDOP(time_diff, "time_diff",
+	"`n0 `n1 -> `n2. Returns the number of seconds from time `n1 to"
+        " time `n0 as returned by `time(), bounded to [`MININT..`MAXINT].\n"
+        "Similar to `n0 - `n1, but handles negative values correctly on"
+        " 64-bit systems.\n"
+        "Cf. `time_after?().",
 	2, (value mt0, value mt1),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "nn.n")
 {
   time_t t0, t1;
-  enum runtime_error error = get_msecs(mt0, &t0);
-  if (error != error_none)
-    goto got_error;
-  error = get_msecs(mt1, &t1);
-  if (error != error_none)
-    goto got_error;
-  return makebool(t0 > t1);
-
- got_error:
-  primitive_runtime_error(error, &op_time_afterp, 2, mt0, mt1);
+  CHECK_TYPES(mt0, CT_TIME(t0),
+              mt1, CT_TIME(t1));
+  int64_t ll = (int64_t)t0 - (int64_t)t1;
+  long l = (ll < MIN_TAGGED_INT ? MIN_TAGGED_INT
+            : ll > MAX_TAGGED_INT ? MAX_TAGGED_INT
+            : ll);
+  return makeint(l);
 }
 
-static value make_tm(value t, struct tm *(*convert)(const time_t *time),
-                     const struct primitive_ext *op)
+TYPEDOP(time_afterp, "time_after?",
+	"`n0 `n1 -> `b. Returns true if time `n0 is after time `n1, as"
+        " returned from `time().\n"
+        "Cf. `time_diff().",
+	2, (value mt0, value mt1),
+	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "nn.n")
+{
+  time_t t0, t1;
+  CHECK_TYPES(mt0, CT_TIME(t0),
+              mt1, CT_TIME(t1));
+  return makebool(t0 > t1);
+}
+
+static value make_tm(time_t timeval, struct tm *(*convert)(const time_t *time),
+                     const struct prim_op *op)
 {
   enum runtime_error error;
-  if (!integerp(t))
-    {
-      error = error_bad_type;
-      goto got_error;
-    }
-
-  time_t timeval;
-  error = get_msecs(t, &timeval);
-  if (error != error_none)
-    goto got_error;
-
   struct tm *tm = convert(&timeval);
   if (tm == NULL)
     {
@@ -216,10 +243,11 @@ static value make_tm(value t, struct tm *(*convert)(const time_t *time),
   vtm->data[tm_year] = makeint(tm->tm_year);
   vtm->data[tm_wday] = makeint(tm->tm_wday);
   vtm->data[tm_yday] = makeint(tm->tm_yday);
+  CASSERT(time_fields == 8);
   return vtm;
 
  got_error:
-  primitive_runtime_error(error, op, 1, t);
+  primitive_runtime_error(error, op, 1, makeint(timeval));
 }
 
 TYPEDOP(gmtime, 0,
@@ -234,44 +262,47 @@ TYPEDOP(gmtime, 0,
         "  `tm_year  \tyear since 1900\n"
         "  `tm_wday  \tday of week (0-6 for Sun-Sat)\n"
         "  `tm_yday  \tday of year (0-365 where 0 is Jan 1)",
-	1, (value t),
+	1, (value mt),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
-
-  return make_tm(t, gmtime, &op_gmtime);
+  time_t t;
+  CHECK_TYPES(mt, CT_TIME(t));
+  return make_tm(t, gmtime, THIS_OP);
 }
 
 TYPEDOP(localtime, 0,
 	"`n -> `v. Converts time in seconds to a vector of local time"
 	" information. See `gmtime() for the format of `v.",
-	1, (value t),
+	1, (value mt),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
-
-  return make_tm(t, localtime, &op_localtime);
+  time_t t;
+  CHECK_TYPES(mt, CT_TIME(t));
+  return make_tm(t, localtime, THIS_OP);
 }
 
 static void get_tm_struct(struct tm *tm, struct vector *v)
 {
-  TYPEIS(v, type_vector);
+  assert(TYPE(v, vector));
 
   if (vector_len(v) != time_fields)
     runtime_error(error_bad_value);
 
-  tm->tm_sec  = GETINT(v->data[tm_sec]);
-  tm->tm_min  = GETINT(v->data[tm_min]);
-  tm->tm_hour = GETINT(v->data[tm_hour]);
-  tm->tm_mday = GETINT(v->data[tm_mday]);
-  tm->tm_mon  = GETINT(v->data[tm_mon]);
-  tm->tm_year = GETINT(v->data[tm_year]);
-  tm->tm_wday = GETINT(v->data[tm_wday]);
-  tm->tm_yday = GETINT(v->data[tm_yday]);
-
-  tm->tm_isdst = false;
+  *tm = (struct tm){
+    .tm_sec    = GETINT(v->data[tm_sec]),
+    .tm_min    = GETINT(v->data[tm_min]),
+    .tm_hour   = GETINT(v->data[tm_hour]),
+    .tm_mday   = GETINT(v->data[tm_mday]),
+    .tm_mon    = GETINT(v->data[tm_mon]),
+    .tm_year   = GETINT(v->data[tm_year]),
+    .tm_wday   = GETINT(v->data[tm_wday]),
+    .tm_yday   = GETINT(v->data[tm_yday]),
+    .tm_isdst  = false,
 #ifdef HAVE_STRUCT_TM_TM_ZONE
-  tm->tm_zone = (char *)"UTC";
-  tm->tm_gmtoff = 0;
+    .tm_zone   = (char *)"UTC",
+    .tm_gmtoff = 0,
 #endif
+  };
 }
 
 TYPEDOP(asctime, 0,
@@ -281,9 +312,11 @@ TYPEDOP(asctime, 0,
 	1, (struct vector *vgmt),
 	OP_LEAF | OP_NOESCAPE | OP_CONST, "v.s")
 {
+  CHECK_TYPES(vgmt, vector);
+
   struct tm gmt;
   get_tm_struct(&gmt, vgmt);
-  char *s = asctime(&gmt);      /* can return NULL */
+  const char *s = asctime(&gmt); /* can return NULL */
   size_t l = s ? strlen(s) : 0;
   if (l > 0 && s[l - 1] == '\n')
     --l;
@@ -296,19 +329,19 @@ TYPEDOP(strftime, 0,
         " Returns false on error."
         " See `/mhelp `strftime for help on the format string.",
 	2, (struct string *fmt, struct vector *vgmt),
-	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST | OP_TRACE, "sv.S")
+	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST | OP_TRACE,
+        "sv.[sz]")
 {
+  CHECK_TYPES(fmt, string, vgmt, vector);
+
+  struct tm gmt;
+  get_tm_struct(&gmt, vgmt);
+
 #ifdef MAX_STRING_LENGTH
   char buffer[MAX_STRING_LENGTH];
 #else
   char buffer[4096];
 #endif
-
-  struct tm gmt;
-
-  TYPEIS(fmt, type_string);
-  get_tm_struct(&gmt, vgmt);
-
   if (strftime(buffer, sizeof buffer, fmt->str, &gmt))
     return make_readonly(alloc_string(buffer));
 
@@ -320,8 +353,11 @@ TYPEDOP(mktime, 0,
         1, (struct vector *vgmt),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "v.n")
 {
+  CHECK_TYPES(vgmt, vector);
+
   struct tm gmt;
   get_tm_struct(&gmt, vgmt);
+
   time_t t = mktime(&gmt);
   if (t != -1)
     t -= timezone;
@@ -331,20 +367,23 @@ TYPEDOP(mktime, 0,
 TYPEDOP(with_output, 0, "`oport `f -> `x. Evaluates `f() with output"
         " sent to `oport.\n"
         "If `oport is not a port, just evaluates `f().\n"
-        "Output is restored when done. Returns the result of `f().",
+        "Output is restored when done. Returns the result of `f().\n"
+        "Cf. `stdout().",
         2, (value out, value code),
         OP_APPLY, "xf.x")
 {
+  CHECK_TYPES(out,  any,
+              code, CT_CALLABLE(0));
+
   struct oport *newout = mudout, *newerr = muderr;
 
-  callable(code, 0);
-  if (TYPE(out, type_oport)) newout = newerr = out;
+  if (TYPE(out, oport)) newout = newerr = out;
 
   if (newout == mudout && newerr == muderr)
     return call0(code);
 
   struct oport *oout = mudout, *oerr = muderr;
-  GCPRO2(oout, oerr);
+  GCPRO(oout, oerr);
   mudout = newout;
   muderr = newerr;
   value result = mcatch_call0(NULL, code);
@@ -363,21 +402,23 @@ UNSAFETOP(with_output_file, 0,
           "  0  \tall call traces are sent to the file\n"
           "  1  \tonly unhandled call traces are sent to the file\n"
           "  2  \tno call traces are sent to the file\n"
-          "Returns the result of `f().",
+          "Returns the result of `f().\n"
+          "Cf. `stdout().",
           3, (struct string *file, value mode, value code),
           0, "sxf.x")
 {
-  callable(code, 0);
-  TYPEIS(file, type_string);
-  int ctmode = GETRANGE(mode, 0, 2);
+  int ctmode;
+  CHECK_TYPES(file, string,
+              mode, CT_RANGE(ctmode, 0, 2),
+              code, CT_CALLABLE(0));
 
   FILE *f = fopen(file->str, "a+");
   if (f == NULL)
-    runtime_error(error_bad_value);
+    RUNTIME_ERROR(error_bad_value, "failed to open file");
 
   struct oport *oport = NULL;
   {
-    GCPRO2(code, oport);
+    GCPRO(code, oport);
     oport = make_file_oport(f);
 
     if (ctmode == 0)
@@ -386,7 +427,7 @@ UNSAFETOP(with_output_file, 0,
   }
 
   struct oport *oout = mudout, *oerr = muderr;
-  GCPRO3(oout, oerr, oport);
+  GCPRO(oout, oerr, oport);
   mudout = oport;
   if (ctmode != 2)
     muderr = oport;
@@ -396,7 +437,7 @@ UNSAFETOP(with_output_file, 0,
   muderr = oerr;
 
   fclose(f);
-  oport->methods = NULL;
+  set_oport_methods(oport, NULL);
 
   if (ctmode == 0)
     remove_call_trace(oport);
@@ -413,17 +454,34 @@ static struct {
 
 static bool is_single(value v)
 {
+  unsigned expected = TSET(integer);
   if (integerp(v))
     return intval(v) == 1;
 #ifdef USE_GMP
-  if (TYPE(v, type_bigint))
+  expected |= TSET(bigint);
+  if (TYPE(v, bigint))
     {
       struct bigint *bi = v;
       check_bigint(bi);
       return mpz_cmp_si(bi->mpz, 1) == 0;
     }
 #endif
-  runtime_error(error_bad_type);
+  bad_typeset_error(v, expected);
+}
+
+#define MAX_FORMAT_LEN     65536
+#define MAX_FORMAT_LEN_STR STRINGIFY(MAX_FORMAT_LEN)
+
+static noreturn void missing_format_param(void)
+{
+  runtime_error_message(error_wrong_parameters,
+                        "not enough parameters for format string");
+}
+
+static noreturn void bad_format_value(const char *msg)
+{
+  sb_free(&format_data.sb);
+  runtime_error_message(error_bad_value, msg);
 }
 
 static void pformat(struct oport *p, struct string *str,
@@ -431,7 +489,7 @@ static void pformat(struct oport *p, struct string *str,
 {
   ulong slen, spos;
 
-  GCPRO3(args, str, p);
+  GCPRO(args, str, p);
 
   slen = string_len(str);
   spos = 0;
@@ -439,7 +497,7 @@ static void pformat(struct oport *p, struct string *str,
     {
       size_t ppos;
       {
-        char *percent = memchr(str->str + spos, '%', slen - spos);
+        const char *percent = memchr(str->str + spos, '%', slen - spos);
         if (percent == NULL)
           {
             pswrite_substring(p, str, spos, slen - spos);
@@ -464,7 +522,8 @@ static void pformat(struct oport *p, struct string *str,
         /* look for flags */
         for (;; ++s)
           {
-            if (s >= strend) goto bad_value;
+            if (s >= strend)
+              bad_format_value("invalid trailing format conversion");
             switch (*s)
               {
               case '0': zero  = true; continue;
@@ -476,11 +535,13 @@ static void pformat(struct oport *p, struct string *str,
             break;
           }
 
-        if (s >= strend) goto bad_value;
+        if (s >= strend)
+          bad_format_value("invalid trailing format conversion");
 
         if (*s == '*')
           {
-            if (i >= nargs) runtime_error(error_wrong_parameters);
+            if (i >= nargs)
+              missing_format_param();
             long w = GETINT(args->data[i]); i++;
             if (w < 0)
               {
@@ -489,29 +550,34 @@ static void pformat(struct oport *p, struct string *str,
               }
             else
               width = w;
-            if (++s >= strend) goto bad_value;
+            if (++s >= strend)
+              bad_format_value("invalid trailing format conversion");
           }
         else
           while (isdigit(*s))
             {
               if (width >= (MAX_TAGGED_INT - 9) / 10)
-                goto bad_value;
+                bad_format_value("field width out of range");
               width = width * 10 + *s - '0';
-              if (++s >= strend) goto bad_value;
+              if (++s >= strend)
+                bad_format_value("invalid trailing format conversion");
             }
 
         if (*s == '.')
           {
-            if (++s >= strend) goto bad_value;
+            if (++s >= strend)
+              bad_format_value("invalid trailing format conversion");
             if (*s == '*')
               {
-                if (i >= nargs) runtime_error(error_wrong_parameters);
+                if (i >= nargs)
+                  missing_format_param();
                 long w = GETINT(args->data[i]); i++;
                 if (w < 0)
                   prec = 0;
                 else
                   prec = w;
-                if (++s >= strend) goto bad_value;
+                if (++s >= strend)
+                  bad_format_value("invalid trailing format conversion");
               }
             else
               {
@@ -519,9 +585,10 @@ static void pformat(struct oport *p, struct string *str,
                 while (isdigit(*s))
                   {
                     if (prec >= (MAX_TAGGED_INT - 9) / 10)
-                      goto bad_value;
+                      bad_format_value("precision out of range");
                     prec = prec * 10 + *s - '0';
-                    if (++s >= strend) goto bad_value;
+                    if (++s >= strend)
+                      bad_format_value("invalid trailing format conversion");
                   }
               }
           }
@@ -529,25 +596,29 @@ static void pformat(struct oport *p, struct string *str,
         conv = *s;
       }
 
-      unsigned base, predigits;
-
       enum prt_level print_level;
 
-      const char *prefix;
+      unsigned base, predigits = 0;
+      const char *prefix = "";
+
       struct strbuf *const sb = &format_data.sb; /* save some typing below */
+      struct intstr ibuf;
 
       switch (conv)
         {
-        default: goto bad_value;
+        default:
+          bad_format_value("unknown conversion");
         case '%': pputc('%', p); break;
         case 'n': pputc('\n', p); break;
         case 'p':
-          if (i >= nargs) runtime_error(error_wrong_parameters);
+          if (i >= nargs)
+            missing_format_param();
           if (!is_single(args->data[i++]))
             pputc('s', p);
           break;
         case 'P':
-          if (i >= nargs) runtime_error(error_wrong_parameters);
+          if (i >= nargs)
+            missing_format_param();
           if (is_single(args->data[i++]))
             pputc('y', p);
           else
@@ -555,40 +626,50 @@ static void pformat(struct oport *p, struct string *str,
           break;
         case 'C':
         case 'c':
-          if (i >= nargs) runtime_error(error_wrong_parameters);
-          ISINT(args->data[i]);
-          sb_empty(sb);
           {
-            int c = intval(args->data[i++]);
-            if (isupper(conv))
-              c = TO_8UPPER(c);
+            if (i >= nargs)
+              missing_format_param();
+            value mc = args->data[i++];
+            int c = GETINT(mc);
+            if (width <= 1)
+              {
+                /* common case */
+                if (isupper(conv))
+                  c = TO_8UPPER(c);
+                pputc(c, p);
+                break;
+              }
+            sb_empty(sb);
             sb_addc(sb, c);
+            prec = -1;          /* precision has no effect for %c */
+            goto do_output;
           }
-          goto do_output;
         case 'b':
           base = 2;
-          prefix = "0b";
-          predigits = 0;
+          if (hash)
+            prefix = "0b";
           goto do_int;
         case 'd':
           base = 10;
-          prefix = "";
-          predigits = 0;
           goto do_int;
         case 'o':
           base = 8;
-          prefix = "0";
-          predigits = 1;
+          if (hash)
+            {
+              prefix = "0";
+              predigits = 1;
+            }
           goto do_int;
         case 'x':
           base = 16;
-          prefix = "0x";
-          predigits = 0;
+          if (hash)
+            prefix = "0x";
           goto do_int;
 
           {
           do_int:
-            if (i >= nargs) runtime_error(error_wrong_parameters);
+            if (i >= nargs)
+              missing_format_param();
             value v = args->data[i++];
 
             if (minus || prec >= 0)
@@ -607,16 +688,16 @@ static void pformat(struct oport *p, struct string *str,
                     l &= MAX_TAGGED_INT * 2 + 1;
                   }
 
-                sb_setminsize(sb, INTSTRSIZE);
-                sb_setlen(sb, INTSTRSIZE);
-                istr = inttostr(sb_mutable_str(sb), base, l, true);
+                istr = longtostr(&ibuf, base, l);
               }
 #ifdef USE_GMP
-            else if (TYPE(v, type_bigint))
+            else if (TYPE(v, bigint))
               {
                 struct bigint *bi = v;
                 check_bigint(bi);
                 size_t size = mpz_sizeinbase(bi->mpz, base) + 2;
+                if (size > MAX_FORMAT_LEN)
+                  bad_format_value("bigint out of range to format");
                 sb_setminsize(sb, size);
                 sb_setlen(sb, size - 1);
                 mpz_get_str(sb_mutable_str(sb), base, bi->mpz);
@@ -624,17 +705,22 @@ static void pformat(struct oport *p, struct string *str,
               }
 #endif
             else
-              goto bad_value;
+              bad_format_value("invalid parameter to integer conversion");
 
             bool neg = (*istr == '-');
             if (neg)
               ++istr;
 
-            if (!hash || strcmp(istr, "0") == 0)
+            if (strcmp(istr, "0") == 0)
               {
+                if (!(base == 8 && hash))
+                  istr = "";
                 prefix = "";
                 predigits = 0;
               }
+
+            if (prec < 0)
+              prec = 1;
 
             /* 'ilen' is the number of digits */
             size_t ilen = strlen(istr) + predigits;
@@ -649,10 +735,11 @@ static void pformat(struct oport *p, struct string *str,
             size_t zeros;
             if (zero)
               zeros = tlen < width ? width - tlen : 0;
-            else if (prec >= 0)
-              zeros = ilen < prec ? prec - ilen : 0;
             else
-              zeros = 0;
+              zeros = ilen < prec ? prec - ilen : 0;
+
+            if (zeros > MAX_FORMAT_LEN || width > MAX_FORMAT_LEN)
+              bad_format_value("integer too large to print");
 
             tlen += zeros;
             size_t spaces = tlen < width ? width - tlen : 0;
@@ -681,22 +768,31 @@ static void pformat(struct oport *p, struct string *str,
           {
             print_level = hash ? prt_examine : prt_write;
           do_string:
-            if (i >= nargs) runtime_error(error_wrong_parameters);
-            sb_empty(sb);
-            if (prec >= 0)
-              output_value_cut(format_data.oport,
-                               print_level,
-                               zero,
-                               args->data[i++],
-                               prec);
-            else
-              output_value(format_data.oport,
-                           print_level,
-                           zero,
-                           args->data[i++]);
+            if (i >= nargs)
+              missing_format_param();
+            bool simple = width == 0 && !isupper(conv);
+            struct oport *dest = p;
+            if (!simple)
+              {
+                dest = format_data.oport;
+                sb_empty(sb);
+              }
+            if (prec > MAX_FORMAT_LEN)
+              bad_format_value("precision out of range");
+            output_value_cut(dest,
+                             print_level,
+                             zero,
+                             args->data[i++],
+                             prec >= 0 ? prec : SIZE_MAX);
+            if (simple)
+              break;
           do_output:
-            if (prec >= 0 && sb_len(sb) > prec)
-              sb_setlen(sb, prec);
+            if (prec > MAX_FORMAT_LEN)
+              bad_format_value("precision out of range");
+            if (width > MAX_FORMAT_LEN)
+              bad_format_value("field width out of range");
+            if (prec >= 0)
+              assert(sb_len(sb) <= prec);
             size_t spaces = sb_len(sb) < width ? width - sb_len(sb) : 0;
             if (spaces && !minus)
               pputnc(' ', spaces, p);
@@ -718,7 +814,8 @@ static void pformat(struct oport *p, struct string *str,
         case 'e':
         case 'f':
         case 'g':
-          if (i >= nargs) runtime_error(error_wrong_parameters);
+          if (i >= nargs)
+            missing_format_param();
           double d = floatval(args->data[i++]);
           sb_empty(sb);
           sb_addc(sb, '%');
@@ -741,6 +838,12 @@ static void pformat(struct oport *p, struct string *str,
                 sb_printf(sb, "%ld", prec);
             }
           sb_addc(sb, conv);
+
+          if (prec > MAX_FORMAT_LEN)
+            bad_format_value("precision out of range");
+          if (width > MAX_FORMAT_LEN)
+            bad_format_value("field width out of range");
+
           char *fmt = sb_detach(sb);
           sb_printf(sb, fmt, d);
           free(fmt);
@@ -749,22 +852,20 @@ static void pformat(struct oport *p, struct string *str,
         }
     }
 
-  if (i != nargs) runtime_error(error_wrong_parameters);
+  if (i != nargs)
+    runtime_error_message(error_wrong_parameters,
+                          "too many parameters for format string");
 
   UNGCPRO();
   sb_free(&format_data.sb);
   return;
-
- bad_value:
-  sb_free(&format_data.sb);
-  runtime_error(error_bad_value);
 }
 
 
 static struct string *sformat(struct string *fmt, struct vector *argv, int idx)
 {
-  TYPEIS(fmt, type_string);
-  TYPEIS(argv, type_vector);
+  TYPEIS(fmt, string);
+  TYPEIS(argv, vector);
 
   int nargs = vector_len(argv);
   if (nargs < idx)
@@ -772,16 +873,16 @@ static struct string *sformat(struct string *fmt, struct vector *argv, int idx)
 
   struct oport *p;
   {
-    GCPRO2(fmt, argv);
+    GCPRO(fmt, argv);
     p = make_string_oport();
     UNGCPRO();
   }
 
   struct string *str;
   {
-    GCPRO1(p);
+    GCPRO(p);
     pformat(p, fmt, argv, idx, nargs);
-    str = port_string(p, (size_t)-1);
+    str = port_string(p, SIZE_MAX);
     UNGCPRO();
   }
   opclose(p);
@@ -789,26 +890,26 @@ static struct string *sformat(struct string *fmt, struct vector *argv, int idx)
 }
 
 VARTOP(dformat, 0,
-       "`s `x1 `x2 ... -> . Displays formatted string `s to the user"
-       " with parameters `x1, ... See `format() for syntax. Equivalent"
+       "`s `x1 `x2 ... -> . Displays formatted string `s to the standard"
+       " oport with parameters `x1, ... See `format() for syntax. Equivalent"
        " to `display(`format(`s, `x1, ...)).",
        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sx*.")
 {
   if (nargs < 1) runtime_error(error_wrong_parameters);
-  TYPEIS(args->data[0], type_string);
+  TYPEIS(args->data[0], string);
   pformat(mudout, args->data[0], args, 1, nargs);
   if (mudout) pflush(mudout);
   undefined();
 }
 
-TYPEDOP(dvformat, 0, "`s `v -> . Displays formatted string `s with"
-        " parameters in `v. See `format() for syntax. Equivalent to"
-        " `display(`vformat(`s, `v)).",
+TYPEDOP(dvformat, 0, "`s `v -> . Displays formatted string `s to the standard"
+        " oport with parameters in `v."
+        " See `format() for syntax. Equivalent to `display(`vformat(`s, `v)).",
         2, (struct string *fmt, struct vector *argv),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_TRACE, "sv.")
 {
-  TYPEIS(fmt, type_string);
-  TYPEIS(argv, type_vector);
+  TYPEIS(fmt, string);
+  TYPEIS(argv, vector);
   pformat(mudout, fmt, argv, 0, vector_len(argv));
   if (mudout) pflush(mudout);
   undefined();
@@ -822,9 +923,9 @@ VARTOP(pformat, 0,
 {
   if (nargs < 2) runtime_error(error_wrong_parameters);
 
-  TYPEIS(args->data[1], type_string);
+  TYPEIS(args->data[1], string);
 
-  GCPRO1(args);
+  GCPRO(args);
   struct oport *p = get_oport(args->data[0]);
   UNGCPRO();
   if (p != NULL)
@@ -839,11 +940,10 @@ TYPEDOP(pvformat, 0, "`oport `s `v -> . Output formatted string `s0 with"
         3, (struct oport *p, struct string *fmt, struct vector *argv),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_TRACE, "xsv.")
 {
-  TYPEIS(fmt, type_string);
-  TYPEIS(argv, type_vector);
-
-  GCPRO2(fmt, argv);
-  p = get_oport(p);
+  GCPRO(fmt, argv);
+  CHECK_TYPES(p,    CT_OPT_OPORT,
+              fmt,  string,
+              argv, vector);
   UNGCPRO();
   if (p != NULL)
     pformat(p, fmt, argv, 0, vector_len(argv));
@@ -875,18 +975,18 @@ VARTOP(sformat, 0,
   if (nargs < 2)
     runtime_error(error_wrong_parameters);
 
-  TYPEIS(args, type_vector);
+  TYPEIS(args, vector);
 
   struct string *s = args->data[0];
   if (s)
     {
-      TYPEIS(s, type_string);
+      TYPEIS(s, string);
       if (readonlyp(s))
 	runtime_error(error_value_read_only);
     }
 
   struct string *fmt = args->data[1];
-  TYPEIS(fmt, type_string);
+  TYPEIS(fmt, string);
 
   if (s == fmt)
     runtime_error(error_bad_value);
@@ -896,7 +996,7 @@ VARTOP(sformat, 0,
   // use a strbuf oport.
 
   struct strbuf sb = SBNULL;
-  GCPRO2(args, s);
+  GCPRO(args, s);
   struct oport *p = s == NULL ? make_sink_oport() : make_strbuf_oport(&sb);
   pformat(p, args->data[1], args, 2, nargs);
   UNGCPRO();
@@ -922,54 +1022,58 @@ VARTOP(sformat, 0,
 
 static const typing format_tset = { "sx*.s", NULL };
 
+#define EXTRA_CONVERSIONS ""
+
 FULLOP(format, 0,
        "`s0 `x1 `x2 ... -> `s1. Formats string `s0 with parameters `x1, ...\n"
        "The string `s0 can contain formatting directives starting with '%'"
        " followed by zero or more flag characters, an optional field width,"
        " an optional precision, and the conversion specifier.\n"
        "\n"
-       "Flag for for `b, `o, `x, `e, `f, `g, `a, `w, and `W conversions:\n"
+       "Flag for for `b, `o, `x, `e, `f, `g, and `a conversions:\n"
        "  `#   \tPrefix non-zero numbers with \"0b\" (`b conversion),"
        " \"0\" (`o conversion), or \"0x\" (`x conversion).\n"
        "      \tFor `a, `e, `f, and `g conversions, the result will always"
        " contains a decimal point.\n"
        "      \tFor `g conversions, trailing zeros are not removed from"
        " the result.\n"
-       "      \tFor `w and `W conversions, use `examine style output"
-       " instead of `write.\n"
        "Flags for `b, `o, `d, `x, `a, `e, `f, and `g conversions:\n"
        "  `0   \tZero-pad to fill up the field width.\n"
-       "  ' ' \t(space) Add a space before positive signed numbers.\n"
+       "  ' ' \t(space) Add a space before non-negative signed numbers.\n"
        "  `+   \tForce a sign ('+' or '-') before signed numbers.\n"
        "Flags for `c, `C, `s, `S, `w, `W, `b, `o, `d, `x, `a, `e, `f, and `g"
        " conversions:\n"
        "  `-   \tLeft justify the result (default is right justified).\n"
-       "Flag for `w and `W conversions:\n"
+       "Flags for `w and `W conversions:\n"
        "  `0   \tInhibit any leading apostrophe from compound values and"
        " write null as \"()\".\n"
+       "  `#   \tUse `examine() style output instead of `write().\n"
        "\n"
        "Field width and precision are only used for the `c, `C, `s, `S,"
        " `w, `W, `b, `o, `d, `x, `a, `e, `f, and `g conversions.\n"
        "\n"
-       "The field width can be either a positive integer or an asterisk ('*'),"
-       " meaning to use the next parameter (an integer) as field width. If"
-       " the parameter is negative, this is taken as the `- flag and the"
-       " absolute value is used for the field width.\n"
+       "The field width can be either a non-negative integer or an asterisk"
+       " ('*'), meaning to use the next parameter (an integer) as field"
+       " width. If the parameter is negative, this is taken as the `- flag"
+       " and the absolute value is used for the field width.\n"
        "The output will be padded with spaces or zeros as necessary to fill"
        " up to the field width.\n"
        "\n"
        "The precision is a period ('.') followed by either an optional"
-       " positive integer or an asterisk ('*'),"
+       " non-negative integer or an asterisk ('*'),"
        " meaning to use the next parameter (an integer) as precision. If"
        " the parameter is negative, this is taken as a precision of zero.\n"
        "For conversions `b, `o, `d, and `x, the precision is the minimum"
-       " number of digits to print, zero-padding as necessary.\n"
+       " number of digits to print, zero-padding as necessary. A precision"
+       " of zero when printing zero means no output.\n"
        "For conversions `s, `S, `w, and `W, the precision is the maximum"
        " number of characters to include.\n"
        "For conversions `a, `e and `f, the precision is the number of digits"
        " to print after the decimal point.\n"
        "For the `g conversion, the precision is the maximum number of"
        " significant digits.\n"
+       "\n"
+       "Field width and precision can at most be " MAX_FORMAT_LEN_STR ".\n"
        "\n"
        "Available conversions:\n"
        "  `%   \tA % sign.\n"
@@ -982,10 +1086,11 @@ FULLOP(format, 0,
        " otherwise \"ies\".\n"
        "\n"
        "  `s   \tA string representation of the next parameter"
-       " (like `display).\n"
+       " as output by `display().\n"
        "  `S   \tLike `s but capitalize the first character.\n"
        "  `w   \tA string representation of the next parameter"
-       " (like `write or, with the `# flag, `examine).\n"
+       " as output by `write() or, with the `# flag, `examine(). Long strings"
+       " will be truncated, unless a precision is specified.\n"
        "  `W   \tLike `w but capitalize the first character.\n"
        "\n"
        "  `b   \tThe next parameter (integer or bigint) converted to binary;"
@@ -1005,8 +1110,8 @@ FULLOP(format, 0,
        " less than -4 or greater than or equal to the precision; otherwise"
        " as `f conversion.\n"
        "  `a   \tThe next parameter (a float, integer, or bigint) in"
-       " \"[-]0xh.hhhhp<+->d\" style.\n"
-       , NVARARGS, (struct vector *args, ulong nargs), 0,
+       " \"[-]0xh.hhhhp<+->d\" style." EXTRA_CONVERSIONS,
+       NVARARGS, (struct vector *args, ulong nargs), (args, nargs), 0,
        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
        format_tset, static)
 {
@@ -1020,14 +1125,12 @@ TYPEDOP(pputnc, 0, "`oport `n0 `n1 -> . Print `n1 characters `n0 to"
         3, (struct oport *p, value mchar, value mcount),
         OP_LEAF | OP_NOESCAPE, "xnn.")
 {
-  long count = GETRANGE(mcount, 0, MAX_STRING_SIZE);
-  long ch = GETINT(mchar);
-
-  p = get_oport(p);
-  if (p == NULL)
-    undefined();
-
-  pputnc(ch, count, p);
+  long count;
+  unsigned char c;
+  CHECK_TYPES(p,      CT_OPT_OPORT,
+              mchar,  CT_RANGE(c, SCHAR_MIN, UCHAR_MAX),
+              mcount, CT_RANGE(count, 0, MAX_STRING_SIZE));
+  pputnc(c, count, p);
   undefined();
 }
 
@@ -1035,7 +1138,11 @@ TYPEDOP(pputc, 0, "`oport `n -> . Print character `n to output port `oport."
         " Does nothing if `oport is not an output port.",
         2, (struct oport *p, value mchar), OP_LEAF | OP_NOESCAPE, "xn.")
 {
-  return code_pputnc(p, mchar, makeint(1));
+  unsigned char c;
+  CHECK_TYPES(p,     CT_OPT_OPORT,
+              mchar, CT_RANGE(c, SCHAR_MIN, UCHAR_MAX));
+  pputc(c, p);
+  undefined();
 }
 
 TYPEDOP(pprint, 0, "`oport `s -> . Print `s to output port `oport."
@@ -1043,9 +1150,9 @@ TYPEDOP(pprint, 0, "`oport `s -> . Print `s to output port `oport."
         2, (struct oport *p, struct string *s),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "xs.")
 {
-  TYPEIS(s, type_string);
-  GCPRO1(s);
-  p = get_oport(p);
+  GCPRO(s);                     /* CT_OPT_OPORT may cause GC */
+  CHECK_TYPES(p, CT_OPT_OPORT,
+              s, string);
   UNGCPRO();
 
   if (p == NULL)
@@ -1062,17 +1169,14 @@ TYPEDOP(pprint_substring, 0,
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "xsnn.")
 {
   long start = GETINT(mstart), length = GETINT(mlength);
-  TYPEIS(s, type_string);
-  GCPRO1(s);
-  p = get_oport(p);
+  GCPRO(s);                     /* CT_OPT_OPORT may cause GC */
+  CHECK_TYPES(p,       CT_OPT_OPORT,
+              s,       string,
+              mstart,  CT_STR_IDX(start, s, true),
+              mlength, CT_RANGE(length, 0, LONG_MAX));
+  if (start + length > string_len(s))
+    RUNTIME_ERROR(error_bad_index, NULL);
   UNGCPRO();
-  if (p == NULL)
-    undefined();
-
-  if (start < 0)
-    start += string_len(s);
-  if (start < 0 || length < 0 || start + length > string_len(s))
-    runtime_error(error_bad_index);
   pswrite_substring(p, s, start, length);
   undefined();
 }
@@ -1085,34 +1189,28 @@ TYPEDOP(make_string_oport, 0,
   return make_string_oport();
 }
 
-void check_string_port(struct oport *oport)
-{
-  TYPEIS(oport, type_oport);
-  if (!is_string_port(oport))
-    runtime_error(error_bad_type);
-}
-
 TYPEDOP(port_string, 0,
        "`oport -> `s. Returns the contents of string port `oport.\n"
-        "Throws an error if `oport contains more than `MAX_STRING_LENGTH"
+        "Throws an error if `oport contains more than `MAX_STRING_SIZE"
         " characters.",
 	1, (struct oport *p),
 	OP_LEAF | OP_NOESCAPE, "o.s")
 {
-  check_string_port(p);
-  return port_string(p, (size_t)-1);
+  CHECK_TYPES(p, CT_STR_OPORT);
+  return port_string(p, SIZE_MAX);
 }
 
 TYPEDOP(port_string_head, 0,
        "`oport `n -> `s. Returns at most `n leading characters from the"
         " contents of string port `oport.\n"
         "Throws an error if attempting to extract more than"
-        " `MAX_STRING_LENGTH characters",
+        " `MAX_STRING_SIZE characters",
         2, (struct oport *p, value n),
 	OP_LEAF | OP_NOESCAPE, "on.s")
 {
-  long maxlen = GETRANGE(n, 0, LONG_MAX);
-  check_string_port(p);
+  long maxlen;
+  CHECK_TYPES(p, CT_STR_OPORT,
+              n, CT_RANGE(maxlen, 0, LONG_MAX));
   return port_string(p, maxlen);
 }
 
@@ -1127,11 +1225,11 @@ TYPEDOP(port_copy, 0,
 	4, (struct oport *p, struct string *s, value mstart, value mlength),
 	OP_LEAF | OP_NOESCAPE, "osnn.n")
 {
-  long start = GETRANGE(mstart, 0, LONG_MAX);
-  long length = GETRANGE(mlength, 0, LONG_MAX);
-
-  check_string_port(p);
-  TYPEIS(s, type_string);
+  long start, length;
+  CHECK_TYPES(p,       CT_STR_OPORT,
+              s,       string,
+              mstart,  CT_RANGE(start, 0, LONG_MAX),
+              mlength, CT_RANGE(length, 0, LONG_MAX));
 
   if (readonlyp(s))
     runtime_error(error_value_read_only);
@@ -1143,12 +1241,24 @@ TYPEDOP(port_copy, 0,
     runtime_error(error_bad_value);
 
   size_t copied = (plen < length) ? plen : length;
-  GCPRO1(s);
+  GCPRO(s);
   string_port_copy(s->str + start, p, copied);
   UNGCPRO();
 
   assert(s->str[start + copied] == '\0');
   return makeint(copied);
+}
+
+TYPEDOP(port_append, 0,
+       "`oport0 `oport1 -> . Prints the contents of string port `oport1"
+        " to port `oport0.",
+	2, (struct oport *dst, struct oport *src),
+	OP_LEAF | OP_NOESCAPE, "oo.")
+{
+  CHECK_TYPES(dst, oport,
+              src, CT_STR_OPORT);
+  port_append(dst, src);
+  undefined();
 }
 
 TYPEDOP(string_oport_length, 0,
@@ -1157,7 +1267,7 @@ TYPEDOP(string_oport_length, 0,
 	1, (struct oport *p),
 	OP_LEAF | OP_NOESCAPE, "o.n")
 {
-  check_string_port(p);
+  CHECK_TYPES(p, CT_STR_OPORT);
   return makeint(string_port_length(p));
 }
 
@@ -1166,7 +1276,7 @@ TYPEDOP(port_empty, "port_empty!",
         1, (struct oport *p),
         OP_LEAF | OP_NOESCAPE, "o.")
 {
-  check_string_port(p);
+  CHECK_TYPES(p, CT_STR_OPORT);
   empty_string_oport(p);
   undefined();
 }
@@ -1177,10 +1287,10 @@ TYPEDOP(add_call_trace_oport, "add_call_trace_oport!",
         " otherwise.",
         2, (value oport, value only_unhandled), OP_LEAF | OP_NOESCAPE, "ox.")
 {
-  if (!TYPE(oport, type_oport) && !TYPE(oport, type_character))
-    runtime_error(error_bad_type);
+  CHECK_TYPES(oport,          CT_TYPES(oport, character),
+              only_unhandled, any);
 
-  GCPRO1(oport);
+  GCPRO(oport);
   remove_call_trace(oport);
   UNGCPRO();
 
@@ -1193,20 +1303,17 @@ TYPEDOP(remove_call_trace_oport, "remove_call_trace_oport!",
         " Cf. `add_call_trace_oport!().",
         1, (value oport), OP_LEAF | OP_NOESCAPE, "o.")
 {
-  if (!TYPE(oport, type_oport) && !TYPE(oport, type_character))
-    runtime_error(error_bad_type);
-
+  CHECK_TYPES(oport, CT_TYPES(oport, character));
   remove_call_trace(oport);
-
   undefined();
 }
 
 #undef stdout                   /* needed on OS X */
 TYPEDOP(stdout, 0,
-        "-> `port. Returns the standard output port.",
+        "-> `port. Returns the standard `display() output port.",
         0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".o")
 {
-  return mudout;
+  return mudout_port;
 }
 
 void io_init(void)
@@ -1214,23 +1321,16 @@ void io_init(void)
   DEFINE(stdout);
   DEFINE(pdisplay);
   DEFINE(pwrite);
+  DEFINE(pwrite_constant);
   DEFINE(pexamine);
   DEFINE(display);
   DEFINE(write);
   DEFINE(examine);
   DEFINE(newline);
-#ifndef WIN32
-  clk_per_sec = sysconf(_SC_CLK_TCK);
-  if (clk_per_sec < 0)
-    {
-      perror("sysconf(_SC_CLK_TCK)");
-      exit(1);
-    }
-  assert(clk_per_sec > 0);
   DEFINE(ctime);
-#endif
   DEFINE(time);
   DEFINE(time_afterp);
+  DEFINE(time_diff);
   DEFINE(asctime);
   DEFINE(strftime);
   DEFINE(gmtime);
@@ -1247,6 +1347,7 @@ void io_init(void)
   DEFINE(port_string);
   DEFINE(port_string_head);
   DEFINE(port_copy);
+  DEFINE(port_append);
   DEFINE(string_oport_length);
   DEFINE(pformat);
   DEFINE(pvformat);

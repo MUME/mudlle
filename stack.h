@@ -22,13 +22,19 @@
 #ifndef STACK_H
 #define STACK_H
 
+#include "objenv.h"
 #include "types.h"
 
 extern struct env *stack;
 
 void stack_init(void);
 void stack_clear(void);
-#define stack_reserve(n) env_reserve(stack, (n))
+
+static inline void stack_reserve(ulong n)
+{
+  env_reserve(stack, n);
+}
+
 /* Effect: Insures that stack has n free spaces.
      The stack depth can increase by n without the GC being called.
 */
@@ -37,10 +43,6 @@ value stack_pop(void);
 void stack_push(value v);
 
 value stack_get(ulong idx);
-void stack_set(ulong idx, value v);
 ulong stack_depth(void);
-
-struct oport;
-void print_stack(struct oport *f);
 
 #endif /* STACK_H */

@@ -54,14 +54,14 @@ value stack_pop(void)
   ulong used = intval(stack->used);
 
   if (used == 0) runtime_error(error_stack_underflow);
-  stack->used = (value)((long)stack->used - 2);
+  stack->used = mudlle_iadd(stack->used, -1);
   return stack->values->data[used - 1];
 }
 
 void stack_push(value v)
 {
   GCCHECK(v);
-  ENV_ADD_ENTRY(stack, v);
+  env_add_entry(stack, v);
 }
 
 value stack_get(ulong aindex)
@@ -72,28 +72,7 @@ value stack_get(ulong aindex)
   return stack->values->data[used - aindex - 1];
 }
 
-void stack_set(ulong aindex, value v)
-{
-  ulong used = intval(stack->used);
-
-  GCCHECK(v);
-  if (used <= aindex) runtime_error(error_stack_underflow);
-  stack->values->data[used - aindex - 1] = v;
-}
-
 ulong stack_depth(void)
 {
   return (ulong)intval(stack->used);
-}
-
-void print_stack(struct oport *f)
-{
-  pputs("Stack is:\n", f);
-  for (long i = 0, used = intval(stack->used); i < used; ++i)
-    {
-      pprintf(f, "%ld: ", used - i - 1);
-      output_value(f, prt_write, false, stack->values->data[i]);
-      pputc('\n', f);
-    }
-  pputc('\n', f);
 }

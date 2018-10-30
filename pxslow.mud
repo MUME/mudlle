@@ -19,6 +19,9 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+| arch |
+arch = if (INTBITS == 31) "x86" else "x64";
+
 trap_error(fn() [
   | slice, slices |
   slice = 0;
@@ -38,7 +41,7 @@ trap_error(fn() [
     ];
 
   mc:verbose = 0;
-  x86:reset_counters();
+  mp:reset_counters();
   start = ctime();
 
   safecomp = fn (s)
@@ -50,29 +53,29 @@ trap_error(fn() [
 
   | mfiles |
   // sort by size
-  mfiles = vmap(fn (f) f . file_stat(f)[fs_size], '[
-    "ax86.mud"
-    "compile.mud"
-    "compiler.mud"
-    "dihash.mud"
-    "dlist.mud"
-    "flow.mud"
-    "genx86.mud"
-    "graph.mud"
-    "inference.mud"
-    "ins3.mud"
-    "link.mud"
-    "misc.mud"
-    "mx86.mud"
-    "noinf.mud"
-    "optimise.mud"
-    "phase1.mud"
-    "phase2.mud"
-    "phase3.mud"
-    "phase4.mud"
-    "sequences.mud"
-    "vars.mud"
-    "x86.mud"
+  mfiles = vmap(fn (f) [ f += ".mud"; f . file_stat(f)[fs_size] ], '[
+    ,("a" + arch)
+    "compile"
+    "compiler"
+    "dihash"
+    "dlist"
+    "flow"
+    ,("gen" + arch)
+    "graph"
+    "inference"
+    "ins3"
+    "link"
+    "misc"
+    ,("m" + arch)
+    "noinf"
+    "optimise"
+    "phase1"
+    "phase2"
+    "phase3"
+    "phase4"
+    "sequences"
+    "vars"
+    ,arch
   ]);
   vqsort!(fn (a, b) cdr(a) > cdr(b), mfiles);
 
@@ -87,4 +90,4 @@ trap_error(fn() [
     ]
 ], fn (n) [
   quit(1);
-], call_trace_on, true);
+], call_trace_on);

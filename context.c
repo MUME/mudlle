@@ -19,9 +19,15 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "mudlle-config.h"
+
+#include <setjmp.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+#include <sys/resource.h>
+#include <sys/time.h>
 
 #include "alloc.h"
 #include "builtins.h"
@@ -49,7 +55,7 @@ struct catch_context *catch_context;
 
 struct ccontext ccontext;
 
-uword internal_seclevel;
+seclev_t internal_seclevel;
 bool seclevel_valid;
 value maxseclevel = makeint(MAX_SECLEVEL);
 
@@ -60,18 +66,59 @@ const struct session_info cold_session = {
   .maxseclevel = MAX_SECLEVEL
 };
 
-value seclevel_to_maxseclevel(int seclev)
+value seclevel_to_maxseclevel(seclev_t seclev)
 {
   if (seclev >= LEGACY_SECLEVEL)
     return makeint(MAX_SECLEVEL);
   return makeint(seclev);
 }
 
-uword get_effective_seclevel(void)
+seclev_t get_effective_seclevel(void)
 {
-  uword seclev = get_seclevel();
-  long maxlev = intval(maxseclevel);
+  seclev_t seclev = get_seclevel();
+  seclev_t maxlev = intval(maxseclevel);
   return seclev > maxlev ? maxlev : seclev;
+}
+
+/* use volatile automatic-storage for setjmp()/longjmp() */
+static bool safe_mcatch(void (*fn)(void *x), void *x,
+                        struct catch_context *volatile context)
+{
+  /* hard stack limit can temporarily be changed by check_segv() to handle
+     exceptions using the alternate signal stack */
+  volatile ulong old_hard_mudlle_stack_limit = hard_mudlle_stack_limit;
+  if (sigsetjmp(context->exception, 0))
+    {
+      hard_mudlle_stack_limit = old_hard_mudlle_stack_limit;
+
+      ccontext = context->old_ccontext;
+#ifdef USE_CCONTEXT
+#define __CALLER_GCCHECK(n, reg) GCCHECK(ccontext.caller.reg)
+#define __CALLEE_GCCHECK(n, reg) GCCHECK(ccontext.callee.reg)
+      FOR_CALLER_SAVE(__CALLER_GCCHECK, ;);
+      FOR_CALLEE_SAVE(__CALLEE_GCCHECK, ;);
+#undef __CALLEE_GCCHECK
+#undef __CALLER_GCCHECK
+#endif
+      gcpro = context->old_gcpro;
+      call_stack = context->old_call_stack;
+
+      /* pop any extra stuff from stack */
+      int extra_depth = stack_depth() - context->old_stack_depth;
+      assert(extra_depth >= 0);
+      while (extra_depth--) stack_pop();
+
+      forbid_mudlle_calls = NULL;
+
+      return false;
+    }
+  else
+    {
+      fn(x);
+      mexception.sig = SIGNAL_NONE;
+      assert(call_stack == context->old_call_stack);
+      return true;
+    }
 }
 
 bool mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
@@ -86,40 +133,12 @@ bool mcatch(void (*fn)(void *x), void *x, enum call_trace_mode call_trace_mode)
   };
   catch_context = &context;
 
-  uword old_seclevel = internal_seclevel;
+  seclev_t old_seclevel = internal_seclevel;
   value old_maxseclevel = maxseclevel;
 
   check_allow_mudlle_call();
 
-  bool ok;
-  if (nosigsetjmp(context.exception))
-    {
-      ccontext = context.old_ccontext;
-#if defined(i386) && defined(USE_CCONTEXT)
-      GCCHECK(ccontext.callee[0]);
-      GCCHECK(ccontext.callee[1]);
-      GCCHECK(ccontext.caller[0]);
-      GCCHECK(ccontext.caller[1]);
-#endif
-      gcpro = context.old_gcpro;
-      call_stack = context.old_call_stack;
-
-      /* Pop any extra stuff from stack */
-      int extra_depth = stack_depth() - context.old_stack_depth;
-      assert(extra_depth >= 0);
-      while (extra_depth--) stack_pop();
-
-      forbid_mudlle_calls = NULL;
-
-      ok = false;
-    }
-  else
-    {
-      fn(x);
-      mexception.sig = SIGNAL_NONE;
-      ok = true;
-      assert(call_stack == context.old_call_stack);
-    }
+  bool ok = safe_mcatch(fn, x, &context);
 
   assert(forbid_mudlle_calls == NULL);
 
@@ -170,7 +189,7 @@ value mjmpbuf(value *result)
 bool is_mjmpbuf(value buf)
 {
   struct mjmpbuf *mbuf = buf;
-  return (TYPE(mbuf, type_private)
+  return (TYPE(mbuf, private)
           && mbuf->p.ptype == makeint(PRIVATE_MJMPBUF)
           && mbuf->context != NULL);
 }
@@ -181,11 +200,9 @@ bool is_mjmpbuf(value buf)
 struct session_context *session_context;
 
 ulong xcount;			/* Loop detection */
-uword minlevel;			/* Minimum security level */
+uint16_t minlevel;			/* Minimum security level */
 
-#if defined i386 || defined __x86_64__
 ulong mudlle_stack_limit, hard_mudlle_stack_limit;
-#endif
 
 void session_start(struct session_context *context,
                    const struct session_info *info)
@@ -202,14 +219,11 @@ void session_start(struct session_context *context,
   context->_mudout = info->mout;
   context->_muderr = info->merr;
 
-  context->recursion_count = MAX_RECURSION;
 
-#if defined i386 || defined __x86_64__
   context->old_stack_limit = mudlle_stack_limit;
-  mudlle_stack_limit = get_stack_pointer() - MAX_RECURSION * 16;
+  mudlle_stack_limit = get_stack_pointer() - MAX_STACK_DEPTH;
   if (mudlle_stack_limit < hard_mudlle_stack_limit)
     mudlle_stack_limit = hard_mudlle_stack_limit;
-#endif
 
   context->old_minlevel = minlevel;
   minlevel = info->minlevel;
@@ -227,7 +241,7 @@ void session_start(struct session_context *context,
 }
 
 void cold_session_start(struct session_context *context,
-                        uword maxseclev)
+                        seclev_t maxseclev)
 {
   struct session_info info = cold_session;
   info.maxseclevel = maxseclev;
@@ -241,9 +255,7 @@ void session_end(void)
   call_stack = session_context->s.next;
   minlevel = session_context->old_minlevel;
   maxseclevel = makeint(session_context->old_maxseclevel);
-#ifdef i386
   mudlle_stack_limit = session_context->old_stack_limit;
-#endif
   xcount = session_context->old_xcount;
   session_context = session_context->parent;
 }
@@ -251,11 +263,8 @@ void session_end(void)
 void unlimited_execution(void)
 {
   /* Effectively remove execution limits for current session */
-  session_context->recursion_count = 0;
   xcount = MAX_TAGGED_INT;
-#ifdef i386
   mudlle_stack_limit = hard_mudlle_stack_limit;
-#endif
 }
 
 
@@ -275,7 +284,7 @@ struct list *mudcalltrace;	  /* list(cons(recipient, unhandled_only?)) */
 
 void add_call_trace(value v, bool unhandled_only)
 {
-  assert(TYPE(v, type_oport) || TYPE(v, type_character));
+  assert(TYPE(v, oport) || TYPE(v, character));
 
   mudcalltrace = alloc_list(alloc_list(v, makebool(unhandled_only)),
 			    mudcalltrace);
@@ -288,7 +297,7 @@ void remove_call_trace(value v)
        this = (struct list **)&(*this)->cdr)
     {
       struct list *elem = (*this)->car;
-      assert(TYPE(elem, type_pair));
+      assert(TYPE(elem, pair));
       if (elem->car == v)
         {
           *this = (*this)->cdr;
@@ -297,8 +306,35 @@ void remove_call_trace(value v)
     }
 }
 
+/* if RLIMIT_STACK is not infinite, set the hard mudlle stack limit,
+   reserving some space */
+void set_mudlle_stack_limit(unsigned long reserved)
+{
+  struct rlimit lim;
+  if (getrlimit(RLIMIT_STACK, &lim) < 0)
+    {
+
+      perror("getrlimit(RLIMIT_STACK, ...)");
+      exit(EXIT_FAILURE);
+    }
+
+  rlim_t size = lim.rlim_cur;
+  if (size == RLIM_INFINITY || size <= reserved)
+    return;
+
+  size -= reserved;
+  unsigned long sp = get_stack_pointer();
+  if (sp <= size)
+    return;
+
+  hard_mudlle_stack_limit = sp - size;
+}
+
 void context_init(void)
 {
   staticpro(&mudcalltrace);
   reset_context();
+
+  if (hard_mudlle_stack_limit == 0)
+    set_mudlle_stack_limit(4096);
 }

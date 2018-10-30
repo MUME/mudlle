@@ -22,7 +22,7 @@
 library compiler
 requires vars, misc, sequences
 
-defines mc:c_class, mc:c_lineno,
+defines mc:c_class, mc:c_loc,
 
   mc:c_asymbol, mc:c_avalue,
 
@@ -32,7 +32,7 @@ defines mc:c_class, mc:c_lineno,
 
   mc:c_freturn_typeset, mc:c_freturn_itype, mc:c_fhelp, mc:c_fargs,
   mc:c_fvarargs, mc:c_fvalue,
-  mc:c_flineno, mc:c_ffilename, mc:c_fnicename, mc:c_fargtypesets, mc:c_fvar,
+  mc:c_ffilename, mc:c_fnicename, mc:c_fvar,
   mc:c_flocals, mc:c_flocals_write, mc:c_fclosure, mc:c_fclosure_write,
   mc:c_fglobals, mc:c_fglobals_write, mc:c_fnoescape, mc:c_fnumber, mc:c_fmisc,
   mc:c_fnvars, mc:c_fallvars,
@@ -59,27 +59,27 @@ defines mc:c_class, mc:c_lineno,
 
   mc:b_slength, mc:b_vlength, mc:b_iadd, mc:b_typeof, mc:b_loop_count,
   mc:b_max_loop_count, mc:b_symbol_name, mc:b_symbol_get, mc:b_vector,
-  mc:b_sequence, mc:b_pcons,
+  mc:b_sequence, mc:b_pcons, mc:b_symbol_ref,
   mc:builtins, mc:builtin_names,
 
   mc:a_builtins, mc:a_constants, mc:a_subfns, mc:a_globals, mc:a_kglobals,
   mc:a_primitives, mc:a_linenos, mc:a_rel_primitives, mc:a_seclevs,
-  mc:a_info_fields,
+  mc:a_kglobal_code, mc:a_info_fields,
 
   mc:fname, mc:error, mc:warning, mc:sort_messages,
 
-  mc:mv_gidx, mc:mv_name, mc:mv_used, mc:mv_lineno,
+  mc:mv_gidx, mc:mv_name, mc:mv_used, mc:mv_loc,
   mc:muse_read, mc:muse_write,
 
   mc:register_call_check, mc:lookup_call_check,
 
   mc:apply_functions
 
-reads mc:this_filenames, mc:this_module, mc:this_function, mc:lineno
+reads mc:this_filenames, mc:this_module, mc:this_function
 writes mc:erred
 
 [
-  | message, m_filename, m_nicename, simple_fname, c_flineno, c_ffilename,
+  | message, m_filename, m_nicename, simple_fname, c_loc, c_ffilename,
     c_fnicename, c_fvar, v_name, pending_messages, sort_messages?,
     message_count |
 
@@ -94,7 +94,7 @@ writes mc:erred
     // flags in mc:mv_used
     mc:muse_read  = 1;
     mc:muse_write = 2;
-  mc:mv_lineno = 3;
+  mc:mv_loc = 3;                // (line . column)
 
 
   // Component structure:
@@ -102,7 +102,7 @@ writes mc:erred
   //   The remaining elements depend on the value of the first, as follows:
 
   mc:c_class = 0;		// class of component
-  mc:c_lineno = 1;		// line number of component
+  mc:c_loc = 1;                 // location (line . column) of component
 
   // mc:c_assign - assignment statement
    mc:c_asymbol = 2;		// var name (string, after phase1: var)
@@ -118,17 +118,15 @@ writes mc:erred
   // mc:c_closure - a function
    mc:c_freturn_typeset = 2;	// return value typeset
    mc:c_fhelp = 3;		// help string (string or null)
-   mc:c_fargs = 4;		// argument names (list of (string . type),
+   mc:c_fargs = 4;		// argument names (list of [string, type, loc]
                                 //     after phase1: list of var)
    mc:c_fvarargs = 5;		// true if this is a varargs function
    mc:c_fvalue = 6;		// function value (component)
-   mc:c_flineno = 7;		// line number (integer)
-   mc:c_ffilename = 8;		// filename on disk (string)
-   mc:c_fnicename = 9;          // pretty-printed filename (string)
+   mc:c_ffilename = 7;		// filename on disk (string)
+   mc:c_fnicename = 8;          // pretty-printed filename (string)
 
    // Added by phase1
-   mc:c_fargtypesets = 10;	// argument typesets (list of typeset)
-   mc:c_freturn_itype = 22;	// return value itypes
+   mc:c_freturn_itype = 9;	// return value itypes
    mc:c_fvar = 11;		// variable in which function is stored
    mc:c_flocals = 12;		// local variables (list of var)
    mc:c_flocals_write = 13;	// local variables (list of var) (those
@@ -139,7 +137,7 @@ writes mc:erred
    mc:c_fglobals = 16;		// the global variables used (list of var)
    mc:c_fglobals_write = 17;	// the global variables written (list of var)
 
-   mc:c_fnoescape = 21;         // true if no calls from here escapes (does not
+   mc:c_fnoescape = 10;         // true if no calls from here escapes (does not
                                 // call op_noescape); may still write closure
                                 // variables in mc:c_fclosure_write
 
@@ -149,10 +147,10 @@ writes mc:erred
 
    // Set by phase 4:
    mc:c_fmisc = 18;		// miscellaneous info
-   mc:c_fm_argsbase = 0;	// true if function needs arguments base
-   mc:c_fm_closurebase = 1;	// true if function needs closure base
-   mc:c_fm_globalsbase = 2;	// true if function needs globals base
-   mc:c_fm_regs_callee = 3;     // callee registers used by the backend
+    mc:c_fm_argsbase = 0;	// true if function needs arguments base
+    mc:c_fm_closurebase = 1;	// true if function needs closure base
+    mc:c_fm_globalsbase = 2;	// true if function needs globals base
+    mc:c_fm_regs_callee = 3;    // callee registers used by the backend
    mc:c_fnvars = 19;		// number of vars (global, closure, local) used
                                 // (int, phase3)
    mc:c_fallvars = 20;		// all vars (global, closure, local) used
@@ -181,12 +179,12 @@ writes mc:erred
   // language primitives, some are functions, others are control structures
   mc:b_sc_or = 0;
   mc:b_sc_and = 1;
-  mc:b_eq = 2;
+  mc:b_eq = 2;                  // the following 6 ops are inverted by ^= 1
   mc:b_ne = 3;
   mc:b_lt = 4;
-  mc:b_le = 5;
-  mc:b_gt = 6;
-  mc:b_ge = 7;
+  mc:b_ge = 5;
+  mc:b_le = 6;
+  mc:b_gt = 7;
   mc:b_bitor = 8;
   mc:b_bitxor = 9;
   mc:b_bitand = 10;
@@ -223,15 +221,16 @@ writes mc:erred
   mc:b_vector = 39;
   mc:b_sequence = 40;
   mc:b_pcons = 41;
-  mc:builtins = 42;
+  mc:b_symbol_ref = 42;
+  mc:builtins = 43;
 
   mc:builtin_names =
-    '[ 0 0 "==" "!=" "<" "<=" ">" ">="
+    '[ 0 0 "==" "!=" "<" ">=" "<=" ">"
        "|" "^" "&" "<<" ">>" "+" "-" "*" "/" "%"
        "-" "!" "~" 0 0 0 0 "ref" "set" "." ""
        "car" "cdr" "slength" "vlength" "i+"
        "typeof" "loop_count" "max_loop_count"
-       "symbol_name" "symbol_get" "vector" "sequence" "pcons" ];
+       "symbol_name" "symbol_get" "vector" "sequence" "pcons" "symbol_ref" ];
   assert(vlength(mc:builtin_names) == mc:builtins);
 
   // Format of information returned with assembled code
@@ -244,12 +243,13 @@ writes mc:erred
   mc:a_linenos = 6;
   mc:a_rel_primitives = 7;
   mc:a_seclevs = 8;
-  mc:a_info_fields = 9;
+  mc:a_kglobal_code = 9;
+  mc:a_info_fields = 10;
 
  // strange unload effects (see comment before linkun in link.mud)
   m_filename = mc:m_filename;
   m_nicename = mc:m_nicename;
-  c_flineno = mc:c_flineno;
+  c_loc = mc:c_loc;
   c_ffilename = mc:c_ffilename;
   c_fnicename = mc:c_fnicename;
   c_fvar = mc:c_fvar;
@@ -262,9 +262,7 @@ writes mc:erred
     [,with_minlevel 1 ()]
     [,with_output 1 ()]
   ];
-  vforeach(fn (v) [
-    | p |
-    p = v[0];
+  vforeach(fn (@[p ...]) [
     assert(primitive_flags(p) & OP_APPLY);
     lforeach(fn (sig) assert(sig[-1] == ?x), primitive_type(p))
   ], mc:apply_functions);
@@ -284,7 +282,8 @@ writes mc:erred
         fname = ifn[c_fnicename];
       if (!string?(fname))
         fname = ifn[c_ffilename];
-      format("%s[%s:%d]", simple_fname(ifn), fname, ifn[c_flineno])
+      format("%s[%s:%d]", simple_fname(ifn), fname,
+             mc:loc_line(ifn[c_loc]))
     ];
 
   mc:error = fn args
@@ -298,25 +297,23 @@ writes mc:erred
 
   message = fn (type, args)
     [
-      | msg, filename, lineno, func, nicename |
+      | msg, filename, loc, func, nicename |
 
-      lineno = -1;
+      loc = mc:no_loc;
       if (vector?(mc:this_function))
         [
           filename = mc:this_function[c_ffilename];
           nicename = mc:this_function[c_fnicename];
-          lineno = if (integer?(mc:lineno))
-            mc:lineno
-          else
-            mc:this_function[c_flineno];
+          loc = mc:get_loc();
+          if (mc:loc_line(loc) <= 0)
+            loc = mc:this_function[c_loc];
           func = simple_fname(mc:this_function)
         ]
       else if (vector?(mc:this_module))
         [
           filename = mc:this_module[m_filename];
           nicename = mc:this_module[m_nicename];
-          if (integer?(mc:lineno))
-            lineno = mc:lineno
+          loc = mc:get_loc()
       ]
       else if (pair?(mc:this_filenames))
         @(filename . nicename) = mc:this_filenames;
@@ -331,8 +328,12 @@ writes mc:erred
       msg = make_string_oport();
       pprint(msg, if (use_fname?) filename else nicename);
       pputc(msg, ?:);
-      if (lineno >= 0)
-        pformat(msg, "%d:", lineno);
+      if (mc:loc_line(loc) >= 0)
+        [
+          pformat(msg, "%d:", mc:loc_line(loc));
+          if (mc:loc_column(loc) > 0)
+            pformat(msg, "%d:", mc:loc_column(loc));
+        ];
       pformat(msg, " %s: ", type);
       if (use_fname?)
         pformat(msg, "[%s] ", nicename);
@@ -349,7 +350,7 @@ writes mc:erred
       msg = port_string(msg);
 
       if (sort_messages?)
-        pending_messages = vector(filename, lineno, message_count++, msg)
+        pending_messages = vector(filename, loc, message_count++, msg)
           . pending_messages
       else
         [
@@ -374,14 +375,15 @@ writes mc:erred
         ], lqsort(fn (a, b) [
           | c |
           c = string_cmp(a[0], b[0]);
-          if (c < 0)
-            true
-          else if (c > 0)
-            false
-          else if (a[1] == b[1])
-            a[2] < b[2]
-          else
-            a[1] < b[1]
+          if (c != 0)
+            exit<function> c < 0;
+          c = mc:loc_line(a[1]) - mc:loc_line(b[1]);
+          if (c != 0)
+            exit<function> c < 0;
+          c = mc:loc_column(a[1]) - mc:loc_column(b[1]);
+          if (c != 0)
+            exit<function> c < 0;
+          a[2] < b[2]
         ], pending_messages));
         pending_messages = null;
       ];

@@ -64,12 +64,13 @@ static ulong global_add(struct string *name, value val)
   assert(obj_readonlyp(&name->o));
 
   struct vector *old_values = env_values;
-  GCPRO2(name, old_values);
-  long old_size = intval(environment->size);
-  long aindex = env_add_entry(environment, val);
-  long new_size = intval(environment->size);
+  GCPRO(name, old_values);
+  ulong old_size = environment->values->o.size;
+  ulong aindex = env_add_entry(environment, val);
+  ulong new_size = environment->values->o.size;
   if (new_size != old_size) /* Increase mvars too */
     {
+      new_size = vector_len(environment->values);
       struct vector *vec = alloc_vector(new_size);
 
       memcpy(vec->data, mvars->data, mvars->o.size - sizeof (struct obj));
@@ -81,7 +82,7 @@ static ulong global_add(struct string *name, value val)
              global_names->o.size - sizeof (struct obj));
       global_names = vec;
 
-#if defined(i386) && !defined(NOCOMPILER)
+#if defined(__i386__) && !defined(NOCOMPILER)
       /* This is evil, but the alternative is to lose a scarce, callee-save
 	 register */
       patch_globals_stack(old_values, environment->values);
@@ -146,12 +147,12 @@ ulong mglobal_lookup(struct string *name)
  * As a result, a V+ session calling M code will enable that M code to mess
  * with globals.
  */
-static inline int seclevel_for_globals(void)
+static inline seclev_t seclevel_for_globals(void)
 {
   return intval(maxseclevel);
 }
 
-void check_global_write(ulong goffset, value val)
+void check_global_write(value val, ulong goffset)
 {
   /* called from mudlle; must not allocate if it returns */
   assert(goffset < vector_len(global_names));

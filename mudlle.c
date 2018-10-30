@@ -41,7 +41,6 @@ void mudlle_init(void)
   assert(table_good_size(MAX_TABLE_ENTRIES + 1) > MAX_VECTOR_SIZE);
   garbage_init();
   global_init();
-  strbuf_init();
   print_init();
   stack_init();
   module_init();

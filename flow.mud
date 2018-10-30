@@ -20,8 +20,7 @@
  */
 
 library flow // Data-flow analysis
-requires compiler, vars, ins3, graph,
-  system, dlist, sequences, misc
+requires compiler, dlist, graph, ins3, misc, sequences, vars
 defines
   mc:flow_gen, mc:flow_kill, mc:flow_in, mc:flow_out, mc:flow_map,
   mc:flow_ambiguous, mc:scan_ambiguous, mc:build_ambiguous_list,
@@ -169,7 +168,10 @@ reads mc:show_type_info, mc:verbose
 			  | last |
 			  last = dget(dprev(graph_node_get(node)[mc:f_ilist]))[mc:il_ins];
 			  if (last[mc:i_class] == mc:i_branch)
-			    graph_add_edge(node, last[mc:i_bdest][mc:l_ilist][mc:il_node], false)
+			    graph_add_edge(
+                              node,
+                              last[mc:i_bdest][mc:l_ilist][mc:il_node],
+                              false)
 			], flow);
 
       ifn[mc:c_fvalue] = entry_node . flow
@@ -196,7 +198,8 @@ reads mc:show_type_info, mc:verbose
 	  nodes = cdr(nodes);
 	];
 
-      ifn[mc:c_fvalue] = mc:remove_labels(mc:remove_aliases(mc:remove_branches(clear_nodes(ilist))));
+      ifn[mc:c_fvalue] = mc:remove_labels(mc:remove_aliases(
+        mc:remove_branches(clear_nodes(ilist))));
     ];
 
   clear_nodes = fn (ilist)
@@ -218,39 +221,43 @@ reads mc:show_type_info, mc:verbose
       allnodes = graph_nodes(flow); // nodes not yet ordered
 
       loop
-	[
+	<cont> [
 	  // next node is entry
 	  | next |
 
 	  nodes = entry . nodes;
 	  allnodes = ldelete!(entry, allnodes);
-	  if (allnodes == null) exit lreverse(nodes);
+	  if (allnodes == null)
+            exit lreverse(nodes);
 
 	  // Find next node:
 	  next = null;
-	  graph_edges_out_apply(fn (edge) if (graph_edge_get(edge))
-				  next = graph_edge_to(edge), entry);
+	  graph_edges_out_apply(fn (edge) [
+            if (graph_edge_get(edge))
+              next = graph_edge_to(edge)
+          ], entry);
 
-	  if (next != null) entry = next
-	  else
-	    [
-	      | nodes, lastins |
+	  if (next != null)
+            exit<cont> entry = next;
 
-	      // find nodes that have no direct predecessors
-	      nodes = lfilter(fn (node)
-			        lforall?(fn (edge) !graph_edge_get(edge),
-					 graph_edges_in(node)),
-			      allnodes);
+          // find nodes that have no direct predecessors
+          | nodes |
+          nodes = lfilter(fn (node) lforall?(fn (edge) !graph_edge_get(edge),
+                                             graph_edges_in(node)),
+                          allnodes);
 
-	      // prefer the destination of previous block
-	      lastins = dget(dprev(graph_node_get(entry)[mc:f_ilist]))[mc:il_ins];
-	      if (lastins[mc:i_class] == mc:i_branch &&
-		  memq(lastins[mc:i_bdest][mc:l_ilist][mc:il_node], nodes))
-		next = lastins[mc:i_bdest][mc:l_ilist][mc:il_node]
-	      else
-		next = car(nodes);
-	    ];
-	  entry = next
+          // prefer the destination of previous block
+          | lastins, lastil |
+          lastil = dget(dprev(graph_node_get(entry)[mc:f_ilist]));
+          lastins = lastil[mc:il_ins];
+
+          | n |
+          entry = if (lastins[mc:i_class] == mc:i_branch
+                      && memq(n = lastins[mc:i_bdest][mc:l_ilist][mc:il_node],
+                              nodes))
+            n
+          else
+            car(nodes);
 	]
     ];
 
@@ -366,7 +373,9 @@ mc:flow_sizes = fn (ifn)
       [
         | pnode, pout, override_var, override_value |
         pnode = graph_node_get(graph_edge_from(predecessor));
+        assert(vector?(pnode));
         pout = pnode[mc:f_sizes][mc:flow_out];
+        assert(string?(pout));
 
         override_var = 0;
 
@@ -376,6 +385,7 @@ mc:flow_sizes = fn (ifn)
           | plast, pins |
           plast = dprev(pnode[mc:f_ilist]);
           pins = dget(plast)[mc:il_ins];
+          assert(vector?(pins));
           if (pins[mc:i_class] != mc:i_branch)
             exit<done> null;
 
@@ -399,9 +409,8 @@ mc:flow_sizes = fn (ifn)
           else
             bop += mc:branch_eq - mc:branch_slength;
 
-          | blabel, nlabel |
-          blabel = pins[mc:i_bdest];
-          while (nlabel = blabel[mc:l_alias]) blabel = nlabel;
+          | blabel |
+          blabel = mc:skip_label_alias(pins[mc:i_bdest]);
           if (blabel[mc:l_ilist] != first_il)
             [
               // the fall-through is to our block; invese operator logic
@@ -438,9 +447,16 @@ mc:flow_sizes = fn (ifn)
           ]
         else
           for (|i| i = slength(new_in); --i > 0; )
-            new_in[i] = min(new_in[i],
-                            if (i == override_var) override_value
-                            else pout[i]);
+            [
+              | n, m |
+              n = new_in[i];
+              m = if (i == override_var)
+                override_value
+              else
+                pout[i];
+              if (m < n)
+                new_in[i] = m
+            ];
         new_in
       ];
 
@@ -1219,8 +1235,7 @@ mc:rscan_live = fn (f, x, block)
       fg = ifn[mc:c_fvalue];
 
       dformat("Closure %s(%s) has %s block(s):\n", ifn[mc:c_fnumber],
-		     mc:fname(ifn),
-		     llength(graph_nodes(cdr(fg))));
+              mc:fname(ifn), llength(graph_nodes(cdr(fg))));
       lforeach(fn (node)
 	       [
                  if (mc:verbose > 4)

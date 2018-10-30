@@ -789,7 +789,7 @@ that it wishes to use, either explictly by name (the reads & writes
 declarations below), or by importing other libraries:
 
   library complex
-  requires system, simple
+  requires simple
   defines complex1, complex2
   writes count
   [

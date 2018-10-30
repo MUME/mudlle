@@ -20,7 +20,7 @@
  */
 
 library misc // Miscellaneous useful functions
-requires system, sequences
+requires sequences
 defines abbrev?, assert, assert_message, assoc, assq, bcomplement,
   bcomplement!,  bcopy, bforeach, bitset_to_list, breduce,
   bits_foreach, bits_filter, bits_reduce, bits_exists,
@@ -67,14 +67,11 @@ cddar = fn "`x0 -> `x1. Returns cdr(cdr(car(`x0)))" (pair x) cdr(cdr(car(x)));
 cdddr = fn "`x0 -> `x1. Returns cdr(cdr(cdr(`x0)))" (pair x) cdr(cdr(cdr(x)));
 
 assert = fn "`b -> . Cause `error_abort if `b is false" (b) if (!b) fail();
-assert_message = fn "`b `s -> . Cause `error_abort and `display(`s) if `b is false" (b, string s)
+assert_message = fn "`b `s -> . Cause `error_abort and display message `s if `b is false" (b, string s)
   if (!b) fail_message(s);
 fail = none fn " -> . Cause `error_abort." () error(error_abort);
-fail_message = none fn "`s -> . Cause `error_abort and `display(`s)." (string s)
-  [
-    display(s); newline();
-    fail()
-  ];
+fail_message = none fn "`s -> . Cause `error_abort and display message `s." (string s)
+  error_message(error_abort, s);
 
 union = fn "`l1 `l2 -> `l3. Set union of `l1 and `l2" (list l1, list l2)
   // Types: l1, l2: set
@@ -394,11 +391,17 @@ vector_to_list = fn "`v -> `l. Makes a vector into a list" (vector v)
     l
   ];
 
-sorted_table_vector = fn "`table -> `v. Returns a vector of the elements of `table, sorted by name" (table table)
-  vqsort!(fn (s1, s2) string_icmp(symbol_name(s1), symbol_name(s2)) < 0,
-	  table_vector(table));
+sorted_table_vector = fn "`table -> `v. Returns a vector of the symbols in `table, sorted by name (case-sensitive for ctables)." (table table)
+  [
+    | cmp |
+    cmp = if (ctable?(table))
+      fn (a, b) string_cmp(symbol_name(a), symbol_name(b)) < 0
+    else
+      fn (a, b) string_icmp(symbol_name(a), symbol_name(b)) < 0;
+    vqsort!(cmp, table_vector(table))
+  ];
 
-sorted_table_list = fn "`table -> `l. Returns a list of the elements of `table, sorted by name" (table table)
+sorted_table_list = fn "`table -> `l. Returns a list of the symbols in `table, sorted by name (case-sensitive for ctables)." (table table)
   vector_to_list(sorted_table_vector(table));
 
 /// Ancalagon's stuff

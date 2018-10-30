@@ -25,26 +25,6 @@
 #include "error.h"
 #include "types.h"
 
-#define DO1(op) op(1)
-#define DO2(op) DO1(op) op(2)
-#define DO3(op) DO2(op) op(3)
-#define DO4(op) DO3(op) op(4)
-#define DO5(op) DO4(op) op(5)
-#define __DO_N(N, op) DO ## N(op)
-#define DO_N(N, op) __DO_N(N, op)
-#define DOPRIMARGS(op) DO_N(MAX_PRIMITIVE_ARGS, op)
-
-#define CONCAT1(op, sep) op(1)
-#define CONCAT2(op, sep) CONCAT1(op, sep) SEP_ ## sep op(2)
-#define CONCAT3(op, sep) CONCAT2(op, sep) SEP_ ## sep op(3)
-#define CONCAT4(op, sep) CONCAT3(op, sep) SEP_ ## sep op(4)
-#define CONCAT5(op, sep) CONCAT4(op, sep) SEP_ ## sep op(5)
-
-#define SEP_COMMA ,
-#define SEP_SEMI  ;
-#define CONCATSEMI(N, op)  CONCAT ## N(op, SEMI)
-#define CONCATCOMMA(N, op) CONCAT ## N(op, COMMA)
-
 #define NVARARGS -1
 
 #define PRIMARGSNVARARGS value v0, ulong nargs
@@ -100,6 +80,11 @@ value call(value c, struct vector *args);
    Requires: callable(c, vector_len(args)) does not fail.
 */
 
+enum runtime_error function_callable(struct obj *f, const char **errmsg,
+                                     int nargs);
+/* Returns: error to raise if function f cannot be called with nargs
+   arguments */
+
 void callable(value c, int nargs);
 /* Effects: Causes an error of c is not something that can be called with
      nargs arguments.
@@ -118,11 +103,7 @@ bool minlevel_violator(value c);
    has_pending_exception(); mexception.sig and .err are set appropriately.
 */
 value mcatchv(const char *name, value c, int argc, ...);
-
-static inline value mcatch_call0(const char *name, value c)
-{
-  return mcatchv(name, c, 0);
-}
+value mcatch_call0(const char *name, value c);
 
 #define DEF_MCATCH_CALL(N)                                      \
 static inline value mcatch_call ## N(                           \
@@ -138,49 +119,48 @@ value mcatch_call1plus(const char *name, value c, value arg,
                        struct vector *args);
 value mcatch_call(const char *name, value c, struct vector *args);
 
-#define __CPRIMARG(N) args[N - 1]
-#define DEF_CALL_PRIMOP(N)                                              \
-static inline value call_primop ## N(value (*op)(), value *args)        \
-{                                                                       \
-  return op(CONCATCOMMA(N, __CPRIMARG));                                \
-}
-DOPRIMARGS(DEF_CALL_PRIMOP)
-#undef DEF_CALL_PRIMOP
-#undef __CPRIMARG
-
 /* Machine language interface */
 
 value invoke0(struct closure *c);
-#define DECL_INVOKE(N)                                          \
+#if defined __x86_64__ && !defined NOCOMPILER
+#define DECL_INVOKE(N)                                                  \
+value x64_invoke ## N(PRIMARGS ## N, struct closure *c);                \
+static inline value invoke ## N(struct closure *c, PRIMARGS ## N)       \
+{                                                                       \
+  return x64_invoke ## N(PRIMARGNAMES ## N, c);                         \
+}
+#else
+#define DECL_INVOKE(N)                                                  \
 value invoke ## N(struct closure *c, PRIMARGS ## N);
+#endif
 DOPRIMARGS(DECL_INVOKE)
 #undef DECL_INVOKE
 
 /* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
+     TYPEIS(c->code, mcode);
    Effects: Executes c(arg1, ..., argN)
    Returns: c()'s result
 */
 
 value invoke1plus(struct closure *c, value arg, struct vector *args);
 /* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
+     TYPEIS(c->code, mcode);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
 
 value invoke(struct closure *c, struct vector *args);
 /* Requires: c be a closure whose code is in machine code, i.e.
-     TYPEIS(c->code, type_mcode);
+     TYPEIS(c->code, mcode);
    Effects: Executes c(args)
    Returns: c(args)'s result
 */
 
 value msetjmp(value f);
-void mlongjmp(struct mjmpbuf *buf, value x) NORETURN;
+noreturn void mlongjmp(struct mjmpbuf *buf, value x);
 
-void mrethrow(void) NORETURN;
-void mthrow(enum mudlle_signal sig, enum runtime_error err) NORETURN;
+noreturn void mrethrow(void);
+noreturn void mthrow(enum mudlle_signal sig, enum runtime_error err);
 
 void maybe_mrethrow(void);
 

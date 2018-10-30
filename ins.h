@@ -23,21 +23,21 @@
 #define INS_H
 
 #include "code.h"
-#include "mudlle.h"
 #include "types.h"
 
 struct label;
+struct loc;
 
 union instruction {
 #ifdef __GNUC__
-  enum operator op : 8 __attribute__((packed));
+  enum operator op : 8 __attribute__((__packed__));
 #else
-  ubyte op;
+  uint8_t op;
 #endif
-  ubyte u;
-  sbyte s;
+  uint8_t u;
+  int8_t s;
 };
-CASSERT(instruction, sizeof (union instruction) == 1);
+CASSERT_SIZEOF(union instruction, 1);
 
 struct fncode *new_fncode(bool toplevel);
 /* Returns: A new function code structure (in which code for functions
@@ -63,13 +63,13 @@ void ins0(enum operator op, struct fncode *fn);
    Modifies: fn
 */
 
-void ins1(enum operator op, ubyte arg1, struct fncode *fn);
+void ins1(enum operator op, uint8_t arg1, struct fncode *fn);
 /* Effects: Adds instruction ins to code of 'fn'.
      The instruction has one argument, arg1.
    Modifies: fn
 */
 
-void ins2(enum operator op, uword arg2, struct fncode *fn);
+void ins2(enum operator op, uint16_t arg2, struct fncode *fn);
 /* Effects: Adds instruction ins to code of 'fn'.
      The instruction has a two byte argument (arg2), stored in big-endian
      format.
@@ -84,14 +84,14 @@ void branch(enum operator branch, struct label *to, struct fncode *fn);
    Modifies: fn
 */
 
-void adjust_depth(int by, struct fncode *fn);
+int adjust_depth(int by, struct fncode *fn);
 /* Effects: Adjusts the current static stack depth of fn by the given
      amount. This is necessary for structures such as 'if' (which have
      code to compute 2 values, but which leave one on the stack).
    Modifies: fn
 */
 
-uword add_constant(value cst, struct fncode *fn);
+uint16_t add_constant(value cst, struct fncode *fn);
 /* Effects: Adds a constant to code of 'fn'.
    Returns: The index where this constant is stored.
    Modifies: fn
@@ -115,10 +115,10 @@ struct icode *generate_fncode(struct fncode *fn,
                               struct string *varname,
                               struct string *afilename,
                               struct string *anicename,
-                              int alineno,
-                              struct vector *arg_types,
+                              const struct loc *loc,
+                              struct obj *arguments,
                               unsigned return_typeset,
-                              int seclev);
+                              seclev_t seclev);
 /* Returns: A code structure with the instructions and constants in 'fn'.
    Requires: generate_fncode may only be called on the result of the most
      recent call to new_fncode. That call is then deemed to never have
@@ -159,7 +159,5 @@ void set_lineno(int line, struct fncode *fn);
 /* Effects: Sets line number for upcoming instructions
    Modifies: fn
 */
-
-int get_code_line_number(struct icode *code, int offset);
 
 #endif

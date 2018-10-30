@@ -19,6 +19,9 @@
  * ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+| arch |
+arch = if (INTBITS == 31) "x86" else "x64";
+
 // Load inferring, compiled x86 compiler
 // Bootstrap via interpreter (load minimum for linker)
 garbage_collect(700000);
@@ -44,7 +47,7 @@ fload("compiler.obj") &&
 fload("link.obj") &&
 
 fload("inference.obj") &&
-fload("x86.obj") &&
+fload(arch + ".obj") &&
 fload("compile.obj") &&
 fload("dihash.obj");
 mc:verbose = 0;

@@ -19,6 +19,8 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "mudlle-config.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -35,7 +37,7 @@ bool use_nicename;
 bool erred;
 
 static void vlog_message(const char *fname, const char *nname, int line,
-                         bool is_warning, const char *msg, va_list va)
+                         int col, bool is_warning, const char *msg, va_list va)
 {
   struct strbuf sb = SBNULL;
 
@@ -45,7 +47,11 @@ static void vlog_message(const char *fname, const char *nname, int line,
 
       sb_printf(&sb, "%s:", use_fname ? fname : nname);
       if (line > 0)
-        sb_printf(&sb, "%d:", line);
+        {
+          sb_printf(&sb, "%d:", line);
+          if (col > 0)
+            sb_printf(&sb, "%d:", col);
+        }
       sb_addc(&sb, ' ');
     }
   if (is_warning)
@@ -62,48 +68,48 @@ static void vlog_message(const char *fname, const char *nname, int line,
     erred = true;
 }
 
-void log_error(const char *msg, ...)
+void log_error(const struct loc *loc, const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
   struct block *body = this_mfile ? this_mfile->body : NULL;
   vlog_message(body ? body->filename : NULL,
                body ? body->nicename : NULL,
-               yylineno, false, msg, args);
+               loc->line, loc->col, false, msg, args);
   va_end(args);
 }
 
-void compile_error(const char *msg, ...)
+void compile_error(const struct loc *loc, const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
-  vlog_message(lexer_filename, lexer_nicename, yylineno, false, msg, args);
+  vlog_message(lexer_filename, lexer_nicename, loc->line, loc->col, false,
+               msg, args);
   va_end(args);
 }
 
-static void vwarning(const char *fname, const char *nname, int line,
+static void vwarning(const char *fname, const char *nname, int line, int col,
                      const char *msg, va_list args)
 {
-  vlog_message(fname, nname, line, true, msg, args);
+  vlog_message(fname, nname, line, col, true, msg, args);
 }
 
 
-void compile_warning(const char *msg, ...)
+void compile_warning(const struct loc *loc, const char *msg, ...)
 {
   va_list args;
-
   va_start(args, msg);
-  vwarning(lexer_filename, lexer_nicename, yylineno, msg, args);
+  vwarning(lexer_filename, lexer_nicename, loc->line, loc->col, msg, args);
   va_end(args);
 }
 
-void warning_line(const char *fname, const char *nname, int line,
-                  const char *msg, ...)
+void warning_loc(const char *fname, const char *nname, const struct loc *loc,
+                 const char *msg, ...)
 {
   va_list args;
 
   va_start(args, msg);
-  vwarning(fname, nname, line, msg, args);
+  vwarning(fname, nname, loc->line, loc->col, msg, args);
   va_end(args);
 }
 
@@ -117,15 +123,6 @@ void *debug_xmalloc(const char *file, int line, int size)
       fprintf(stderr, "No memory!\n");
       abort();
     }
-
-  return newp;
-}
-
-void *debug_xcalloc(const char *file, int line, int number, int size)
-{
-  void *newp = debug_calloc(file, line, number, size);
-
-  if (!newp) abort();
 
   return newp;
 }
@@ -149,40 +146,28 @@ char *debug_xstrdup(const char *file, int line, const char *s)
 void *xmalloc(int size)
 {
   void *newp = malloc(size);
-
-  if (!newp) abort();
-
-  return newp;
-}
-
-void *xcalloc(int number, int size)
-{
-  void *newp = calloc(number, size);
-
-  if (!newp) abort();
-
+  assert(newp != NULL);
   return newp;
 }
 
 void *xrealloc(void *old, int size)
 {
   void *newp = realloc(old, size);
-
-  if (!newp) abort();
-
+  assert(newp != NULL);
   return newp;
 }
 
 char *xstrdup(const char *s)
 {
-  char *newp = xmalloc(strlen(s) + 1);
-
-  return strcpy(newp, s);
+  size_t size = strlen(s) + 1;
+  char *newp = xmalloc(size);
+  memcpy(newp, s, size);
+  return newp;
 }
 #endif
 
 /* ofs is the offset to the 'next' field */
-void *reverse_list_internal(void *l, size_t ofs)
+void *internal_reverse_list(void *l, size_t ofs)
 {
   void *prev = NULL;
   while (l != NULL)
@@ -195,3 +180,33 @@ void *reverse_list_internal(void *l, size_t ofs)
     }
   return prev;
 }
+
+void ary_grow(struct ary *a)
+{
+  ary_set_size(a, a->size ? a->size * 2 : 32);
+}
+
+void ary_set_size(struct ary *a, size_t size)
+{
+  a->size = size;
+  a->data = realloc(a->data, a->size * sizeof a->data[0]);
+  if (a->used > a->size)
+    a->used = a->size;
+}
+
+#ifndef __GNUC__
+int popcountl(unsigned long u)
+{
+  static const uint8_t count[16] = {
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
+  };
+
+  int n = 0;
+  while (u > 0)
+    {
+      n += count[u & 15];
+      u >>= 4;
+    }
+  return n;
+}
+#endif

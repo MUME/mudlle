@@ -20,10 +20,10 @@
  */
 
 library mp
-requires system, genx86, mx86
+requires ax86, genx86, mx86
 defines mp:nscratch, mp:ncaller, mp:ncallee, mp:nregargs, mp:new_label,
   mp:ins_list, mp:assemble, mp:mgen_preamble, mp:mgen_instruction,
-  mp:select_registers, mp:migrate, mp:uses_scratch?
+  mp:select_registers, mp:migrate, mp:uses_scratch?, mp:reset_counters
 [
   mp:nscratch = fn (ifn) x86:nscratch(ifn);
   mp:ncaller = fn (ifn) x86:ncaller(ifn);
@@ -34,8 +34,10 @@ defines mp:nscratch, mp:ncaller, mp:ncallee, mp:nregargs, mp:new_label,
   mp:ins_list = fn (x) x86:ins_list(x);
   mp:assemble = fn (x) x86:gassemble(x);
   mp:mgen_preamble = fn (x1, x2) x86:mgen_preamble(x1, x2);
-  mp:mgen_instruction = fn (x1, x2, x3, x4) x86:mgen_instruction(x1, x2, x3, x4);
+  mp:mgen_instruction = fn (x1, x2, x3, x4)
+    x86:mgen_instruction(x1, x2, x3, x4);
   mp:select_registers = fn (x1, x2) x86:select_registers(x1, x2);
   mp:migrate = fn v apply(x86:migrate, v);
   mp:uses_scratch? = fn (ins) x86:uses_scratch?(ins);
+  mp:reset_counters = fn () x86:reset_counters();
 ];

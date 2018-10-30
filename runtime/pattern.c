@@ -18,12 +18,16 @@
  * "AS IS" BASIS, AND DAVID GAY AND GUSTAV HALLBERG HAVE NO OBLIGATION TO
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
+
+#include "../mudlle-config.h"
+
 #include <stdlib.h>
 #include <string.h>
 
 #include "pattern.h"
-#include "runtime.h"
+#include "prims.h"
 
+#include "../charset.h"
 #include "../error.h"
 #include "../table.h"
 
@@ -152,47 +156,48 @@ static bool recurse(value lhs, value rhs, struct seen_values *seen)
   lhsobj->flags |= OBJ_FLAG_0;
   rhsobj->flags |= OBJ_FLAG_1;
 
-  switch (lhstype) {
-  case type_symbol:
+  switch (lhstype)
     {
-      struct symbol *sympat = lhs, *symval = rhs;
-      size_t symlen = string_len(sympat->name);
-      return (symlen == string_len(symval->name)
-              && mem8icmp(sympat->name, symval->name, symlen) == 0
-              && recurse(sympat->data, symval->data, seen));
-    }
-  case type_vector:
-    {
-      long vl = safe_vlen(lhs, seen);
-      if (vl != safe_vlen(rhs, seen))
-        return false;
-      for (long i = 0; i < vl; ++i)
-	if (!recurse(((struct vector *)lhs)->data[i],
-		     ((struct vector *)rhs)->data[i],
-                     seen))
+    case type_symbol:
+      {
+        struct symbol *sympat = lhs, *symval = rhs;
+        size_t symlen = string_len(sympat->name);
+        return (symlen == string_len(symval->name)
+                && mem8icmp(sympat->name->str, symval->name->str, symlen) == 0
+                && recurse(sympat->data, symval->data, seen));
+      }
+    case type_vector:
+      {
+        long vl = safe_vlen(lhs, seen);
+        if (vl != safe_vlen(rhs, seen))
           return false;
-      return true;
+        for (long i = 0; i < vl; ++i)
+          if (!recurse(((struct vector *)lhs)->data[i],
+                       ((struct vector *)rhs)->data[i],
+                       seen))
+            return false;
+        return true;
+      }
+    case type_pair:
+      return (recurse(((struct list *)lhs)->car,
+                      ((struct list *)rhs)->car,
+                      seen)
+              && recurse(((struct list *)lhs)->cdr,
+                         ((struct list *)rhs)->cdr,
+                         seen));
+    case type_table:
+      {
+        if (is_ctable(lhs) != is_ctable(rhs))
+          return false;
+        struct table_data tdata = { .seen = seen, .table = rhs };
+        if (table_exists((struct table *)lhs, recurse_symbol, &tdata)
+            || table_exists((struct table *)rhs, count_non_null_syms, &tdata))
+          return false;
+        return tdata.nentries == 0;
+      }
+    default:
+      abort();
     }
-  case type_pair:
-    return (recurse(((struct list *)lhs)->car,
-                    ((struct list *)rhs)->car,
-                    seen)
-            && recurse(((struct list *)lhs)->cdr,
-                       ((struct list *)rhs)->cdr,
-                       seen));
-  case type_table:
-    {
-      if (is_ctable(lhs) != is_ctable(rhs))
-        return false;
-      struct table_data tdata = { .seen = seen, .table = rhs };
-      if (table_exists((struct table *)lhs, recurse_symbol, &tdata)
-          || table_exists((struct table *)rhs, count_non_null_syms, &tdata))
-        return false;
-      return tdata.nentries == 0;
-    }
-  default:
-    abort();
-  }
 }
 
 TYPEDOP(equalp, "equal?",

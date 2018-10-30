@@ -22,7 +22,11 @@
 #ifndef RUNTIME_BIGINT_H
 #define RUNTIME_BIGINT_H
 
-#include "../types.h"
+#include <limits.h>
+#include <stdbool.h>
+
+#include "../mudlle-config.h"
+#include "../mvalues.h"
 
 void bigint_init(void);
 void free_mpz_temps(void);
@@ -30,8 +34,29 @@ void free_mpz_temps(void);
 #ifdef USE_GMP
 struct bigint;
 double bigint_to_double(struct bigint *bi);
-value make_int_or_bigint(long l);
-value make_unsigned_int_or_bigint(unsigned long u);
 #endif
+
+value make_unsigned_int_or_bigint(unsigned long long u);
+value make_signed_int_or_bigint(long long s);
+
+#define __make_i_or_bi(x, un, TYPE)                             \
+  (TYPE ## _MAX < MAX_TAGGED_INT				\
+   ? makeint((long)(x))						\
+   : make_ ## un ## signed_int_or_bigint(x))
+#define make_int_or_bigint(x)                                   \
+  _Generic(                                                     \
+    (x),                                                        \
+    bool               : makebool(x),                           \
+    char               : makeint((long)(x)),                    \
+    signed char        : __make_i_or_bi((x), , SCHAR),          \
+    unsigned char      : __make_i_or_bi((x), un, UCHAR),	\
+    short              : __make_i_or_bi((x), , SHRT),           \
+    unsigned short     : __make_i_or_bi((x), un, USHRT),	\
+    int                : __make_i_or_bi((x), , INT),            \
+    unsigned           : __make_i_or_bi((x), un, UINT),         \
+    long               : make_signed_int_or_bigint(x),          \
+    unsigned long      : make_unsigned_int_or_bigint(x),        \
+    long long          : make_signed_int_or_bigint(x),          \
+    unsigned long long : make_unsigned_int_or_bigint(x))
 
 #endif /* RUNTIME_BIGINT_H */

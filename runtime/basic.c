@@ -19,20 +19,30 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
+#include "../mudlle-config.h"
+
 #include <ctype.h>
 #include <fcntl.h>
-#ifndef WIN32
-#  include <netinet/in.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <netinet/in.h>
+
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
+
+#include "basic.h"
+#include "check-types.h"
+#include "list.h"
+#include "mudlle-string.h"
+#include "prims.h"
+#include "symbol.h"
+#include "vector.h"
 
 #include "../alloc.h"
 #include "../call.h"
@@ -46,13 +56,6 @@
 #include "../mparser.h"
 #include "../table.h"
 #include "../tree.h"
-
-#include "basic.h"
-#include "list.h"
-#include "runtime.h"
-#include "mudlle-string.h"
-#include "symbol.h"
-#include "vector.h"
 
 
 TYPEDOP(functionp, "function?", "`x -> `b. True if `x is a function;"
@@ -68,9 +71,9 @@ TYPEDOP(callablep, "callable?", "`f `n -> `b. True if function `f"
         2, (value f, value margs),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "fn.n")
 {
-  if (!is_function(f))
-    runtime_error(error_bad_function);
-  int nargs = GETRANGE(margs, 0, INT_MAX);
+  int nargs;
+  CHECK_TYPES(f,     CT_FUNCTION,
+              margs, CT_RANGE(nargs, 0, INT_MAX));
   return makebool(callablep(f, nargs));
 }
 
@@ -78,8 +81,7 @@ TYPEDOP(may_callp, "may_call?", "`f -> `b. True if the caller is allowed to"
 	" call `f without a security violation due to minlevel.", 1, (value f),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
-  if (!is_function(f))
-    runtime_error(error_bad_function);
+  CHECK_TYPES(f, CT_FUNCTION);
   return makebool(!minlevel_violator(f));
 }
 
@@ -88,7 +90,7 @@ static struct vector *vector_copy(struct vector *v)
   struct vector *result;
   long l = vector_len(v);
 
-  GCPRO1(v);
+  GCPRO(v);
   result = alloc_vector(l);
   memcpy(result->data, v->data, l * sizeof *v->data);
   UNGCPRO();
@@ -96,32 +98,49 @@ static struct vector *vector_copy(struct vector *v)
   return result;
 }
 
+#if (defined __i386__ || defined __x86_64__) && !defined NOCOMPILER
 /* called from x86builtins.S */
-value apply_vararg(value (*prim)(), struct vector *args)
+value builtin_call_vararg(value (*prim)(), int nargs, const value *args);
+value builtin_call_vararg(value (*prim)(), int nargs, const value *args)
 {
-  args = vector_copy(args);
-  return prim(args, vector_len(args));
+  if (nargs > MAX_FUNCTION_ARGS)
+    runtime_error(error_wrong_parameters);
+
+  struct vector *argv = alloc_vector(nargs);
+  memcpy(argv->data, args, sizeof *args * nargs);
+  return prim(argv, nargs);
 }
 
-static enum runtime_error apply(value f, struct vector *args, value *r)
+/* called from x86builtins.S */
+value builtin_apply_vararg(vararg_op_fn prim, struct vector *args);
+value builtin_apply_vararg(vararg_op_fn prim, struct vector *args)
+#else  /* ! __i386__ || NOCOMPILER */
+static value builtin_apply_vararg(vararg_op_fn prim, struct vector *args)
+#endif
 {
-  if (!TYPE(args, type_vector))
-    return error_bad_type;
-  if (!is_function(f))
-    return error_bad_function;
+  long nargs = vector_len(args);
+  if (nargs > MAX_FUNCTION_ARGS)
+    runtime_error(error_wrong_parameters);
 
-  int nargs = vector_len(args);
-  if (!callablep(f, nargs))
-    return error_wrong_parameters;
+  args = vector_copy(args);
+  return prim(args, nargs);
+}
 
-  struct obj *fobj = f;
-  if (fobj->type == type_closure)
-    {
-      *r = call(f, args);
-      return error_none;
-    }
+TYPEDOP(apply, 0,
+        "`f `v -> `x. Excutes `f with arguments `v, returns its result",
+	2, (struct obj *f, struct vector *args),
+	OP_APPLY, "fv.x")
+{
+  int nargs;
+  CHECK_TYPES(/* safe as the type check always happens first */
+              f,    CT_CALLABLE(nargs = vector_len(args)),
+              args, vector);
 
-  if (fobj->type == type_varargs)
+  if (f->type == type_closure)
+    return call(f, args);
+
+  struct primitive *prim = (struct primitive *)f;
+  if (f->type == type_varargs)
     {
       struct {
         struct call_stack_c_header c;
@@ -132,55 +151,40 @@ static enum runtime_error apply(value f, struct vector *args, value *r)
             .next = call_stack,
             .type = call_c
           },
-          .u.prim = f,
+          .u.prim = prim,
           .nargs = 1
         },
         .args = { args }
       };
       call_stack = &me.c.s;
-      struct primitive *prim = f;
       prim->call_count++;
-      *r = apply_vararg(prim->op->op, args);
+      value r = builtin_apply_vararg(prim->op->op, args);
       call_stack = me.c.s.next;
-    }
-  else
-    {
-      struct {
-        struct call_stack_c_header c;
-        value args[MAX_PRIMITIVE_ARGS];
-      } me;
-      me.c = (struct call_stack_c_header){
-        .s = {
-          .next = call_stack,
-          .type = call_c
-        },
-        .u.prim = f,
-        .nargs = nargs
-      };
-      call_stack = &me.c.s;
-
-      memcpy(me.args, args->data, sizeof args->data[0] * nargs);
-
-      if (fobj->type == type_secure)
-        callable(f, nargs);     /* checks seclevel */
-
-      *r = call(f, args);
-      call_stack = me.c.s.next;
+      return r;
     }
 
-  return error_none;
-}
+  struct {
+    struct call_stack_c_header c;
+    value args[MAX_PRIMITIVE_ARGS];
+  } me;
+  me.c = (struct call_stack_c_header){
+    .s = {
+      .next = call_stack,
+      .type = call_c
+    },
+    .u.prim = prim,
+    .nargs = nargs
+  };
+  call_stack = &me.c.s;
 
-TYPEDOP(apply, 0,
-        "`f `v -> `x. Excutes `f with arguments `v, returns its result",
-	2, (value f, struct vector *args),
-	OP_APPLY, "fv.x")
-{
-  value result;
-  enum runtime_error error = apply(f, args, &result);
-  if (error != error_none)
-    primitive_runtime_error(error, &op_apply, 2, f, args);
-  return result;
+  memcpy(me.args, args->data, sizeof args->data[0] * nargs);
+
+  if (f->type == type_secure)
+    callable(f, nargs);     /* checks seclevel */
+
+  value r = call(f, args);
+  call_stack = me.c.s.next;
+  return r;
 }
 
 static value do_eval(value input, struct table *cache, bool force_constant)
@@ -188,7 +192,7 @@ static value do_eval(value input, struct table *cache, bool force_constant)
   ASSERT_NOALLOC_START();
 
   const char **lines;
-  if (TYPE(input, type_string))
+  if (TYPE(input, string))
     {
       lines = malloc(3 * sizeof *lines);
       lines[0] = force_constant ? "'" : "";
@@ -197,13 +201,13 @@ static value do_eval(value input, struct table *cache, bool force_constant)
     }
   else
     {
-      TYPEIS(input, type_vector);
+      assert(TYPE(input, vector));
       struct vector *iv = input;
       lines = malloc((vector_len(iv) + 2) * sizeof *lines);
       lines[0] = force_constant ? "'" : "";
       for (int i = 0; i < vector_len(iv); ++i)
         {
-          TYPEIS(iv->data[i], type_string);
+          TYPEIS(iv->data[i], string);
           lines[i + 1] = ((struct string *)iv->data[i])->str;
         }
       lines[vector_len(iv) + 1] = NULL;
@@ -276,6 +280,7 @@ SECTOP(eval, EVAL_NAME,
        " `error_compile is thrown.",
        1, (value input), 1, 0, "[sv].x")
 {
+  CHECK_TYPES(input, CT_TYPES(string, vector));
   return do_eval(input, NULL, false);
 }
 
@@ -289,11 +294,12 @@ SECTOP(read_constant, 0,
        "The input will be interpreted as if it started with an apostrophe (')"
        " and cannot contain any comma-prefixed expressions.\n"
        "On syntax error, a message is printed using `display() and"
-       " false is returned.",
+       " false is returned.\n"
+       "See also `pwrite_constant().",
        2, (value input, struct table *cache), 1, 0, "[sv][tu].[zk]")
 {
-  if (cache)
-    TYPEIS(cache, type_table);
+  CHECK_TYPES(input, CT_TYPES(string, vector),
+              cache, CT_TYPES(null, table));
   return do_eval(input, cache, true);
 }
 
@@ -329,15 +335,30 @@ SECTOP(effective_seclevel, 0,
 TYPEDOP(error, 0, "`n -> . Causes error `n", 1, (value errn),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.")
 {
-  enum runtime_error n = GETRANGE(errn, 0, last_runtime_error - 1);
+  enum runtime_error n;
+  CHECK_TYPES(errn, CT_RANGE(n, 0, last_runtime_error - 1));
   runtime_error(n);
+}
+
+TYPEDOP(error_message, 0, "`n `s -> . Displays `s and causes error `n.",
+        2, (value errn, struct string *s),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "ns.")
+{
+  enum runtime_error n;
+  CHECK_TYPES(errn, CT_RANGE(n, 0, last_runtime_error - 1),
+              s,    string);
+  char *msg;
+  ALLOCA_STRING(msg, s, 1024);
+  if (msg == NULL)
+    runtime_error(error_bad_value);
+  runtime_error_message(n, msg);
 }
 
 TYPEDOP(warning, 0, "`s -> . Prints the warning message `s and a stack trace.",
         1, (struct string *s),
         0, "s.")
 {
-  TYPEIS(s, type_string);
+  CHECK_TYPES(s, string);
   char *msg;
   ALLOCA_STRING(msg, s, 1024);
   if (msg == NULL)
@@ -346,7 +367,7 @@ TYPEDOP(warning, 0, "`s -> . Prints the warning message `s and a stack trace.",
   undefined();
 }
 
-const struct primitive_ext *const warning_prim_ext = &op_warning;
+const struct prim_op *const warning_prim_ext = &op_warning;
 
 TYPEDOP(compiledp, "compiled?",
         "-> `b. Returns true if called from compiled code, ignoring"
@@ -397,40 +418,26 @@ static void docall0(void *_data)
 /* calls f() and returns value in "result"
 
    if f() causes an error:
-     for loop and recurse errors, re-raise the error
+     for loop errors, re-raise the error
 
      if handler is non-null, call handler(errno) and returns its value
 
      if handler is null, return errno
  */
 static value trap_error(value f, value handler,
-                        enum call_trace_mode call_trace_mode,
-                        bool handle_loops)
+                        enum call_trace_mode call_trace_mode)
 {
-  callable(f, 0);
-  if (handler)
-    callable(handler, 1);
-
-  ulong saved_recursion_count = 0, saved_xcount = 0;
-  if (handle_loops)
-    {
-      saved_xcount          = MIN(xcount, xcount / 10 + 100);
-      saved_recursion_count = MIN(session_context->recursion_count,
-                                  session_context->recursion_count / 10 + 100);
-      xcount                           -= saved_xcount;
-      session_context->recursion_count -= saved_recursion_count;
-    }
+  ulong saved_xcount = MIN(xcount, xcount / 10 + 100);
+  xcount -= saved_xcount;
 
   {
     struct call0_data d = { .func = f };
-    GCPRO1(handler);
+    GCPRO(handler);
     bool ok = mcatch(docall0, &d, call_trace_mode);
     UNGCPRO();
 
     /* careful in case f() called unlimited_execution() */
     xcount = MIN(MAX_TAGGED_INT, xcount + saved_xcount);
-    if (session_context->recursion_count)
-      session_context->recursion_count += saved_recursion_count;
 
     if (ok)
       return d.result;
@@ -439,13 +446,8 @@ static value trap_error(value f, value handler,
   if (mexception.sig == SIGNAL_ERROR)
     {
       enum runtime_error err = mexception.err;
-      if (err == error_loop
-          && (!handle_loops
-              || xcount == 0))
-        goto propagate;
-      if (err == error_recurse
-          && (!handle_loops
-              || session_context->recursion_count == 0))
+      /* if we are really out of loop space, rethrow the error */
+      if (err == error_loop && xcount == 0)
         goto propagate;
 
       if (handler == NULL)
@@ -461,35 +463,33 @@ static value trap_error(value f, value handler,
 TYPEDOP(catch_error, 0, "`f `b -> `x. Executes `f() and returns its result."
         " If an error occurs, returns the error number.\n"
         "If `b is true, call traces are not sent to the `with_output()"
-        " target, but only to those added with `add_call_trace_oport!().\n"
-        "Does not catch loop/recursion errors. Cf. `trap_error().",
+        " target, but only to those added with `add_call_trace_oport!().",
         2, (value f, value suppress),
         0, "fx.x")
 {
+  CHECK_TYPES(f,        CT_CALLABLE(0),
+              suppress, any);
   return trap_error(f, NULL,
-                    istrue(suppress) ? call_trace_no_err : call_trace_on,
-                    false);
+                    istrue(suppress) ? call_trace_no_err : call_trace_on);
 }
 
 TYPEDOP(handle_error, 0, "`f0 `f1 -> `x. Executes `f0(). If an error occurs,"
-        " calls `f1(`errno). Returns result of `f0() or `f1(`errno)."
-        " Does not handle loop/recursion errors. Cf. `trap_error().",
+        " calls `f1(`errno). Returns result of `f0() or `f1(`errno).",
         2, (value f, value handler),
         0, "ff.x")
 {
-  if (handler == NULL)
-    runtime_error(error_bad_function);
-  return trap_error(f, handler, call_trace_no_err, false);
+  CHECK_TYPES(f,       CT_CALLABLE(0),
+              handler, CT_CALLABLE(1));
+  return trap_error(f, handler, call_trace_no_err);
 }
 
 TYPEDOP(trap_error, 0,
-        "`f0 `f1 `n `b -> `x. Executes `f0() and returns its return"
+        "`f0 `f1 `n -> `x. Executes `f0() and returns its return"
         " value.\n"
         "If an error occurs in `f0(), calls `f1(`errno), and returns its"
         " return value instead. `f1 can be `null, in which case an error"
         " in `f0() makes `trap_error() return the error number.\n"
-        "If `b is true, reserve some space to handle loop and recursion"
-        " errors as well; otherwise they are not handled.\n"
+        "If possible, some space is reserved to handle loop errors.\n"
         "By default, call traces are sent to the `with_output() target"
         " as well as observers added using `add_call_trace_oport!().\n"
         "`n controls call traces from `f0 are sent:\n"
@@ -497,16 +497,20 @@ TYPEDOP(trap_error, 0,
         "  `call_trace_barrier  \tonly print call traces down to the"
         " current stack level\n"
         "  `call_trace_on       \tprint complete call traces",
-        4, (value f, value handler, value ct_mode, value handle_loops), 0,
-        "f[fu]nx.x")
+        3, (value f, value handler, value ct_mode), 0,
+        "f[fu]n.x")
 {
-  long call_trace_mode = GETINT(ct_mode);
+  long call_trace_mode;
+  CHECK_TYPES(f,       CT_CALLABLE(0),
+              handler, OR(null, CT_CALLABLE(1)),
+              ct_mode, CT_INT(call_trace_mode));
+
   if (call_trace_mode != call_trace_off
       && call_trace_mode != call_trace_barrier
       && call_trace_mode != call_trace_on)
-    runtime_error(error_bad_value);
+    RUNTIME_ERROR(error_bad_value, "invalid call trace mode");
 
-  return trap_error(f, handler, call_trace_mode, istrue(handle_loops));
+  return trap_error(f, handler, call_trace_mode);
 }
 
 SECTOP(with_minlevel, 0,
@@ -517,9 +521,11 @@ SECTOP(with_minlevel, 0,
        " from `c(), or an `error_security_violation will be caused.",
        2, (value n, value f), 1, OP_APPLY, "nf.x")
 {
-  long new_minlevel = GETRANGE(n, 0, LVL_IMPLEMENTOR);
+  int new_minlevel;
+  CHECK_TYPES(n, CT_RANGE(new_minlevel, 0, LVL_IMPLEMENTOR),
+              f, CT_CALLABLE(0));
   if (new_minlevel > get_seclevel())
-    runtime_error(error_security_violation);
+    RUNTIME_ERROR(error_security_violation, NULL);
 
   int old_minlevel = minlevel;
   minlevel = new_minlevel;
@@ -535,16 +541,15 @@ SECTOP(with_maxseclevel, 0,
        " and returns its result.\nUse this function in your code to make it"
        " available to Ms- even if you need to call secure primitives. The"
        " typical invocation is:\n"
-       "  \t`with_maxseclevel(\t`seclevel(), fn () secure_call(...))",
+       "   \t`with_maxseclevel(\t`seclevel(), fn () secure_call(...))",
        2, (value n, value f), 1, 0, "nf.x")
 {
-  callable(f, 0);
-  long new_maxseclev = GETINT(n);
-  if (new_maxseclev < MIN_SECLEVEL
-      || new_maxseclev > MAX_SECLEVEL)
-    runtime_error(error_bad_value);
+  long new_maxseclev;
+  CHECK_TYPES(n, CT_RANGE(new_maxseclev, MIN_SECLEVEL, MAX_SECLEVEL),
+              f, CT_CALLABLE(0));
+
   if (new_maxseclev > get_seclevel())
-    runtime_error(error_security_violation);
+    RUNTIME_ERROR(error_security_violation, NULL);
 
   /* The compiled mudlle code paths assume that maxseclevel is set to
    * MAX_SECLEVEL (ie. noop) if it shouldn't be checked. */
@@ -565,7 +570,7 @@ TYPEDOP(setjmp, 0,
         " passed to `longjmp(`buf, `x1)",
         1, (value f), 0, "f.x")
 {
-  callable(f, 1);
+  CHECK_TYPES(f, CT_CALLABLE(1));
   return msetjmp(f);
 }
 
@@ -579,13 +584,14 @@ TYPEDOP(longjmp, 0,
   mlongjmp(buf, x);
 }
 
-UNSAFETOP(session, 0, "`f -> . Calls `f() in it's own session and return its"
+UNSAFETOP(session, 0, "`f -> . Calls `f() in its own session and return its"
           " result.\n"
-          "A session has its own recursion and loop limits; cf. `loop_count.\n"
+          "A session has its own loop and stack depth limits;"
+          " cf. `loop_count.\n"
           "If `f() causes an error, return null.",
-          1, (struct closure *fn), OP_APPLY, "f.x")
+          1, (value fn), OP_APPLY, "f.x")
 {
-  callable(fn, 0);
+  CHECK_TYPES(fn, CT_CALLABLE(0));
 
   struct session_context newc;
   session_start(&newc,
@@ -605,7 +611,7 @@ static const typing tref = { "vn.x", "sn.n", "[ton]s.x", NULL };
 
 FULLOP(ref, 0, "`x1 `x2 -> `x3. Generic interface to lookup operations:"
        " `x1[`x2] -> `x3. See `set!() for allowed types.",
-       2, (value x1, value x2),
+       2, (value x1, value x2), (x1, x2),
        0, OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_OPERATOR, tref, /* extern */)
 {
   if (!pointerp(x1)) goto bad_type;
@@ -621,27 +627,62 @@ FULLOP(ref, 0, "`x1 `x2 -> `x3. Generic interface to lookup operations:"
       goto bad_type;
     }
  bad_type:
-  ref_runtime_error(error_bad_type, x1, x2);
+  ref_bad_type_error(x1, x2);
 }
 
-const struct primitive_ext *const ref_prim_ext = &op_ref;
+#define SYMBOL_REF_EXTRA_TYPES ""
 
-void ref_runtime_error(enum runtime_error error, value x1, value x2)
+EXT_TYPEDOP(symbol_ref, 0,
+            "`x `s -> `sym. Returns the symbol for `x[`s], creating it if"
+            " necessary. `x can be a table" SYMBOL_REF_EXTRA_TYPES ".",
+            2, (value x, struct string *s), (x, s),
+            OP_LEAF | OP_NOESCAPE, "[ton]s.y")
+{
+  CHECK_TYPES(x, any,
+              s, string);
+  struct table *t;
+
+  if (integerp(x))
+    {
+    }
+  else if (x == NULL)
+    ;
+  else
+    switch (((struct obj *)x)->type)
+      {
+      case type_table:
+        t = x;
+        goto ok;
+      default:
+        break;
+      }
+
+  RUNTIME_ERROR(error_bad_type, NULL);
+
+ ok:
+  return table_symbol_ref(t, s, NULL);
+}
+
+const struct prim_op *const ref_prim_ext = &op_ref;
+
+void ref_bad_type_error(value x1, value x2)
 {
   primitive_runtime_error(error_bad_type, &op_ref, 2, x1, x2);
 }
 
 static const typing tset = { "vnx.3", "snn.n", "[ton]sx.3", NULL };
 
+#define SET_EXTRA_TYPES " or a table"
+
 FULLOP(setb, "set!",
        "`x1 `x2 `x3 -> `x3. Generic set operation: `x1[`x2] = `x3.\n"
        "`x1 can be a vector or a string (`x2 is the integer index,"
        " where negative values are counted from the end)"
-       " or a table"
+       SET_EXTRA_TYPES
        " (`x2 is the string symbol name).\n"
        "For string `x1, `x3 must be an integer and the returned"
        " value is the stored value (`x3 & 255).",
-       3, (value x1, value x2, value x3),
+       3, (value x1, value x2, value x3), (x1, x2, x3),
        0, OP_LEAF | OP_NOESCAPE | OP_OPERATOR, tset, /* extern */)
 {
   if (!pointerp(x1)) goto bad_type;
@@ -657,12 +698,12 @@ FULLOP(setb, "set!",
       goto bad_type;
     }
  bad_type:
-  set_runtime_error(error_bad_type, x1, x2, x3);
+  set_bad_type_error(x1, x2, x3);
 }
 
-const struct primitive_ext *const setb_prim_ext = &op_setb;
+const struct prim_op *const setb_prim_ext = &op_setb;
 
-void set_runtime_error(enum runtime_error error, value x1, value x2, value x3)
+void set_bad_type_error(value x1, value x2, value x3)
 {
   primitive_runtime_error(error_bad_type, &op_setb, 3, x1, x2, x3);
 }
@@ -684,7 +725,7 @@ void set_runtime_error(enum runtime_error error, value x1, value x2, value x3)
 TYPEDOP(dereference, 0, "`r -> `x. Return the value of the reference `r.",
         1, (struct grecord *r), OP_OPERATOR, "r.x")
 {
-  TYPEIS(r, type_reference);
+  CHECK_TYPES(r, reference);
   long items = grecord_len(r);
   value v = r->data[0];
   switch (items)
@@ -710,29 +751,31 @@ TYPEDOP(dereference, 0, "`r -> `x. Return the value of the reference `r.",
             break;
           }
       break;
-    case 2:
-      if (TYPE(v, type_pair) && integerp(r->data[1]))
+    case 2: ;
+      value r1 = r->data[1];
+      if (TYPE(v, pair) && integerp(r1))
         {
           struct list *p = v;
-          return intval(r->data[1]) ? p->cdr : p->car;
+          return intval(r1) ? p->cdr : p->car;
         }
-      if (TYPE(r->data[1], type_vector))
+      if (TYPE(r1, vector))
         {
-          struct vector *fns = (struct vector *)r->data[1];
-          return call1(fns->data[1], r->data[0]);
+          struct vector *fns = r1;
+          return call1(fns->data[1], v);
         }
-      return code_ref(v, r->data[1]);
+      return code_ref(v, r1);
     }
   abort();
 }
 
-const struct primitive_ext *const dereference_prim_ext = &op_dereference;
+const struct prim_op *const dereference_prim_ext = &op_dereference;
 
 TYPEDOP(set_refb, "set_ref!", "`r `x -> `x. Set the value of the reference"
         " `r to `x.",
         2, (struct grecord *r, value val), OP_OPERATOR, "rx.2")
 {
-  TYPEIS(r, type_reference);
+  CHECK_TYPES(r,   reference,
+              val, any);
   long items = grecord_len(r);
   value v = r->data[0];
   switch (items)
@@ -742,7 +785,7 @@ TYPEDOP(set_refb, "set_ref!", "`r `x -> `x. Set the value of the reference"
         {
           long idx = intval(v);
           assert(idx >= 0 && idx < intval(environment->used));
-          check_global_write(idx, val);
+          check_global_write(val, idx);
           return GVAR(idx) = val;
         }
       else if (pointerp(v))
@@ -750,7 +793,7 @@ TYPEDOP(set_refb, "set_ref!", "`r `x -> `x. Set the value of the reference"
           {
           case type_variable: ;
             struct variable *var = (struct variable *)r->data[0];
-            assert(TYPE(var, type_variable));
+            assert(TYPE(var, variable));
             if (obj_readonlyp(&var->o))
               runtime_error(error_value_read_only);
             return var->vvalue = val;
@@ -759,32 +802,30 @@ TYPEDOP(set_refb, "set_ref!", "`r `x -> `x. Set the value of the reference"
           default:
             break;
           }
-    case 2:
-      if (TYPE(v, type_pair) && integerp(r->data[1]))
+    case 2: ;
+      value r1 = r->data[1];
+      if (TYPE(v, pair) && integerp(r1))
+        return (intval(r1) ? code_set_cdrb : code_set_carb)(v, val);
+      if (TYPE(r1, vector))
         {
-          assert(integerp(r->data[1]));
-          return (intval(r->data[1]) ? code_set_cdrb : code_set_carb)(
-            (struct list *)r->data[0], val);
+          struct vector *fns = r1;
+          return call2(fns->data[2], v, val);
         }
-      if (TYPE(r->data[1], type_vector))
-        {
-          struct vector *fns = (struct vector *)r->data[1];
-          return call2(fns->data[2], r->data[0], val);
-        }
-      return code_setb(r->data[0], r->data[1], val);
+      return code_setb(v, r1, val);
     }
   abort();
 }
 
-const struct primitive_ext *const set_refb_prim_ext = &op_set_refb;
+const struct prim_op *const set_refb_prim_ext = &op_set_refb;
 
 TYPEDOP(make_pair_ref, 0, "`p `n -> `r. Return a reference to the"
         " `car (`n == 0) or `cdr (`n == 1) of `p.",
         2, (struct list *p, value n), OP_LEAF | OP_NOESCAPE, "kn.r")
 {
-  TYPEIS(p, type_pair);
-  (void)GETRANGE(n, 0, 1);
-  GCPRO1(p);
+  int UNUSED i;
+  CHECK_TYPES(p, pair,
+              n, CT_RANGE(i, 0, 1));
+  GCPRO(p);
   struct grecord *r = allocate_record(type_reference, 2);
   UNGCPRO();
   r->data[0] = &p->o;
@@ -796,8 +837,8 @@ TYPEDOP(make_symbol_ref, 0, "`s -> `r. Return a reference to the"
         " symbol value of `s.",
         1, (struct symbol *s), OP_LEAF | OP_NOESCAPE, "y.r")
 {
-  TYPEIS(s, type_symbol);
-  GCPRO1(s);
+  CHECK_TYPES(s, symbol);
+  GCPRO(s);
   struct grecord *r = allocate_record(type_reference, 1);
   UNGCPRO();
   r->data[0] = &s->o;
@@ -808,14 +849,13 @@ TYPEDOP(make_variable_ref, 0, "`n|`v -> `r. Return a reference to global"
         " number `n or variable `v. Cf. `global_lookup().",
         1, (value midx), OP_LEAF | OP_NOESCAPE, "[no].r")
 {
+  CHECK_TYPES(midx, CT_TYPES(integer, variable));
   if (integerp(midx))
     {
       long idx = intval(midx);
       if (idx < 0 || idx >= intval(environment->used))
-        runtime_error(error_bad_value);
+        RUNTIME_ERROR(error_bad_value, "invalid global");
     }
-  else
-    TYPEIS(midx, type_variable);
   struct grecord *r = allocate_record(type_reference, 1);
   r->data[0] = midx;
   return make_readonly(r);
@@ -831,16 +871,17 @@ TYPEDOP(make_custom_ref, 0, "`x0 `v -> `r. Returns a custom reference."
         " return a sensible value, typically `x1 unmodified.",
         2, (value val, struct vector *fns), OP_LEAF | OP_NOESCAPE, "xv.r")
 {
-  TYPEIS(fns, type_vector);
+  CHECK_TYPES(val, any,
+              fns, vector);
   if (vector_len(fns) != 3 || !readonlyp(fns))
     runtime_error(error_bad_value);
-  TYPEIS(fns->data[0], type_string);
+  TYPEIS(fns->data[0], string);
   if (!readonlyp(fns->data[0]))
     runtime_error(error_bad_value);
   callable(fns->data[1], 1);
   callable(fns->data[2], 2);
 
-  GCPRO2(val, fns);
+  GCPRO(val, fns);
   struct grecord *r = allocate_record(type_reference, 2);
   UNGCPRO();
   r->data[0] = val;
@@ -851,7 +892,7 @@ TYPEDOP(make_custom_ref, 0, "`x0 `v -> `r. Returns a custom reference."
 static const typing tmake_ref = { "vn.r", "sn.r", "[ton]s.r", NULL };
 
 FULLOP(make_ref, 0, "`x0 `x1 -> `r. Return a reference to `x0[`x1].",
-       2, (value x1, value x2),
+       2, (value x1, value x2), (x1, x2),
        0, OP_LEAF | OP_NOESCAPE, tmake_ref, static)
 {
   switch (TYPEOF(x1))
@@ -859,7 +900,7 @@ FULLOP(make_ref, 0, "`x0 `x1 -> `r. Return a reference to `x0[`x1].",
     case type_vector:
       {
         struct vector *v = x1;
-        long idx = intval(x2);
+        long idx = GETINT(x2);
         if (idx < 0)
           idx += vector_len(v);
         if (idx < 0 || idx >= vector_len(v))
@@ -869,7 +910,7 @@ FULLOP(make_ref, 0, "`x0 `x1 -> `r. Return a reference to `x0[`x1].",
     case type_string:
       {
         struct string *s = x1;
-        long idx = intval(x2);
+        long idx = GETINT(x2);
         if (idx < 0)
           idx += string_len(s);
         if (idx < 0 || idx >= string_len(s))
@@ -877,10 +918,10 @@ FULLOP(make_ref, 0, "`x0 `x1 -> `r. Return a reference to `x0[`x1].",
         break;
       }
     case type_table:
-      TYPEIS(x2, type_string);
+      TYPEIS(x2, string);
       if (!readonlyp(x2))
         {
-         GCPRO1(x1);
+          GCPRO(x1);
           x2 = make_readonly(mudlle_string_copy(x2));
           UNGCPRO();
         }
@@ -888,7 +929,7 @@ FULLOP(make_ref, 0, "`x0 `x1 -> `r. Return a reference to `x0[`x1].",
     default:
       runtime_error(error_bad_type);
     }
-  GCPRO2(x1, x2);
+  GCPRO(x1, x2);
   struct grecord *r = allocate_record(type_reference, 2);
   UNGCPRO();
   r->data[0] = x1;
@@ -916,7 +957,7 @@ static value do_save_data(struct string *file, value x,
                           int (*rename_fn)(const char *oldpath,
                                            const char *newpath))
 {
-  TYPEIS(file, type_string);
+  TYPEIS(file, string);
   char *fname;
   ALLOCA_PATH(fname, file);
   if (*fname == 0)
@@ -938,9 +979,9 @@ static value do_save_data(struct string *file, value x,
 
   uint32_t magic   = htonl(MDATA_MAGIC + MDATA_VER_CURRENT);
   uint32_t nsize   = htonl(size);
-  bool ok = (write(fd, &magic, sizeof magic) == sizeof magic &&
-             write(fd, &nsize, sizeof nsize) == sizeof nsize &&
-             write(fd, data, size) == size);
+  bool ok = (write(fd, &magic, sizeof magic) == sizeof magic
+             && write(fd, &nsize, sizeof nsize) == sizeof nsize
+             && write(fd, data, size) == size);
 
   /* set mode to a+rw modified by umask */
   mode_t um = get_umask();
@@ -966,7 +1007,7 @@ static value do_save_data(struct string *file, value x,
 
 UNSAFETOP(save_data, 0, "`s `x -> . Writes mudlle value `x to file `s",
           2, (struct string *file, value x),
-          OP_LEAF | OP_NOESCAPE, "sx.")
+          OP_LEAF | OP_NOESCAPE | OP_NUL_STR, "sx.")
 {
   return do_save_data(file, x, rename);
 }
@@ -974,7 +1015,7 @@ UNSAFETOP(save_data, 0, "`s `x -> . Writes mudlle value `x to file `s",
 
 UNSAFETOP(load_data, 0, "`s -> `x. Loads a value from a mudlle save file",
           1, (struct string *file),
-          OP_LEAF | OP_NOESCAPE, "s.x")
+          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s.x")
 {
 
   int fd = open(file->str, O_RDONLY);
@@ -1006,10 +1047,10 @@ UNSAFETOP(load_data, 0, "`s -> `x. Loads a value from a mudlle save file",
     }
   free(data);
 
-failed:
+ failed:
   close(fd);
 
-failed_open:
+ failed_open:
 
 
   runtime_error(error_bad_value);
@@ -1017,11 +1058,13 @@ failed_open:
 
 TYPEDOP(size_data, 0,
         "`x -> `v. Return the size of object `x in bytes as"
-        " vector(`total, `mutable, `static).", 1, (value x),
+        " vector(`total, `mutable, `static).\n"
+        "Throws `error_bad_value if out of memory.", 1, (value x),
         OP_LEAF | OP_NOESCAPE, "x.v")
 {
   struct gc_size size;
-  gc_size(x, &size);
+  if (!gc_size(x, &size))
+    runtime_error(error_bad_value);
   struct vector *v = alloc_vector(3);
   v->data[0] = makeint(size.s_total);
   v->data[1] = makeint(size.s_mutable);
@@ -1033,6 +1076,13 @@ UNSAFETOP(staticpro_data, 0, "-> `v. Returns a vector of all statically "
           "protected data", 0, (void), OP_LEAF | OP_NOESCAPE, ".v")
 {
   return get_staticpro_data();
+}
+
+UNSAFETOP(dynpro_data, 0, "-> `l. Returns a list of all dynamically "
+          "protected data as vector(`x, `s, `n).",
+          0, (void), OP_LEAF | OP_NOESCAPE, ".l")
+{
+  return get_dynpro_data();
 }
 
 TYPEDOP(immutablep, "immutable?",
@@ -1172,10 +1222,9 @@ TYPEDOP(minlevel, 0, "-> `n. Returns the minimum security level of the"
   return makeint(minlevel);
 }
 
-UNSAFETOP(unlimited_execution, 0, "-> . Disables recursion and loop limits in"
-          " the current session; cf. `session() and `loop_count().\n"
-          "There is still a limit on the maximum amount of stack space"
-          " that can be used.",
+UNSAFETOP(unlimited_execution, 0, "-> . Disables loop limits and increases"
+          " the stack depth limit to the maximum allowed in the current"
+          " session; cf. `session() and `loop_count().",
           0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".")
 {
   unlimited_execution();
@@ -1192,6 +1241,31 @@ UNSAFETOP(alloc_stats, 0, "-> `v", 0, (void), OP_LEAF | OP_NOESCAPE,
 
 #endif
 
+TYPEDOP(uname, 0, "-> `v. Returns a vector of strings of system information,"
+        " indexed by `un_xxx:\n"
+        "  `un_sysname  \toperating system name\n"
+        "  `un_release  \toperating system release\n"
+        "  `un_version  \toperating system version\n"
+        "  `un_machine  \thardware identifier",
+        0, (void), OP_LEAF | OP_NOESCAPE, ".v")
+{
+  CHECK_TYPES();
+
+  struct utsname u;
+  if (uname(&u) != 0)
+    RUNTIME_ERROR(error_abort, "uname() failed");
+
+  struct vector *v = alloc_vector(un_fields);
+  GCPRO(v);
+  SET_VECTOR(v, un_sysname, alloc_string(u.sysname));
+  SET_VECTOR(v, un_release, alloc_string(u.release));
+  SET_VECTOR(v, un_version, alloc_string(u.version));
+  SET_VECTOR(v, un_machine, alloc_string(u.machine));
+  CASSERT_EXPR(un_fields == 4);
+  UNGCPRO();
+  return v;
+}
+
 void basic_init(void)
 {
   DEFINE(functionp);
@@ -1199,6 +1273,7 @@ void basic_init(void)
   DEFINE(may_callp);
 
   DEFINE(error);
+  DEFINE(error_message);
   DEFINE(warning);
   DEFINE(catch_error);
   DEFINE(handle_error);
@@ -1245,9 +1320,11 @@ void basic_init(void)
 
   DEFINE(size_data);
   DEFINE(staticpro_data);
+  DEFINE(dynpro_data);
   DEFINE(save_data);
   DEFINE(load_data);
 
+  DEFINE(symbol_ref);
   DEFINE(ref);
   DEFINE(setb);
 
@@ -1269,4 +1346,6 @@ void basic_init(void)
 #ifdef ALLOC_STATS
   DEFINE(alloc_stats);
 #endif
+
+  DEFINE(uname);
 }
