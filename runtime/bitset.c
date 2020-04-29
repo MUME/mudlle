@@ -28,10 +28,10 @@
 #include "../interpret.h"
 #include "../utils.h"
 
-TYPEDOP(new_bitset, 0,
+TYPEDOP(new_bitset, ,
         "`n -> `bitset. Returns an empty bitset usable for storing at"
         " least `n bits.",
-	1, (value n),
+	(value n),
 	OP_TRIVIAL | OP_LEAF | OP_NOESCAPE, "n.s")
 {
   long size;
@@ -42,9 +42,9 @@ TYPEDOP(new_bitset, 0,
   return newp;
 }
 
-TYPEDOP(bclear, 0,
+TYPEDOP(bclear, ,
         "`bitset -> `bitset. Clears all bits of `bitset and returns it",
-	1, (struct string *b),
+	(struct string *b),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.s")
 {
   CHECK_TYPES(b, string);
@@ -83,7 +83,7 @@ static inline enum runtime_error ct_bit_e(long n, const char **errmsg,
   CT_INT_P((dstchr, dstmask, bitset), __CT_BIT_E)
 
 TYPEDOP(set_bitb, "set_bit!", "`bitset `n -> . Sets bit `n in `bitset",
-	2, (struct string *b, value mnum),
+	(struct string *b, value mnum),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
 {
   ulong i;
@@ -96,7 +96,7 @@ TYPEDOP(set_bitb, "set_bit!", "`bitset `n -> . Sets bit `n in `bitset",
 
 TYPEDOP(clear_bitb, "clear_bit!",
         "`bitset `n -> . Clears bit `n in `bitset",
-	2, (struct string *b, value mnum),
+	(struct string *b, value mnum),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.")
 {
   ulong i;
@@ -119,7 +119,7 @@ static bool bit_is_set(const struct prim_op *op,
 }
 
 EXT_TYPEDOP(bit_setp, "bit_set?", "`bitset `n -> `b. True if bit `n is set",
-            2, (struct string *b, value n), (b, n),
+            (struct string *b, value n), (b, n),
             OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "sn.n")
 {
   return makebool(bit_is_set(THIS_OP, b, n));
@@ -127,7 +127,7 @@ EXT_TYPEDOP(bit_setp, "bit_set?", "`bitset `n -> `b. True if bit `n is set",
 
 TYPEDOP(bit_clearp, "bit_clear?",
         "`bitset `n -> `b. True if bit `n is not set",
-	2, (struct string *b, value n),
+	(struct string *b, value n),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "sn.n")
 {
   return makebool(!bit_is_set(THIS_OP, b, n));
@@ -165,9 +165,9 @@ static void bunion_op(const char *s1, const char *s2, char *to, size_t length)
     *to++ = *s1++ | *s2++;
 }
 
-TYPEDOP(bunion, 0,
+TYPEDOP(bunion, ,
         "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 U `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, true, bunion_op);
@@ -180,9 +180,9 @@ static void bintersection_op(const char *s1, const char *s2, char *to,
     *to++ = *s1++ & *s2++;
 }
 
-TYPEDOP(bintersection, 0,
+TYPEDOP(bintersection, ,
         "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 /\\ `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, true, bintersection_op);
@@ -195,9 +195,9 @@ static void bdifference_op(const char *s1, const char *s2, char *to,
     *to++ = *s1++ & ~*s2++;
 }
 
-TYPEDOP(bdifference, 0,
+TYPEDOP(bdifference, ,
         "`bitset1 `bitset2 -> `bitset3. `bitset3 = `bitset1 - `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, true, bdifference_op);
@@ -205,7 +205,7 @@ TYPEDOP(bdifference, 0,
 
 TYPEDOP(bunionb, "bunion!",
         "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset1 U `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, false, bunion_op);
@@ -213,7 +213,7 @@ TYPEDOP(bunionb, "bunion!",
 
 TYPEDOP(bintersectionb, "bintersection!",
         "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset1 /\\ `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, false, bintersection_op);
@@ -221,7 +221,7 @@ TYPEDOP(bintersectionb, "bintersection!",
 
 TYPEDOP(bdifferenceb, "bdifference!",
         "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset1 - `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, false, bdifference_op);
@@ -235,7 +235,7 @@ static void bassign_op(const char *s1, const char *s2, char *to,
 
 TYPEDOP(bassignb, "bassign!",
         "`bitset1 `bitset2 -> `bitset1. `bitset1 = `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "ss.s")
 {
   return bitset_binop(THIS_OP, b1, b2, false, bassign_op);
@@ -243,7 +243,7 @@ TYPEDOP(bassignb, "bassign!",
 
 TYPEDOP(bitset_inp, "bitset_in?",
         "`bitset1 `bitset2 -> `b. True if `bitset1 is a subset of `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "ss.n")
 {
   CHECK_TYPES(b1, string, b2, string);
@@ -261,7 +261,7 @@ TYPEDOP(bitset_inp, "bitset_in?",
 
 TYPEDOP(bitset_eqp, "bitset_eq?",
         "`bitset1 `bitset2 -> `b. True if `bitset1 == `bitset2",
-	2, (struct string *b1, struct string *b2),
+	(struct string *b1, struct string *b2),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "ss.n")
 {
   CHECK_TYPES(b1, string, b2, string);
@@ -273,7 +273,7 @@ TYPEDOP(bitset_eqp, "bitset_eq?",
 
 TYPEDOP(bemptyp, "bempty?",
         "`bitset -> `b. True if `bitset has all bits clear",
-	1, (struct string *b),
+	(struct string *b),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "s.n")
 {
   CHECK_TYPES(b, string);
@@ -285,8 +285,8 @@ TYPEDOP(bemptyp, "bempty?",
   return makebool(true);
 }
 
-TYPEDOP(bcount, 0, "`bitset -> `n. Returns the number of bits set in `bitset",
-	1, (struct string *b),
+TYPEDOP(bcount, , "`bitset -> `n. Returns the number of bits set in `bitset",
+	(struct string *b),
 	OP_TRIVIAL | OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "s.n")
 {
   CHECK_TYPES(b, string);

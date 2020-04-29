@@ -37,6 +37,7 @@ struct oport_stat {
 /* Methods for the oport class */
 struct oport_methods
 {
+  const char *name;
   void (*close)(struct oport *p);
   void (*putnc)(struct oport *p, int c, size_t n);
   void (*write)(struct oport *p, const char *data, size_t nchars);
@@ -119,6 +120,12 @@ static inline const struct oport_methods *oport_methods(struct oport *p)
   if (p == NULL)
     return NULL;
   return get_tagged_ptr(&p->methods);
+}
+
+static inline const char *oport_name(struct oport *op)
+{
+  const struct oport_methods *m = oport_methods(op);
+  return m && m->name ? m->name : "unknown";
 }
 
 static inline void set_oport_methods(struct oport *p,

@@ -21,9 +21,9 @@
 
 #include "mudlle-config.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 #include "compile.h"
 #include "context.h"
@@ -36,80 +36,53 @@
 bool use_nicename;
 bool erred;
 
-static void vlog_message(const char *fname, const char *nname, int line,
-                         int col, bool is_warning, const char *msg, va_list va)
+static void vlog_message(const struct loc *loc, bool is_warning,
+                         const char *msg, va_list va)
 {
   struct strbuf sb = SBNULL;
 
-  if (fname != NULL)
-    {
-      bool use_fname = !use_nicename || nname == NULL;
+  bool use_fname = !use_nicename;
 
-      sb_printf(&sb, "%s:", use_fname ? fname : nname);
-      if (line > 0)
-        {
-          sb_printf(&sb, "%d:", line);
-          if (col > 0)
-            sb_printf(&sb, "%d:", col);
-        }
-      sb_addc(&sb, ' ');
+  if (loc->fname == NULL)
+    {
+      abort();
     }
+  else
+    sb_printf(&sb, "%s:", use_fname ? loc->fname->path : loc->fname->nice);
+  if (loc->line > 0)
+    {
+      sb_printf(&sb, "%d:", loc->line);
+      if (loc->col > 0)
+        sb_printf(&sb, "%d:", loc->col);
+    }
+  sb_addc(&sb, ' ');
+
   if (is_warning)
     sb_addstr(&sb, "warning: ");
-  if (!use_nicename && fname != NULL && nname != NULL
-      && strcmp(nname, fname) != 0)
-    sb_printf(&sb, "[%s] ", nname);
+  if (use_fname && strcmp(loc->fname->nice, loc->fname->path) != 0)
+    sb_printf(&sb, "[%s] ", loc->fname->nice);
   sb_vprintf(&sb, msg, va);
-  if (mudout) pflush(mudout);
+  pflush(mudout);
   pprintf(muderr, "%s\n", sb_str(&sb));
-  if (muderr) pflush(muderr);
+  pflush(muderr);
   sb_free(&sb);
   if (!is_warning)
     erred = true;
-}
-
-void log_error(const struct loc *loc, const char *msg, ...)
-{
-  va_list args;
-  va_start(args, msg);
-  struct block *body = this_mfile ? this_mfile->body : NULL;
-  vlog_message(body ? body->filename : NULL,
-               body ? body->nicename : NULL,
-               loc->line, loc->col, false, msg, args);
-  va_end(args);
 }
 
 void compile_error(const struct loc *loc, const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
-  vlog_message(lexer_filename, lexer_nicename, loc->line, loc->col, false,
-               msg, args);
+  vlog_message(loc, false, msg, args);
   va_end(args);
 }
-
-static void vwarning(const char *fname, const char *nname, int line, int col,
-                     const char *msg, va_list args)
-{
-  vlog_message(fname, nname, line, col, true, msg, args);
-}
-
 
 void compile_warning(const struct loc *loc, const char *msg, ...)
 {
   va_list args;
   va_start(args, msg);
-  vwarning(lexer_filename, lexer_nicename, loc->line, loc->col, msg, args);
-  va_end(args);
-}
-
-void warning_loc(const char *fname, const char *nname, const struct loc *loc,
-                 const char *msg, ...)
-{
-  va_list args;
-
-  va_start(args, msg);
-  vwarning(fname, nname, loc->line, loc->col, msg, args);
+  vlog_message(loc, true, msg, args);
   va_end(args);
 }
 
@@ -208,5 +181,22 @@ int popcountl(unsigned long u)
       u >>= 4;
     }
   return n;
+}
+
+/* count leading zeros */
+int clz(int i)
+{
+  CASSERT_EXPR(sizeof (i) == sizeof (uint32_t));
+
+  /* from https://en.wikipedia.org/wiki/Find_first_set */
+  static const uint8_t count[16] = {
+    4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0
+  };
+
+  unsigned n = 0;
+  if ((i & 0xffff0000) == 0) {n += 16; i <<= 16;}
+  if ((i & 0xff000000) == 0) {n +=  8; i <<=  8;}
+  if ((i & 0xf0000000) == 0) {n +=  4; i <<=  4;}
+  return n + count[(i >> (32 - 4)) & 15];
 }
 #endif

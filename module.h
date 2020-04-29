@@ -67,7 +67,7 @@ enum vstatus {
   var_write,                    /* written by mudlle */
   var_system_write,             /* C may write, mudlle read */
   var_system_mutable            /* anyone may read/write */
- };
+};
 enum vstatus module_vstatus(long n, struct string **name);
 /* Returns: status of global variable n:
      var_normal: normal global variable, no writes

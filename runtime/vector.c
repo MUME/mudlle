@@ -44,14 +44,14 @@ static enum runtime_error ct_vector_index(long idx, const char **errmsg,
   ct_vector_index(v, msg, ARGN2 dst_vec, &(ARGN1 dst_vec))
 #define CT_VEC_IDX(dst, vec) CT_INT_P((dst, vec), __CT_VEC_IDX_E)
 
-TYPEDOP(vectorp, "vector?", "`x -> `b. TRUE if `x is a vector", 1, (value v),
+TYPEDOP(vectorp, "vector?", "`x -> `b. TRUE if `x is a vector", (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, vector));
 }
 
-TYPEDOP(make_vector, 0, "`n -> `v. Create an all-null vector of length `n,"
-        " where 0 <= `n <= `MAX_VECTOR_SIZE.", 1, (value msize),
+TYPEDOP(make_vector, , "`n -> `v. Create an all-null vector of length `n,"
+        " where 0 <= `n <= `MAX_VECTOR_SIZE.", (value msize),
 	OP_LEAF | OP_NOESCAPE, "n.v")
 {
   long size;
@@ -59,8 +59,8 @@ TYPEDOP(make_vector, 0, "`n -> `v. Create an all-null vector of length `n,"
   return alloc_vector(size);
 }
 
-TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector",
-        1, (struct vector *vec),
+TYPEDOP(vector_length, , "`v -> `n. Return length of vector",
+        (struct vector *vec),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "v.n")
 {
   CHECK_TYPES(vec, vector);
@@ -69,7 +69,7 @@ TYPEDOP(vector_length, 0, "`v -> `n. Return length of vector",
 
 TYPEDOP(vector_fill, "vector_fill!",
         "`v `x -> `v. Set all elements of `v to `x",
-	2, (struct vector *vec, value x),
+	(struct vector *vec, value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vx.1")
 {
   CHECK_TYPES(vec, vector,
@@ -88,9 +88,9 @@ TYPEDOP(vector_fill, "vector_fill!",
   return vec;
 }
 
-EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v.\n"
+EXT_TYPEDOP(vector_ref, , "`v `n -> `x. Return the `n'th element of `v.\n"
             "Negative `n are counted from the end of `v.",
-	    2, (struct vector *vec, value c), (vec, c),
+	    (struct vector *vec, value c), (vec, c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vn.x")
 {
   long idx;
@@ -102,7 +102,7 @@ EXT_TYPEDOP(vector_ref, 0, "`v `n -> `x. Return the `n'th element of `v.\n"
 EXT_TYPEDOP(vector_set, "vector_set!",
             "`v `n `x -> `x. Set the `n'th element of `v to `x.\n"
             "Negative `n are counted from the end of `v.\n",
-	    3, (struct vector *vec, value i, value c), (vec, i, c),
+	    (struct vector *vec, value i, value c), (vec, i, c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnx.3")
 {
   long idx;
@@ -117,7 +117,7 @@ EXT_TYPEDOP(vector_set, "vector_set!",
 
 TYPEDOP(vswap, "vswap!",
         "`v `n0 `n1 -> `v. Swaps elements `n0 and `n1 in the vector `v.",
-        3, (struct vector *v, value n0, value n1),
+        (struct vector *v, value n0, value n1),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "vnn.v")
 {
   long a, b;
@@ -132,20 +132,15 @@ TYPEDOP(vswap, "vswap!",
   return v;
 }
 
-static const typing vector_tset = { "x*.v", NULL };
-
-FULLOP(vector, 0, "`x0 `x1 ... -> `v. Returns a vector of the arguments",
-       NVARARGS, (struct vector *args, ulong nargs), 0, 0,
-       OP_LEAF | OP_NOESCAPE, vector_tset, static)
+VAROP(vector, , "`x0 `x1 ... -> `v. Returns a vector of the arguments",
+      OP_LEAF | OP_NOESCAPE, "x*.v")
 {
   return args;
 }
 
-FULLOP(sequence, 0,
-       "`x0 `x1 ... -> `v. Returns a read-only vector of the arguments",
-       NVARARGS, (struct vector *args, ulong nargs), 0, 0,
-       OP_LEAF | OP_NOESCAPE | OP_CONST,
-       vector_tset, static)
+VAROP(sequence, ,
+      "`x0 `x1 ... -> `v. Returns a read-only vector of the arguments",
+      OP_LEAF | OP_NOESCAPE | OP_CONST, "x*.v")
 {
   // we could create immutable vectors here by scanning all args...
   return make_readonly(args);

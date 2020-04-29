@@ -47,22 +47,30 @@ writes mc:this_function
     gen_condition, make_bf, builtin_functions, builtin_branches, make_bb,
     make_btype, gen_abs_comp, gen_list, gen_vector, gen_set_mem!, vlist,
     vplist, vvector, vsequence, gen_const, ins_typeset_trap, verror, gen_error,
-    gen_fail, gen_scopy, vassert, gen_assert, gen_builtin, fold_add,
-    vstring_equal?, vstring_iequal?, vstring_cmp, vstring_icmp,
-    vconcat_strings |
+    gen_fail, gen_max_min, gen_scopy, gen_vref, vassert, gen_assert,
+    gen_find, gen_find_branch, gen_builtin,
+    fold_add,
+    vvfind?, vsfind?, vlfind?,
+    vbicmp, vfcmp, vstring_equal?, vstring_iequal?, vstring_cmp, vstring_icmp,
+    vconcat_strings, var_global_read_trap? |
 
+  vassert         = mc:make_kglobal("assert");
   vconcat_strings = mc:make_kglobal("concat_strings");
   verror          = mc:make_kglobal("error");
+  vbicmp          = mc:make_kglobal("bicmp");
+  vfcmp           = mc:make_kglobal("fcmp");
   vlist           = mc:make_kglobal("list");
   vplist          = mc:make_kglobal("plist");
   vsequence       = mc:make_kglobal("sequence");
   vset            = mc:make_kglobal("set!");
-  vvector         = mc:make_kglobal("vector");
-  vassert         = mc:make_kglobal("assert");
   vstring_cmp     = mc:make_kglobal("string_cmp");
-  vstring_icmp    = mc:make_kglobal("string_icmp");
   vstring_equal?  = mc:make_kglobal("string_equal?");
+  vstring_icmp    = mc:make_kglobal("string_icmp");
   vstring_iequal? = mc:make_kglobal("string_iequal?");
+  vvector         = mc:make_kglobal("vector");
+  vvfind?         = mc:make_kglobal("vfind?");
+  vsfind?         = mc:make_kglobal("sfind?");
+  vlfind?         = mc:make_kglobal("lfind?");
 
   // Mapping of tree-operators to intermediate code branch operators
   builtin_branch = sequence
@@ -85,8 +93,14 @@ writes mc:this_function
        ++i)
     assert(!builtin_branch[i]);
 
+  | bf_func, bf_nargs, bf_op, bf_notop |
+  bf_func  = 0;                 // function to inline
+  bf_nargs = 1;
+  bf_op    = 2;                 // function or mc:branch_xxx
+  bf_notop = 3;                 // null or mc:branch_xxx
+
   make_bf = fn (name, op, nargs)
-    sequence(mc:make_kglobal(name), nargs, op);
+    sequence(global_value(global_lookup(name)), nargs, op, null);
 
   gen_abs_comp = fn (fcode, result, args)
     [
@@ -164,13 +178,103 @@ writes mc:this_function
   gen_fail = fn (fcode, result, args)
     mc:ins_trap(fcode, mc:trap_always, error_abort, null);
 
+  gen_max_min = fn (max?) fn (fcode, result, @(a b))
+    [
+      | rvar, elab |
+      rvar = mc:var_make_local("$tmp");
+      // do not use mc:ins_assign() to not alias variables
+      mc:ins_compute(fcode, mc:b_assign, rvar, list(b));
+      elab = mc:new_label();
+      mc:ins_branch(fcode, if (max?) mc:branch_gt else mc:branch_lt, elab,
+                    list(rvar, a));
+      mc:ins_compute(fcode, mc:b_assign, rvar, list(a));
+      mc:ins_label(fcode, elab);
+      mc:ins_assign(fcode, result, rvar);
+    ];
+
+  gen_vref = fn (idx) fn (fcode, result, @(arg))
+    [
+      mc:ins_trap(fcode, mc:trap_type, error_bad_type,
+                  list(arg, mc:var_make_constant(type_vector)));
+      mc:ins_compute(fcode, mc:b_ref, result,
+                     list(arg, mc:var_make_constant(idx)));
+    ];
+
+  gen_find_branch = fn (fcode, type, slab, @(needle haystack))
+    [
+      if (haystack[mc:v_class] != mc:v_constant)
+        exit<function> false;
+      | val, len |
+      val = haystack[mc:v_kvalue];
+      len = match! (type)
+        [
+          ,type_vector => [
+            if (!vector?(val)) exit<function> false;
+            vlength(val)
+          ];
+          ,type_string => [
+            if (!string?(val)) exit<function> false;
+            slength(val)
+          ];
+          ,stype_list  => [
+            if (!list?(val)) exit<function> false;
+            // make sure 'val' is a well-formed list
+            match (last_pair(val))
+              [
+                (_ . x) && x != null => exit<function> false;
+              ];
+            val = list_to_vector(val);
+            vlength(val)
+          ];
+        ];
+      if (len > 5) exit<function> false;
+
+      slab = slab();
+      if (type == type_string)
+        mc:ins_trap(fcode, mc:trap_type, error_bad_type,
+                    list(needle, mc:var_make_constant(type_integer)));
+      for (|i|i = 0; i < len - 1; ++i)
+        mc:ins_branch(fcode, mc:branch_eq, slab,
+                      list(needle, mc:var_make_constant(val[i])));
+      vector(mc:branch_eq, mc:branch_ne,
+             list(needle, mc:var_make_constant(val[len - 1])))
+    ];
+
+  gen_find = fn (type) fn (fcode, result, args)
+    [
+      | slab |
+      match! (gen_find_branch(fcode, type,
+                              fn () slab = mc:new_label(),
+                              args))
+        [
+          [ bs _ args ] => [
+            | dlab |
+            dlab = mc:new_label();
+            mc:ins_branch(fcode, bs, slab, args);
+            mc:ins_assign(fcode, result, cfalse);
+            mc:ins_branch(fcode, mc:branch_always, dlab, null);
+            mc:ins_label(fcode, slab);
+            mc:ins_assign(fcode, result, ctrue);
+            mc:ins_label(fcode, dlab);
+          ];
+          ,false => [
+            | f |
+            f = match! (type)
+              [
+                ,type_vector => vvfind?;
+                ,type_string => vsfind?;
+                ,stype_list  => vlfind?;
+              ];
+            mc:ins_call(fcode, result, f . args)
+          ]
+        ]
+    ];
+
   builtin_functions = sequence
     (make_bf("car",            mc:b_car,                     1),
      make_bf("cdr",            mc:b_cdr,                     1),
      make_bf("string_length",  mc:b_slength,                 1),
-     make_bf("slength",        mc:b_slength,                 1),
      make_bf("vector_length",  mc:b_vlength,                 1),
-     make_bf("vlength",        mc:b_vlength,                 1),
      make_bf("scopy",          gen_scopy,                    1),
      make_bf("bcopy",          gen_scopy,                    1),
      make_bf("typeof",         mc:b_typeof,                  1),
@@ -191,10 +295,24 @@ writes mc:this_function
      make_bf("loop_count",     mc:b_loop_count,              0),
      make_bf("max_loop_count", mc:b_max_loop_count,          0),
      make_bf("error",          gen_error,                    1),
-     make_bf("fail",           gen_fail,                     0));
+     make_bf("fail",           gen_fail,                     0),
+     make_bf("iadd",           mc:b_iadd,                    2),
+     make_bf("min",            gen_max_min(false),           2),
+     make_bf("max",            gen_max_min(true),            2),
+     make_bf("dget",           gen_vref(0),                  1),
+     make_bf("dnext",          gen_vref(1),                  1),
+     make_bf("dprev",          gen_vref(2),                  1),
+     make_bf("graph_node_get", gen_vref(5),                  1),
+     make_bf("graph_node_graph", gen_vref(2),                1),
+     make_bf("graph_edge_from", gen_vref(0),                 1),
+     make_bf("graph_edge_to",  gen_vref(1),                  1),
+     make_bf("graph_edge_get", gen_vref(2),                  1),
+     make_bf("sfind?",         gen_find(type_string),        2),
+     make_bf("vfind?",         gen_find(type_vector),        2),
+     make_bf("lfind?",         gen_find(stype_list),         2));
 
   make_bb = fn (name, op, notop, nargs)
-    sequence(mc:make_kglobal(name), nargs, op, notop);
+    sequence(global_value(global_lookup(name)), nargs, op, notop);
 
   make_btype = fn (name, type)
     make_bb(name, mc:branch_type? + type, mc:branch_ntype? + type, 1);
@@ -246,12 +364,21 @@ writes mc:this_function
       else if (fc != mc:v_global_constant)
         exit<function> false;
 
-      | bf |
-      bf = vexists?(fn (builtin) builtin[0] == function, builtins);
-      if (bf && (bf[1] < 0 || bf[1] == llength(args) - 1))
+      | funcval, bf |
+      funcval = global_value(function[mc:v_goffset]);
+      bf = vexists?(fn (builtin) builtin[bf_func] == funcval, builtins);
+      if (bf && (bf[bf_nargs] < 0 || bf[bf_nargs] == llength(args)))
 	bf
       else
 	false
+    ];
+
+  var_global_read_trap? = fn (var)
+    [
+      | vstat |
+      (var[mc:v_class] == mc:v_global
+       && ((vstat = module_vstatus(var[mc:v_goffset])) != var_system_write)
+       && vstat != var_system_mutable)
     ];
 
   closure_count = 0;
@@ -273,13 +400,12 @@ writes mc:this_function
 
       ins = il[mc:il_ins];
       assert(ins[mc:i_class] == mc:i_call);
-      args = ins[mc:i_cargs];
+      @(function . args) = ins[mc:i_cargs];
       result = ins[mc:i_cdest];
-      function = car(args);
 
-      if ((bf = builtin_call?(function, args, builtin_functions)) &&
-          !function?(bf[2]))
-        il[mc:il_ins] = mc:make_compute_ins(bf[2], result, cdr(args));
+      if ((bf = builtin_call?(function, args, builtin_functions))
+          && !function?(bf[bf_op]))
+        il[mc:il_ins] = mc:make_compute_ins(bf[bf_op], result, args);
     ];
 
   ins_typeset_trap = fn (topf, arg, loc, typeset)
@@ -475,14 +601,14 @@ writes mc:this_function
   gen_assert = fn (fcode, result, arg)
     [
       | slab, flab |
-      slab = mc:new_label(fcode);
-      flab = mc:new_label(fcode);
+      slab = mc:new_label();
+      flab = mc:new_label();
       gen_condition(fcode, arg, slab, false,
                     flab, fn () [
                       mc:ins_label(fcode, flab);
                       gen_fail(fcode, null, null);
                     ],
-                    false);
+                    false, false, false);
       mc:ins_label(fcode, slab);
       mc:ins_assign(fcode, result, cundefined);
     ];
@@ -525,13 +651,10 @@ writes mc:this_function
 	]
       else if (class == mc:c_recall)
         [
-	  | var, vstat |
+	  | var |
 	  var = c[mc:c_rsymbol];
 
-	  if (var[mc:v_class] == mc:v_global
-              && ((vstat = module_vstatus(var[mc:v_goffset]))
-                  != var_system_write)
-              && vstat != var_system_mutable)
+	  if (var_global_read_trap?(var))
 	    mc:ins_trap(fcode, mc:trap_global_read, 0, list(var));
 
 	  var
@@ -557,12 +680,12 @@ writes mc:this_function
 	  | args, result, function, bf, fval |
 
 	  result = mc:new_local(fcode);
-          args = lcopy(c[mc:c_efnargs]);
-          function = set_car!(args, gen_clist(fcode, car(args)));
+          @(function . args) = c[mc:c_efnargs];
+          function = gen_clist(fcode, function);
 
-          if (function == vassert && llength(cdr(args)) == 1)
+          if (function == vassert && llength(args) == 1)
             [
-              gen_assert(fcode, result, cadr(args));
+              gen_assert(fcode, result, car(args));
               exit<done> result;
             ];
 
@@ -578,28 +701,33 @@ writes mc:this_function
                 fold_add(fcode, arg[mc:c_bargs], false)
               else
                 gen_component(fcode, arg);
-            ], cdr(args))
+            ], args)
           else
-            lmap!(fn (arg) gen_clist(fcode, arg), cdr(args));
+            lmap!(fn (arg) gen_clist(fcode, arg), args);
 
 	  // Check for builtin functions
 	  if (bf = builtin_call?(function, args, builtin_functions))
-            if (function?(bf[2]))
-              bf[2](fcode, result, cdr(args))
-            else
-              mc:ins_compute(fcode, bf[2], result, cdr(args))
+            [
+              | op |
+              op = bf[bf_op];
+              if (function?(op))
+                op(fcode, result, args)
+              else
+                mc:ins_compute(fcode, op, result, args)
+            ]
 	  else if ((bf = builtin_call?(function, args, builtin_branches))
-                   && bf[2] != mc:branch_equal) // equal?() is better as-is
+                   && bf[bf_op] != mc:branch_equal) // equal?() is better as-is
             [
               | cond, loc |
               loc = mc:get_loc();
               cond = list(vector(
                 mc:c_execute, loc,
-                lmap(fn (v) list(vector(mc:c_recall, loc, v)), args)));
+                lmap(fn (v) list(vector(mc:c_recall, loc, v)),
+                     function . args)));
               result = gen_if(fcode, cond, false, false)
             ]
           else
-	    mc:ins_call(fcode, result, args);
+	    mc:ins_call(fcode, result, function . args);
 	  result
 	]
       else if (class == mc:c_labeled)
@@ -639,7 +767,7 @@ writes mc:this_function
 	    [
 	      | looplab |
 
-	      looplab = mc:new_label(fcode);
+	      looplab = mc:new_label();
 	      mc:ins_label(fcode, looplab);
 	      mc:start_block(fcode, null);
 	      gen_clist(fcode, car(args));
@@ -680,32 +808,59 @@ writes mc:this_function
     [
       | slab, flab, endlab, result, boolean |
 
-      slab = mc:new_label(fcode);
-      flab = mc:new_label(fcode);
-      endlab = mc:new_label(fcode);
+      slab = mc:new_label();
+      flab = mc:new_label();
+      endlab = mc:new_label();
 
       boolean = false;
       if (!success && !failure)
         [
-          boolean = (fn (r)
+          boolean = fn (r)
             [
               mc:ins_assign(fcode, result, r);
               mc:ins_branch(fcode, mc:branch_always, endlab, null);
-            ]) . false;
+            ];
           success = list(comp_true);
           failure = list(comp_false);
         ];
 
-      if (success && failure) result = mc:new_local(fcode);
+      | trivial |
+      trivial = false;
+      if (success && failure)
+        [
+          | trivial? |
+          trivial? = fn (cl)
+            match (cl)
+              [
+                (c) && c[mc:c_class] == mc:c_recall
+                  => !var_global_read_trap?(c[mc:c_rsymbol]);
+              ];
+          if (trivial?(success) && trivial?(failure))
+            trivial = fn (bsuccess, bargs)
+              [
+                | rvar, elab |
+                rvar = mc:var_make_local("$tmp");
+                // do not use mc:ins_assign() to not alias variables
+                mc:ins_compute(fcode, mc:b_assign, rvar,
+                               list(gen_clist(fcode, success)));
+                elab = mc:new_label();
+                mc:ins_branch(fcode, bsuccess, elab, bargs);
+                mc:ins_compute(fcode, mc:b_assign, rvar,
+                               list(gen_clist(fcode, failure)));
+                mc:ins_label(fcode, elab);
+                mc:ins_assign(fcode, result, rvar);
+              ];
+          result = mc:new_local(fcode);
+        ];
 
       | successf, failuref |
 
       successf = fn ()
         [
-          | sresult |
           mc:ins_label(fcode, slab);
           if (success)
             [
+              | sresult |
               sresult = gen_clist(fcode, success);
               if (failure) // if not an 'ifelse' result is discarded
                 mc:ins_assign(fcode, result, sresult)
@@ -715,10 +870,10 @@ writes mc:this_function
 
       failuref = fn ()
         [
-          | fresult |
           mc:ins_label(fcode, flab);
           if (failure)
             [
+              | fresult |
               fresult = gen_clist(fcode, failure);
               if (success) // if not an 'ifelse' result is discarded
                 mc:ins_assign(fcode, result, fresult)
@@ -726,7 +881,8 @@ writes mc:this_function
           mc:ins_branch(fcode, mc:branch_always, endlab, null);
         ];
 
-      gen_condition(fcode, condition, slab, successf, flab, failuref, boolean);
+      gen_condition(fcode, condition, slab, successf, flab, failuref, boolean,
+                    trivial, false);
       mc:ins_label(fcode, endlab);
       result
     ];
@@ -737,10 +893,10 @@ writes mc:this_function
     // Effects: Generates code for 'while (condition) iteration'
     [
       | looplab, mainlab, exitlab, endlab |
-      looplab = mc:new_label(fcode);
-      mainlab = mc:new_label(fcode);
-      exitlab = mc:new_label(fcode);
-      endlab = mc:new_label(fcode);
+      looplab = mc:new_label();
+      mainlab = mc:new_label();
+      exitlab = mc:new_label();
+      endlab = mc:new_label();
 
       mc:start_block(fcode, null);
       mc:ins_label(fcode, looplab);
@@ -754,12 +910,13 @@ writes mc:this_function
 		    exitlab, fn () [
 		      mc:ins_label(fcode, exitlab);
 		      mc:ins_branch(fcode, mc:branch_always, endlab, null);
-		    ], false);
+		    ], false, false, false);
       mc:ins_label(fcode, endlab);
       mc:end_block(fcode, cundefined)
     ];
 
-  gen_condition = fn (fcode, condition, slab, success, flab, failure, boolean)
+  gen_condition = fn (fcode, condition, slab, success, flab, failure, boolean,
+                      trivial, inverse?)
     // Types: fcode : fncode
     //        condition : list of component
     //        slab, flab : label
@@ -768,22 +925,18 @@ writes mc:this_function
     //   slab (respectively flab) on success (failure).
     //   success() and failure() are called to generate the actual code
     //   for theses cases.
-    //   If boolean cons(func, inverse?), call func(var) var contains the
-    //   (possibly inverted) boolean result instead
+    //   If boolean is a function f, call f(var) where var contains the
+    //   (possibly inverted) boolean result instead.
+    //   If trivial is a function f, call f(var) instead of the above
+    //   for simple, single-branch conditionals.
+    //   inverse? tracks whether success/failure have been inverted
+    //   along the way.
     [
-      | class, bargs, branch_succeed, branch_fail, prevloc,
-        inv_bool, bool_result |
-
-      inv_bool = fn (bool) match (bool)
-        [
-          ,false => false;
-          (f . i?) => f . !i?;
-          _ => fail;
-        ];
+      | class, bargs, branch_succeed, branch_fail, prevloc, bool_result |
 
       bool_result = fn (var)
         [
-          car(boolean)(var);
+          boolean(var);
           if (success) success();
           if (failure) failure();
           mc:set_loc(prevloc);
@@ -804,14 +957,14 @@ writes mc:this_function
 	    [
 	      // Tricky ...
 	      | label |
-	      label = mc:new_label(fcode);
+	      label = mc:new_label();
 	      gen_condition(
                 fcode, car(args), label,
                 fn () [
                   mc:ins_label(fcode, label);
                   gen_condition(fcode, cadr(args), slab, success,
-                                flab, failure, boolean);
-                ], flab, false, false);
+                                flab, failure, boolean, false, inverse?);
+                ], flab, false, false, false, false);
               mc:set_loc(prevloc);
 	      exit<function> null;
 	    ]
@@ -819,15 +972,15 @@ writes mc:this_function
 	    [
 	      // Tricky ...
 	      | label |
-	      label = mc:new_label(fcode);
+	      label = mc:new_label();
 	      gen_condition(
                 fcode, car(args),
                 slab, false,
                 label, fn () [
                   mc:ins_label(fcode, label);
                   gen_condition(fcode, cadr(args), slab, success,
-                                flab, failure, boolean);
-                ], false);
+                                flab, failure, boolean, false, inverse?);
+                ], false, false, false);
               mc:set_loc(prevloc);
 	      exit<function> null;
 	    ]
@@ -835,7 +988,7 @@ writes mc:this_function
 	    [
 	      // Swap conclusions
 	      gen_condition(fcode, car(args), flab, failure,
-                            slab, success, inv_bool(boolean));
+                            slab, success, boolean, trivial, !inverse?);
               mc:set_loc(prevloc);
 	      exit<function> null;
 	    ]
@@ -870,10 +1023,10 @@ writes mc:this_function
                   args = list(arg1);
                   if (op == mc:b_eq)
                     gen_condition(fcode, args, flab, failure, slab, success,
-                                  inv_bool(boolean))
+                                  boolean, trivial, !inverse?)
                   else
                     gen_condition(fcode, args, slab, success, flab, failure,
-                                  boolean);
+                                  boolean, trivial, inverse?);
                   mc:set_loc(prevloc);
                   exit<function> null;
                 ]
@@ -898,21 +1051,21 @@ writes mc:this_function
                         [
                           @(arg1) = arg1[mc:c_bargs];
                           arg1 = gen_partial_clist(fcode, arg1);
+                          inverse? = !inverse?;
                         ];
 
                       if (boolean)
                         [
-                          | inv?, r, bit |
+                          | r, bit |
                           arg1 = gen_component(fcode, arg1);
                           r = mc:new_local(fcode);
                           bit = bits_exists(fn (i) true, cst);
-                          mc:ins_compute(fcode, mc:b_shift_right, r,
-                                         list(arg1, mc:var_make_constant(bit)));
+                          mc:ins_compute(
+                            fcode, mc:b_shift_right, r,
+                            list(arg1, mc:var_make_constant(bit)));
                           mc:ins_compute(fcode, mc:b_bitand, r,
                                          list(r, cone));
-                          @(_ . inv?) = boolean;
-                          inv? ^= not?;
-                          if (inv?)
+                          if (inverse?)
                             mc:ins_compute(fcode, mc:b_bitxor,
                                            r, list(r, cone));
                           exit<function> bool_result(r);
@@ -922,8 +1075,8 @@ writes mc:this_function
                         [
                           condition[mc:c_bargs] = list(list(arg1), list(carg));
                           gen_condition(
-                            fcode, list(condition), flab, failure, slab, success,
-                            inv_bool(boolean));
+                            fcode, list(condition), flab, failure,
+                            slab, success, boolean, trivial, inverse?);
                           mc:set_loc(prevloc);
                           exit<function> null;
                         ]
@@ -934,10 +1087,9 @@ writes mc:this_function
               if (boolean && op != mc:b_bitand)
                 [
                   assert(op >= mc:b_eq && op <= mc:b_gt);
-                  | r, inv? |
-                  @(_ . inv?) = boolean;
+                  | r |
                   r = mc:new_local(fcode);
-                  if (inv?)
+                  if (inverse?)
                     op ^= 1;    // invert logic
                   mc:ins_compute(fcode, op, r, bargs);
                   exit<function> bool_result(r);
@@ -960,21 +1112,20 @@ writes mc:this_function
 	[
 	  | function, bf |
 
-	  bargs = lmap(fn (arg) gen_clist(fcode, arg),
-                       condition[mc:c_efnargs]);
-	  function = car(bargs);
+	  @(function . bargs) = lmap(fn (arg) gen_clist(fcode, arg),
+                                     condition[mc:c_efnargs]);
 
 	  // Check for builtin functions
 	  if (bf = builtin_call?(function, bargs, builtin_branches))
 	    [
-	      bargs = cdr(bargs);
-	      branch_succeed = bf[2];
-	      branch_fail = bf[3];
+	      branch_succeed = bf[bf_op];
+	      branch_fail = bf[bf_notop];
 
               if (branch_succeed == mc:branch_equal)
                 <done> [
                   | arg1, arg2, val, ok?, type |
-                  ok? = fn (v) string?(v) || equal?(v, '[]);
+                  ok? = fn (v) (string?(v) || float?(v) || bigint?(v)
+                                || equal?(v, '[]));
                   @(arg1 arg2) = bargs;
                   if (ok?(val = mc:var_value(arg2)))
                     null
@@ -988,22 +1139,24 @@ writes mc:this_function
                   else
                     exit<done> null;
 
+                  type = typeof(val);
+
                   // arg1 is variable, arg2 is the constant 'val'
-                  if (vector?(val))
+                  if (type == type_vector)
                     [
-                      type = type_vector;
+                      // val must be the empty vector
                       branch_succeed = mc:branch_vlength;
                       branch_fail = (mc:branch_vlength
                                      + mc:branch_ne - mc:branch_eq);
                     ]
-                  else
+                  else if (type == type_string)
                     [
-                      type = type_string;
                       branch_succeed = mc:branch_slength;
                       branch_fail = (mc:branch_slength
                                      + mc:branch_ne - mc:branch_eq);
                     ];
 
+                  trivial = false; // suppress trivial single-branch mode
                   mc:ins_branch(fcode, mc:branch_ntype? + type, flab,
                                 list(arg1));
                   if (type == type_string && slength(val) > 0)
@@ -1015,6 +1168,17 @@ writes mc:this_function
                       bargs = list(res);
                       branch_succeed = mc:branch_true;
                       branch_fail = mc:branch_false;
+                    ]
+                  else if (type == type_float || type == type_bigint)
+                    [
+                      | res, cmp |
+                      res = mc:new_local(fcode);
+                      cmp = if (type == type_float) vfcmp else vbicmp;
+                      mc:ins_call(fcode, res,
+                                  list(cmp, arg1, arg2));
+                      bargs = list(res);
+                      branch_succeed = mc:branch_false;
+                      branch_fail = mc:branch_true;
                     ]
                   else
                     bargs = list(arg1, czero);
@@ -1028,10 +1192,33 @@ writes mc:this_function
 	      result = mc:new_local(fcode);
 	      if (bf = builtin_call?(function, bargs, builtin_functions))
                 [
+                  <not_xfind> [
+                    | t |
+                    t = match (function)
+                      [
+                        ,vvfind? => type_vector;
+                        ,vsfind? => type_string;
+                        ,vlfind? => stype_list;
+                        _ => exit<not_xfind> null;
+                      ];
+
+                    match! (gen_find_branch(fcode, t, fn() slab, bargs))
+                      [
+                        [ bs bf args ] => [
+                          trivial = false;
+                          branch_succeed = bs;
+                          branch_fail = bf;
+                          bargs = args;
+                          exit<done> true;
+                        ];
+                        ,false => exit<not_xfind> null;
+                      ];
+                  ];
+
                   | op |
-                  op = bf[2];
+                  op = bf[bf_op];
                   if (function?(op))
-                    op(fcode, result, cdr(bargs))
+                    op(fcode, result, bargs)
                   else if (op == mc:b_slength || op == mc:b_vlength)
                     [
                       if (op == mc:b_slength)
@@ -1046,26 +1233,26 @@ writes mc:this_function
                           branch_succeed = (mc:branch_vlength
                                             + mc:branch_ne - mc:branch_eq);
                         ];
-                      bargs = list(cadr(bargs), czero);
+                      bargs = list(car(bargs), czero);
                       exit<done> null;
                     ]
                   else
-                    mc:ins_compute(fcode, op, result, cdr(bargs))
+                    mc:ins_compute(fcode, op, result, bargs)
                 ]
 	      else
                 [
                   if (function == vstring_cmp)
                     [
                       swap? = true;
-                      set_car!(bargs, vstring_equal?);
+                      function = vstring_equal?;
                     ]
                   else if (function == vstring_icmp)
                     [
                       swap? = true;
-                      set_car!(bargs, vstring_iequal?);
+                      function = vstring_iequal?;
                     ];
 
-                  mc:ins_call(fcode, result, bargs);
+                  mc:ins_call(fcode, result, function . bargs);
                 ];
 	      bargs = result . null;
               if (swap?)
@@ -1094,19 +1281,20 @@ writes mc:this_function
               || (branch_fail == mc:branch_true
                   && branch_succeed == mc:branch_false)))
         [
-          | var, inv?, r |
+          | var, r |
           @(var) = bargs;
-          @(_ . inv?) = boolean;
           if (branch_succeed != mc:branch_true)
-            inv? = !inv?;
+            inverse? = !inverse?;
           r = mc:new_local(fcode);
-          mc:ins_compute(fcode, if (inv?) mc:b_eq else mc:b_ne,
+          mc:ins_compute(fcode, if (inverse?) mc:b_eq else mc:b_ne,
                          r, list(var, cfalse));
           exit<function> bool_result(r);
         ];
 
       // generate basic code
-      if (success)
+      if (trivial)
+        trivial(if (inverse?) branch_fail else branch_succeed, bargs)
+      else if (success)
         [
           mc:ins_branch(fcode, branch_fail, flab, bargs);
           success();

@@ -26,6 +26,7 @@
 /* #define XMLDEBUG 1 */
 
 #include <string.h>
+
 #include <libxml/xmlreader.h>
 
 #include "../ports.h"
@@ -321,11 +322,11 @@ static int xml_read_close(void *arg)
   return 0;
 }
 
-SECTOP(xml_read, 0, "`v `s `n `t -> `x. Reads an XML document (named `s)"
+SECOP(xml_read, , "`v `s `n `t -> `x. Reads an XML document (named `s)"
        " from vector of strings `v using `XML_PARSE_xxx flags in `n.\n"
        "Returns an XML tree, or an error [`uri `line `msg].\n"
        "`t is the name table, or NULL.",
-       4, (struct vector *minput, struct string *murl, value mflags,
+       (struct vector *minput, struct string *murl, value mflags,
            struct table *name_table),
        LVL_IMPLEMENTOR, 0,
        "vsn[tu].v")
@@ -333,7 +334,7 @@ SECTOP(xml_read, 0, "`v `s `n `t -> `x. Reads an XML document (named `s)"
   int flags;
   CHECK_TYPES(minput,     vector,
               murl,       string,
-              mflags,     CT_RANGE(flags, INT_MIN, INT_MAX),
+              mflags,     CT_AUTO_RANGE(flags),
               name_table, CT_TYPES(null, table));
 
   char *url;
@@ -357,16 +358,16 @@ SECTOP(xml_read, 0, "`v `s `n `t -> `x. Reads an XML document (named `s)"
   return result;
 }
 
-SECTOP(xml_read_file, 0, "`s `n `t -> `x. Reads an XML document from file `s,"
-       " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
-       " an error [`uri `line `msg]. `t is the name table, or NULL.",
-       3, (struct string *mfilename, value mflags, struct table *name_table),
-       LVL_IMPLEMENTOR, 0,
-       "sn[tu].v")
+SECOP(xml_read_file, , "`s `n `t -> `x. Reads an XML document from file `s,"
+      " using `XML_PARSE_xxx flags in `n. Returns an XML tree, or"
+      " an error [`uri `line `msg]. `t is the name table, or NULL.",
+      (struct string *mfilename, value mflags, struct table *name_table),
+      LVL_IMPLEMENTOR, 0,
+      "sn[tu].v")
 {
   int flags;
   CHECK_TYPES(mfilename,  string,
-              mflags,     CT_RANGE(flags, INT_MIN, INT_MAX),
+              mflags,     CT_AUTO_RANGE(flags),
               name_table, CT_TYPES(null, table));
 
   char *filename;

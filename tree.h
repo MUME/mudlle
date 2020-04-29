@@ -29,16 +29,29 @@
 
 extern struct alloc_block *parser_memory;
 
-#define NO_LOC &(const struct loc){ .line = -1, .col = -1 }
-
-#define LINE_LOC(l) &(const struct loc){ .line = (l), .col = -1 }
+#define INIT_LOC { .line = -1, .col = -1 }
+#define NO_LOC &(const struct loc)INIT_LOC
 
 #define LLOC_LOC(lloc) &(const struct loc){     \
-  .line = (lloc).first_line,                    \
-  .col = (lloc).first_column                    \
+  .line  = (lloc).first_line,                   \
+  .col   = (lloc).first_column,                 \
+  .fname = (lloc).fname                         \
 }
 
+enum arith_mode {
+  arith_default,
+  arith_integer,
+  arith_float,
+  arith_bigint
+};
+
+struct filename {
+  const char *path;
+  const char *nice;
+};
+
 struct loc {
+  const struct filename *fname;
   int line, col;
 };
 
@@ -77,8 +90,6 @@ struct function {
                                    implies vlength(vargs) == 1 */
   struct component *value;
   struct loc loc;               /* Location of "fn" keyword */
-  const char *filename;         /* Name on disk */
-  const char *nicename;         /* Pretty-printed file name */
   const char *varname;		/* Name of variable in which function is
                                    stored */
 };
@@ -86,15 +97,13 @@ struct function {
 struct block {
   struct vlist *locals;
   struct clist *sequence;
-  const char *filename;
-  const char *nicename;
   struct loc loc;
   bool statics;                 /* true if 'locals' are in fact statics */
 };
 
 enum constant_class {
-  cst_int, cst_string, cst_list, cst_array, cst_float, cst_bigint, cst_table,
-  cst_ctable, cst_symbol, cst_expression
+  cst_null, cst_int, cst_string, cst_list, cst_array, cst_float, cst_bigint,
+  cst_table, cst_ctable, cst_symbol, cst_expression
 };
 
 struct bigint_const {
@@ -158,7 +167,6 @@ struct pattern {
 };
 
 struct match_node {
-  const char *filename;
   struct loc loc;
   struct pattern *pattern;
   struct component *expression;
@@ -169,38 +177,93 @@ struct match_node_list {
   struct match_node *match;
 };
 
+#define FOR_BUILTINS(op, sep)                   \
+  op(b_sc_or)       sep()                       \
+  op(b_sc_and)      sep()                       \
+  /* following 6 invert logic using ^= 1 */     \
+  op(b_eq)          sep()                       \
+  op(b_ne)          sep()                       \
+  op(b_lt)          sep()                       \
+  op(b_ge)          sep()                       \
+  op(b_le)          sep()                       \
+  op(b_gt)          sep()                       \
+  op(b_bitor)       sep()                       \
+  op(b_bitxor)      sep()                       \
+  op(b_bitand)      sep()                       \
+  op(b_shift_left)  sep()                       \
+  op(b_shift_right) sep()                       \
+  op(b_add)         sep()                       \
+  op(b_subtract)    sep()                       \
+  op(b_multiply)    sep()                       \
+  op(b_divide)      sep()                       \
+  op(b_remainder)   sep()                       \
+  op(b_negate)      sep()                       \
+  op(b_not)         sep()                       \
+  op(b_bitnot)      sep()                       \
+  op(b_ifelse)      sep()                       \
+  op(b_if)          sep()                       \
+  op(b_while)       sep()                       \
+  op(b_loop)        sep()                       \
+  op(b_ref)         sep()                       \
+  op(b_set)         sep()                       \
+  op(b_cons)
+
 enum builtin_op {
   b_invalid = -1,
-  b_sc_or, b_sc_and, b_eq, b_ne, b_lt, b_ge, b_le, b_gt,
-  b_bitor, b_bitxor, b_bitand, b_shift_left, b_shift_right,
-  b_add, b_subtract, b_multiply, b_divide, b_remainder, b_negate,
-  b_not, b_bitnot, b_ifelse, b_if, b_while, b_loop, b_ref, b_set,
-  b_cons, last_builtin,
-  /* these are only used by the parser and compiler */
-  b_xor,
-  very_last_builtin
+  FOR_BUILTINS(EXPAND_ARGS, SEP_COMMA),
+  parser_builtins,
+  /* these are only used by the parser and bytecode compiler */
+  b_xor = parser_builtins,
+  number_of_builtins
 };
 
 extern const char *const builtin_op_names[];
 
-#define FOR_COMPONENT_CLASSES(op)                               \
-  op(assign) op(recall) op(constant) op(closure) op(execute)    \
-  op(builtin) op(block) op(labeled) op(exit) op(vref)
+enum parser_component_field {
+  c_class,
+  c_loc
+};
+
+/* documented in compiler.mud */
+#define FOR_COMPONENT_CLASSES(op, sep)                          \
+  op(assign,   (asymbol, avalue)) sep()                         \
+  op(recall,   (rsymbol)) sep()                                 \
+  op(constant, (cvalue)) sep()                                  \
+  op(closure,  (freturn_typeset, fhelp, fargs, fvarargs,        \
+                fvalue, ffilename, fnicename)) sep()            \
+  op(execute,  (efnargs)) sep()                                 \
+  op(builtin,  (bfn, bargs)) sep()                              \
+  op(block,    (klocals, ksequence)) sep()                      \
+  op(labeled,  (lname, lexpression)) sep()                      \
+  op(exit,     (ename, eexpression)) sep()                      \
+  op(vref,     (vrsymbol))
 
 enum component_class {
-#define __CDEF(name) c_ ## name,
-  FOR_COMPONENT_CLASSES(__CDEF)
+#define __CDEF(name, args) c_ ## name
+  FOR_COMPONENT_CLASSES(__CDEF, SEP_COMMA),
 #undef __CDEF
   component_classes
 };
 
-#define FOR_PARSER_MODULE_FIELDS(op)                            \
-  op(class) op(name) op(requires) op(defines) op(reads)         \
-  op(writes) op(statics) op(body) op(filename) op(nicename)
+#define ___FDEF(name) c_ ## name
+#define __FDEF(name, args)                              \
+  enum c_ ## name ## _fields {                          \
+    __c_ ## name ## _start = c_loc,                     \
+      FOR_ARGS(___FDEF, SEP_COMMA, EXPAND_ARGS args),   \
+      c_ ## name ## _fields                             \
+  }
+
+FOR_COMPONENT_CLASSES(__FDEF, SEP_SEMI);
+
+#define FOR_PARSER_MODULE_FIELDS(op, sep)               \
+  op(class)   sep() op(name)  sep() op(requires) sep()  \
+  op(defines) sep() op(reads) sep() op(writes)   sep()  \
+  op(statics) sep() op(body)  sep() op(filename) sep()  \
+  op(nicename)
 
 enum parser_module_field {
-#define __MDEF(name) m_ ## name,
-  FOR_PARSER_MODULE_FIELDS(__MDEF)
+#define __MDEF(name) m_ ## name
+  FOR_PARSER_MODULE_FIELDS(__MDEF, SEP_COMMA),
 #undef __MDEF
   parser_module_fields
 };
@@ -247,11 +310,9 @@ struct mfile *new_file(struct alloc_block *heap, enum file_class vclass,
                        struct vlist *statics, struct block *body,
                        const struct loc *loc);
 struct function *new_fn(struct alloc_block *heap, struct component *avalue,
-                        const struct loc *loc, const char *filename,
-                        const char *nicename);
+                        const struct loc *loc);
 struct block *new_codeblock(struct alloc_block *heap, struct vlist *locals,
-                            struct clist *sequence, const char *filename,
-                            const char *nicename, const struct loc *loc);
+                            struct clist *sequence, const struct loc *loc);
 struct block *new_toplevel_codeblock(struct alloc_block *heap,
                                      struct vlist *statics,
                                      struct block *body);
@@ -297,7 +358,7 @@ struct component *new_recall_component(struct alloc_block *heap,
 struct component *new_closure_component(
   struct alloc_block *heap, const struct loc *loc, struct function *f);
 struct component *new_block_component(
-  struct alloc_block *heap, const struct loc *loc, struct block *blk);
+  struct alloc_block *heap, struct block *blk);
 struct component *new_execute_component(
   struct alloc_block *heap, const struct loc *loc, struct clist *clist);
 
@@ -309,11 +370,11 @@ struct component *new_exit_component(
   struct component *comp);
 
 struct component *new_unop_component(
-  struct alloc_block *heap, const struct loc *loc, enum builtin_op op,
-  struct component *e);
+  struct alloc_block *heap, const struct loc *loc, enum arith_mode arith_mode,
+  enum builtin_op op, struct component *e);
 struct component *new_binop_component(
-  struct alloc_block *heap, const struct loc *loc, enum builtin_op op,
-  struct component *e1, struct component *e2);
+  struct alloc_block *heap, const struct loc *loc, enum arith_mode arith_mode,
+  enum builtin_op op, struct component *e1, struct component *e2);
 struct component *new_ternop_component(
   struct alloc_block *heap, const struct loc *loc, enum builtin_op op,
   struct component *e1, struct component *e2, struct component *e3);
@@ -354,22 +415,23 @@ struct pattern_list *new_pattern_list(struct alloc_block *heap,
                                       struct pattern_list *tail);
 
 struct component *new_match_component(struct alloc_block *heap,
+                                      bool force,
                                       struct component *e,
-                                      struct match_node_list *matches);
+                                      struct match_node_list *matches,
+                                      const struct loc *loc);
 struct component *new_for_component(struct alloc_block *heap,
                                     struct vlist *vars,
                                     struct component *einit,
                                     struct component *eexit,
                                     struct component *eloop,
                                     struct component *e,
-                                    const char *filename,
                                     const struct loc *loc);
 struct match_node_list *new_match_list(struct alloc_block *heap,
                                        struct match_node *node,
                                        struct match_node_list *tail);
 struct match_node *new_match_node(struct alloc_block *heap,
                                   struct pattern *pat, struct component *e,
-                                  const char *filename, const struct loc *loc);
+                                  const struct loc *loc);
 
 struct component *new_reference(struct alloc_block *heap,
                                 const struct loc *loc,
@@ -379,10 +441,11 @@ struct component *new_dereference(struct alloc_block *heap,
                                   struct component *e);
 
 struct component *new_assign_modify_expr(struct alloc_block *heap,
-                                         struct component *e0,
+                                         enum arith_mode arith_mode,
                                          enum builtin_op op,
-                                         struct component *e1, bool postfix,
-                                         bool assignment,
+                                         struct component *e0,
+                                         struct component *e1,
+                                         bool postfix, bool assignment,
                                          const struct loc *loc);
 struct component *new_assign_expression(struct alloc_block *heap,
                                         struct component *e0,

@@ -42,7 +42,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       mc:nins = mc:nbytes = 0;
     ];
 
-  x86:reset_counters();
+  eax? = fn (arg) register?(arg) && regval(arg) == x86:reg_eax;
 
   x86:assemble = fn "x86code -> x86asm" (fcode)
     [
@@ -79,14 +79,24 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                  ins[x86:i_arg1] = x86:skip_label_alias(ins[x86:i_arg1]);
 	     ], ilist);
 
+  | cmovcc_src? |
+  // safe as cmovcc source: reg or memory that must not trigger segv
+  cmovcc_src? = fn (arg)
+    match (arg)
+      [
+        (,x86:lreg . _) => true;
+        (,x86:lidx . ((,x86:reg_esp || ,x86:reg_ebp) . _)) => true;
+      ];
+
   peephole = fn (ilist)
     // Types: ilist: list of x86 instructions
     // Requires: ilist != null, no aliased labels
     // Returns: list of x86 instructions
-    // Effects: Performs peephole optimisation - currently replaces
-    //   jcc x/jmp y/x: with jncc y/x:
+    // Effects: Performs peephole optimisation - replaces
+    //   jcc x/jmp y/x: with jncc y/x
+    //   jcc 0f; mov x,%reg; 0: with cmovcc x,%reg
     [
-      | iscan, jcc, jmp, aliased_label |
+      | iscan, jcc, jmp, noreturn, aliased_label |
 
       aliased_label = false;
       iscan = ilist;
@@ -115,16 +125,18 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	      ++mc:labeled_jmp;
 	    ];
 
-          if (jmp != null && !ilabel)
+          if (!ilabel && (jmp != null || noreturn != null))
             [
+              dremove!(iscan, ilist);
+              iscan = if (noreturn != null) noreturn else jmp;
               if (mc:verbose >= 3)
                 [
-                  display("UNREACHABLE after jmp: ");
+                  display("UNREACHABLE after ");
+                  x86:print_ins(dget(iscan)[x86:il_ins]);
+                  display(" : ");
                   x86:print_ins(ins);
                   newline();
-                ];
-              dremove!(iscan, ilist);
-              iscan = jmp;
+                ]
             ]
           else if (jmp != null && ilabel == dget(jmp)[x86:il_ins][x86:i_arg1])
             [
@@ -153,8 +165,47 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	      // jmp must be unlabeled, but mc:labeled_jmp optimisation
 	      // deals with that.
 	      if (op == x86:op_jmp)
-		jmp = iscan // to jcc/jmp state
-	      else
+		jmp = iscan     // to jcc/jmp state
+	      else if (op == x86:op_mov
+                       && !ilabel
+                       && car(ins[x86:i_arg2]) == x86:lreg
+                       && dget(dnext(iscan))[x86:il_label] == jcc[x86:i_arg1]
+                       && cmovcc_src?(ins[x86:i_arg1]))
+                [
+                  // jcc 0f; mov reg/mem,%reg; 0:
+                  if (mc:verbose >= 3)
+                    [
+                      display("REPLACE jcc over mov with cmovcc: ");
+                      x86:print_ins(jcc);
+                      display("; ");
+                      x86:print_ins(ins);
+                    ];
+
+                  [
+                    | previ |
+                    previ = dprev(iscan);
+                    dremove!(iscan, ilist);
+                    iscan = previ;
+                  ];
+
+                  jcc[x86:i_op] = x86:op_cmovcc;
+                  jcc[x86:i_arg1] = ins[x86:i_arg1];
+                  jcc[x86:i_arg2] = cons(
+                    x86:lidx,
+                    cons(
+                      cdr(ins[x86:i_arg2]),
+                      jcc[x86:i_arg2] ^ 1)); // inverse cc
+
+                  if (mc:verbose >= 3)
+                    [
+                      display(" -> ");
+                      x86:print_ins(jcc);
+                      newline();
+                    ];
+
+                  jcc = null;
+                ]
+              else
 		jcc = null; // back to nojcc
 	    ]
 	  else // jcc/jmp state
@@ -176,6 +227,11 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 
               jmp = jcc = null; // back to nojcc
 	    ];
+
+          noreturn = null;
+          if (op == x86:op_ret
+              || (op == x86:op_callrel && ins[x86:i_arg2]))
+            noreturn = iscan;
 
 	  iscan = dnext(iscan);
 	  if (iscan == ilist) exit 0;
@@ -240,7 +296,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       dforeach(fn (il) [
         | line |
         line = mc:loc_line(il[x86:il_loc]);
-        if (line != last_line)
+        if (line > 0 && line != last_line)
           [
             linenos = (il[x86:il_offset] . line) . linenos;
             last_line = line;
@@ -315,7 +371,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	      else 6
 	    ]
 	  else if (offset == 0 && r != x86:reg_ebp) 1
-	  else if (byte?(offset)) 2
+	  else if (integer?(offset) && byte?(offset)) 2
 	  else 5
 	]
       else if (m == x86:lridx)
@@ -346,7 +402,9 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
   isize[x86:op_pop] = isize[x86:op_push];
   isize[x86:op_leave] = fn (a1, a2) 1;
 
-  isize[x86:op_call] = fn (a1, a2) 1 + easize(a1);
+  isize[x86:op_call] = fn (a1, a2)
+    if (immediate?(a1)) 5
+    else 1 + easize(a1);
   isize[x86:op_callrel_prim] = isize[x86:op_callrel] = fn (a1, a2) 5;
   isize[x86:op_ret] = fn (a1, a2) 1;
   isize[x86:op_jmp] = fn (a1, a2) 2;
@@ -362,15 +420,10 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
   isize[x86:op_movbyte] = isize[x86:op_mov] = fn (a1, a2)
     if (imm_zero?(a1) && register?(a2))
       isize[x86:op_xor](a2, a2)
-    else if (immediate?(a1))
+    else if (immediate?(a1) || car(a1) == x86:lseclev)
       if (register?(a2)) 5
       else 5 + easize(a2)
     else if (register?(a1)) 1 + easize(a2)
-    else if (car(a1) == x86:lseclev)
-      [
-        assert(register?(a2));
-        if (cdr(a1) == x86:sl_c) 3 else 5
-      ]
     else if (register?(a2)) 1 + easize(a1)
     else [ dformat("%s %s\n", a1, a2); fail(); ];
 
@@ -450,9 +503,13 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
   isize[x86:op_sar] = gsizeshift;
 
   isize[x86:op_setcc] = fn (a1, a2) 2 + easize(a2);
+  isize[x86:op_cmovcc] = fn (a1, a2) 2 + easize(a1);
   isize[x86:op_movzxbyte] = fn (a1, a2) 2 + easize(a1);
+  isize[x86:op_movzxword] = fn (a1, a2) 2 + easize(a1);
   isize[x86:op_xchg] = fn (a1, a2)
-    if (register?(a1)) 1 + easize(a2)
+    if (register?(a1))
+      if (eax?(a2) || eax?(a1) && register?(a2)) 1
+      else 1 + easize(a2)
     else 1 + easize(a1);
   isize[x86:op_op16] = fn (a1, a2) 1;
 
@@ -497,10 +554,16 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
     code[o] = 0xc9;
 
   igen[x86:op_call] = fn (code, a1, a2, o, info)
-    [
-      code[o] = 0xff;
-      setea1(code, o + 1, 2, a1, info);
-    ];
+    if (immediate?(a1))
+      [
+        code[o] = 0xe8;
+        setimm(code, o + 1, a1, info);
+      ]
+    else
+      [
+        code[o] = 0xff;
+        setea1(code, o + 1, 2, a1, info);
+      ];
 
   igen[x86:op_callrel] = fn (code, a1, a2, o, info)
     [
@@ -598,8 +661,6 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	setea1(code, o + 1, regval(a1), a2, info);
       ]
     else fail();
-
-  eax? = fn (arg) register?(arg) && regval(arg) == x86:reg_eax;
 
   generic2 = fn (uimm8op, imm8op, imm32op, immextraop,
                  imm32eaxop, regmemop, memregop)
@@ -769,11 +830,26 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       code[o + 1] = 0x90 | a1;
       setea1(code, o + 2, 0, a2, info);
     ];
+  igen[x86:op_cmovcc] = fn (code, a1, a2, o, info)
+    [
+      | r2, cc |
+      @(,x86:lidx . (r2 . cc)) = a2;
+      code[o] = 0x0f;
+      code[o + 1] = 0x40 | cc;
+      setea1(code, o + 2, r2, a1, info);
+    ];
 
   igen[x86:op_movzxbyte] = fn (code, a1, a2, o, info)
     [
       code[o] = 0x0f;
       code[o + 1] = 0xb6;
+      setea1(code, o + 2, regval(a2), a1, info);
+    ];
+
+  igen[x86:op_movzxword] = fn (code, a1, a2, o, info)
+    [
+      code[o] = 0x0f;
+      code[o + 1] = 0xb7;
       setea1(code, o + 2, regval(a2), a1, info);
     ];
 
@@ -784,8 +860,15 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	  | t |
 	  t = a1; a1 = a2; a2 = t;
 	];
-      code[o] = 0x87;
-      setea1(code, o + 1, regval(a1), a2, info);
+      if (eax?(a2))
+        code[o] = 0x90 | regval(a1)
+      else if (eax?(a1) && register?(a2))
+        code[o] = 0x90 | regval(a2)
+      else
+        [
+          code[o] = 0x87;
+          setea1(code, o + 1, regval(a1), a2, info);
+        ]
     ];
   igen[x86:op_op16] = fn (code, a1, a2, o, info)
     code[o] = 0x66;
@@ -840,7 +923,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	      code[o] = (extraop << 3) | r;
 	      o + 1
 	    ]
-	  else if (byte?(offset))
+	  else if (integer?(offset) && byte?(offset))
 	    [
 	      code[o] = 0x40 | (extraop << 3) | r;
 	      code[o + 1] = offset;
@@ -849,7 +932,9 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	  else
 	    [
 	      code[o] = 0x80 | (extraop << 3) | r;
-	      setword(code, o + 1, offset);
+              if (function?(offset))
+                offset = offset(false);
+              setword(code, o + 1, offset);
 	      o + 5
 	    ]
 	]
@@ -986,4 +1071,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       code[offset + 1] = word >> 8;
       code[offset + 0] = word;
     ];
+
+  x86:reset_counters();
+
 ];

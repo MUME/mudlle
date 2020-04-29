@@ -41,7 +41,6 @@ void garbage_init(void);
 extern uint8_t *gcblock;
 extern ulong gcblocksize;
 
-#define MUDLLE_ALIGN(x, n) (((x) + (n) - 1) & ~((n) - 1))
 #define CODE_ALIGNMENT 16
 
 extern uint8_t *posgen0;
@@ -85,17 +84,19 @@ struct gcpro {
   GCCHECK(var);						\
   (gc).next = gcpro;					\
   gcpro = &(gc);					\
-  (gc).obj = (void *)&(var);                            \
+  (gc).obj = (void *)&(var);				\
 } while (0)
 #define UNGCPROV(gc) ((void)(gcpro = (gc).next))
 
 #define __GCPROSTART struct gcpro gcpros[] = {
-#define __GCPRO_N(N, var) {                             \
-  .next = N == 1 ? gcpro : gcpros + N - 2,              \
-  .obj  = (GCCHECK(var), (void *)&(var))                \
+#define __GCPRO_N(N, var) {				\
+  .next = IF_ONE(N)(					\
+    gcpro,						\
+    gcpros IF_TWO(N)(, + DEC(DEC(N)))),			\
+  .obj	= (GCCHECK(var), (void *)&(var))		\
 }
-#define __GCPROEND };                                   \
-  ((void)(gcpro = &gcpros[VLENGTH(gcpros) - 1]))
+#define __GCPROEND(n) };				\
+  ((void)(gcpro = &gcpros[DEC(n)]))
 
 #define __GCPRO1(v, ...) __GCPRO_N(1, v)
 #define __GCPRO2(v, ...) __GCPRO1(__VA_ARGS__), __GCPRO_N(2, v)
@@ -108,10 +109,11 @@ struct gcpro {
 #define __GCPRO(N, ...) ___GCPRO(N, __VA_ARGS__)
 
 /* GCPRO(...), UNGCPRO(): protect 1-6 values in a default gcpros[] array */
-#define GCPRO(...)                              \
-  __GCPROSTART                                  \
-  __GCPRO(VA_NARGS(__VA_ARGS__), __VA_ARGS__)   \
-  __GCPROEND
+#define _GCPRO(n, ...)				\
+  __GCPROSTART					\
+  __GCPRO(n, __VA_ARGS__)			\
+  __GCPROEND(n)
+#define GCPRO(...) _GCPRO(VA_NARGS(__VA_ARGS__), __VA_ARGS__)
 #define UNGCPRO() ((void)(gcpro = gcpros[0].next))
 
 /* Protection for dynamically allocated variables, that may be freed */
@@ -207,7 +209,9 @@ value gc_allocate(long n);
 
 void gc_free(struct obj *o);
 
-bool check_immutable(struct obj *obj);
+value make_immutable(value v);
+
+bool try_make_immutable(struct obj *obj);
 void detect_immutability(void);
 /* Effects: Detects all values that can be made immutable.
      Has the same restrictions as the normal GC, ie won't handle
@@ -263,27 +267,29 @@ struct gcstats_alloc {
   } types[last_type];
 };
 #define GCSTATS_ALLOC_NULL (struct gcstats_alloc){ .types[0].nb = 0 }
+#endif  /* GCSTATS */
 
 struct gcstats
 {
-  ulong size, usage_minor, usage_major;
   ulong minor_count, major_count;
+#ifdef GCSTATS
+  ulong size, usage_minor, usage_major;
   struct gcstats_gen gen[2];
   struct gcstats_alloc l, a;    /* before GC; since GC */
+#endif
 };
 
 extern struct gcstats gcstats;
 
+#ifdef GCSTATS
 static inline void gcstats_add_alloc(enum mudlle_type type, ulong size)
 {
   gcstats.a.types[type].nb++;
   gcstats.a.types[type].size += size;
 }
-#endif  /* GCSTATS */
+#endif
 
-void dump_memory(void);
-/* Effects: Dumps GC's memory to a file for use by the profiler.
-*/
+struct vector *all_mudlle_code(void);
 
 void garbage_collect(long n);
 /* Effects: Does a garbage collection, ensuring that n bytes will be

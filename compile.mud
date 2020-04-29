@@ -33,7 +33,10 @@ writes mc:verbose, mc:erred, mc:this_module, mc:disassemble
       if (!mod) exit<function> false;
 
       if (mc:disassemble && mc:verbose < 1)
-        mc:reset_closure_count();
+        [
+          mc:reset_closure_count();
+          mc:reset_ins_count();
+        ];
 
       mc:erred = false;
       mc:this_module = mod;

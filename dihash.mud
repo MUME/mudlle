@@ -25,7 +25,7 @@ defines dihash?, dihash_empty!, dihash_entries, dihash_exists?, dihash_filter!,
   dihash_foreach, dihash_get, dihash_keys, dihash_list, dihash_map,
   dihash_map!, dihash_reduce, dihash_ref, dihash_remove!, dihash_resize,
   dihash_resize!, dihash_set!, dihash_size, dihash_sorted_vector,
-  dihash_vector, ihash_to_dihash, make_dihash, make_dihash_ref
+  dihash_vector, ihash_to_dihash, make_dihash
 [
   | div_used, div_data, vslot_next, vslot_key, vslot_data, next_size,
     good_size, get_entry |
@@ -174,32 +174,6 @@ defines dihash?, dihash_empty!, dihash_entries, dihash_exists?, dihash_filter!,
 
   dihash_ref = fn "`d `n -> `x. Returns dihash data for index `n or null. Cf. `dihash_get()." (vector hash, int key)
     internal_dihash_get(hash, key, null);
-
-  [
-    | fns |
-    fns = sequence(
-      "dihash",
-      fn (x) [
-        | hash, key, entry |
-        @[hash key entry] = x;
-        if (entry[vslot_next])
-          entry[vslot_data]
-        else if (vector?(entry = get_entry(hash, key, false)))
-          (x[2] = entry)[vslot_data]
-        else
-          null
-      ],
-      fn (x, v) [
-        | hash, key, entry |
-        @[hash key entry] = x;
-        if (!entry[vslot_next])
-          x[2] = entry = get_entry(hash, key, true);
-        entry[vslot_data] = v
-      ]);
-
-    make_dihash_ref = fn "`d `n -> `r. Returns a reference to entry `n in dihash `d" (vector hash, int key)
-      make_custom_ref(vector(hash, key, '[0]), fns);
-  ];
 
   dihash_reduce = fn "`c `x0 `d -> `x1. Returns the reduction `c(`k, `e, `x) -> `x for each element `e with key `k in dihash `d" (function func, x, vector hash)
     [
@@ -361,7 +335,7 @@ defines dihash?, dihash_empty!, dihash_entries, dihash_exists?, dihash_filter!,
   dihash_sorted_vector = fn "`d -> `v. Returns a vector of (`key . `value) of the entries in dihash `d, ordered by lowest keys first." (vector hash)
     vqsort!(fn (a, b) car(a) < car(b), internal_dihash_vector(hash));
 
-  dihash_exists? = fn "`c `d -> `x. Returns (`key . `value) for the first entry in dihash `d, for which `c(`key, `value) is true" (function func, vector hash)
+  dihash_exists? = fn "`c `d -> `x. Returns (`key . `value) for the first entry in dihash `d, for which `c(`key, `value) is true; false if none found." (function func, vector hash)
     [
       | result |
       result = false;

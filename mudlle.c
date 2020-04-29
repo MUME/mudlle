@@ -29,6 +29,7 @@
 #include "mparser.h"
 #include "mudlle.h"
 #include "print.h"
+#include "random.h"
 #include "stack.h"
 #include "strbuf.h"
 #include "table.h"
@@ -39,6 +40,7 @@ void mudlle_init(void)
 {
   assert(table_good_size(MAX_TABLE_ENTRIES) <= MAX_VECTOR_SIZE);
   assert(table_good_size(MAX_TABLE_ENTRIES + 1) > MAX_VECTOR_SIZE);
+  random_init();
   garbage_init();
   global_init();
   print_init();

@@ -28,6 +28,8 @@
 
 #  include "x86consts.h"
 
+#define SEP_SEMI() ;
+
 #ifdef __MACH__
 .section	__TEXT,__text,regular,pure_instructions
 #else
@@ -39,14 +41,15 @@
 #ifdef __MACH__
  #define N(x) _ ## x
  #define SETSIZE(x)
+ #define FALIGN 4		/* in powers of two */
 #else
  #define N(x) x
  #define SETSIZE(x) .size x, . - x
+ #define FALIGN 16		/* in bytes */
 #endif
 
 #define GLABEL(n) .globl N(n) ; N(n)
 
-#define FALIGN 16
 #define GFUNC(n) .align FALIGN ; GLABEL(n): ; .cfi_startproc
 #define GEND(n) .cfi_endproc ; SETSIZE(N(n))
 #define LFUNC(n) .align FALIGN ; n: ; .cfi_startproc
@@ -164,20 +167,20 @@ GLABEL(builtin_start):
 */
 #define __SAVE_CALLEE(n, reg) mov %reg,N(ccontext)+cc_callee_ ## reg
 #define __RESTORE_CALLEE(n, reg) mov N(ccontext)+cc_callee_ ## reg,%reg
-#define SAVE_CALLEE				\
-	FOR_CALLEE_SAVE(__SAVE_CALLEE, ;)
-#define RESTORE_CALLEE				\
-	FOR_CALLEE_SAVE(__RESTORE_CALLEE, ;);	\
+#define SAVE_CALLEE                                     \
+	FOR_CALLEE_SAVE(__SAVE_CALLEE, SEP_SEMI)
+#define RESTORE_CALLEE                                  \
+	FOR_CALLEE_SAVE(__RESTORE_CALLEE, SEP_SEMI);	\
 	CLEAR_CALLER
 
 #define __SAVE_CALLER(n, reg) mov %reg,N(ccontext)+cc_caller_ ## reg
 #define __RESTORE_CALLER(n, reg) mov N(ccontext)+cc_caller_ ## reg,%reg
-#define SAVE_CALLER				\
-	SAVE_CALLEE;				\
-	FOR_CALLER_SAVE(__SAVE_CALLER, ;)
-#define RESTORE_CALLER				\
-	FOR_CALLEE_SAVE(__RESTORE_CALLEE, ;);	\
-	FOR_CALLER_SAVE(__RESTORE_CALLER, ;)
+#define SAVE_CALLER                                     \
+	SAVE_CALLEE;                                    \
+	FOR_CALLER_SAVE(__SAVE_CALLER, SEP_SEMI)
+#define RESTORE_CALLER                                  \
+	FOR_CALLEE_SAVE(__RESTORE_CALLEE, SEP_SEMI);	\
+	FOR_CALLER_SAVE(__RESTORE_CALLER, SEP_SEMI)
 
 #define CLEAR_CALLER				\
 	xor	%edx,%edx;			\
@@ -225,7 +228,7 @@ GLABEL(builtin_start):
 	je	E(early_error_loop);			\
 	cmpl	(N(mudlle_stack_limit)),%esp;		\
 	jb	E(early_error_recurse);			\
-	cmpw	N(minlevel),%cx;			\
+	cmpb	N(minlevel),%cl;			\
 	jb	E(early_error_security_violation)
 
 #define E(n) N(b ## n)
@@ -696,7 +699,6 @@ GFUNC(bvarargs)
 	lea	object_offset(,%eax,WORD_SIZE),%eax /* object size */
 	GCSTAT_ADD(type_vector, %eax)
 	call	alloc_bytes
-	mov	arg1,arg0
 
 	/* New object now in arg0 */
 	movl	$garbage_record | type_vector << 8,object_info(arg0)
@@ -718,7 +720,7 @@ GEND(bvarargs)
 
 /* Storage allocation operations */
 
-/* Allocate arg0 bytes and return in arg1. The caller's stack frame
+/* Allocate arg0 bytes and return in arg0. The caller's stack frame
    will be GC-protected. Preserves mudlle values in all the non-scratch
    registers. */
 LFUNC(alloc_bytes)
@@ -735,6 +737,7 @@ LFUNC(alloc_bytes)
 	mov	N(minorgen),arg0
 	mov	arg0,object_gen(arg1)
 #endif
+	mov     arg1,arg0
 	ret
 
 .Lalloc_bytes_gc:
@@ -759,30 +762,30 @@ LFUNC(alloc_bytes)
 	FUNC_NORETURN
 LEND(alloc_bytes)
 
-	/* Alloc variable cell, return in arg1 */
+	/* Alloc variable cell, return in arg0 */
 GFUNC(balloc_variable)
 	GCSTAT_ADD(type_variable, $variable_size)
 	movl	$variable_size,arg0
 	call	alloc_bytes
-	movl	$garbage_record | type_variable << 8,object_info(arg1)
+	movl	$garbage_record | type_variable << 8,object_info(arg0)
 	ret
 GEND(balloc_variable)
 
-	/* Size of closure is in arg0, return result in arg1 */
+	/* Size of closure is in arg0, return result in arg0 */
 GFUNC(balloc_closure)
 	GCSTAT_ADD(type_closure, arg0)
 	call	alloc_bytes
 	movl	$garbage_record | type_closure << 8 | OBJ_READONLY << 16, \
-		  object_info(arg1)
+		  object_info(arg0)
 	ret
 GEND(balloc_closure)
 
-	/* Allocate cons cell, return in arg1 */
+	/* Allocate cons cell, return in arg0 */
 LFUNC(alloc_cons)
 	GCSTAT_ADD(type_pair, $pair_size)
 	movl	$pair_size,arg0
 	call	alloc_bytes
-	movl	$garbage_record | type_pair << 8,object_info(arg1)
+	movl	$garbage_record | type_pair << 8,object_info(arg0)
 	ret
 LEND(alloc_cons)
 
@@ -792,12 +795,11 @@ GFUNC(bcons)
 
 	push	arg1
 	push	arg0
-	call	alloc_cons	/* cons cell in arg1 */
-	movl	(%esp),arg0
-	movl	arg0,pair_cdr_offset(arg1)
-	movl	WORD_SIZE(%esp),arg0
-	movl	arg0,pair_car_offset(arg1)
-	movl	arg1,arg0
+	call	alloc_cons	/* cons cell in arg0 */
+	movl	(%esp),arg1
+	movl	arg1,pair_cdr_offset(arg0)
+	movl	WORD_SIZE(%esp),arg1
+	movl	arg1,pair_car_offset(arg0)
 
 	FUNC_RETURN
 GEND(bcons)
@@ -806,43 +808,43 @@ GEND(bcons)
 GFUNC(bpcons)
 	FUNC_ENTER
 
-	push	closure
+	push	closure         /* save value */
+
 	push	arg1
 	push	arg0
-	call	alloc_cons	/* cons cell in arg1 */
+	call	alloc_cons	/* cons cell in arg0 */
 
 	movb	$OBJ_IMMUTABLE,closureb
 
-	movl	(%esp),arg0	/* load arg0: the cdr */
-	movl	arg0,pair_cdr_offset(arg1)
-	ISNULL(arg0)
+	movl	(%esp),arg1	/* load arg1: the cdr */
+	movl	arg1,pair_cdr_offset(arg0)
+	ISNULL(arg1)
 	je	0f
-	ISINT(arg0b)
+	ISINT(arg1b)
 	jne	0f
-	andb	object_flags(arg0),closureb
+	andb	object_flags(arg1),closureb
 
-0:	movl	WORD_SIZE(%esp),arg0	/* load arg1: the car */
-	movl	arg0,pair_car_offset(arg1)
-	ISNULL(arg0)
+0:	movl	WORD_SIZE(%esp),arg1	/* load arg0: the car */
+	movl	arg1,pair_car_offset(arg0)
+	ISNULL(arg1)
 	je	1f
-	ISINT(arg0b)
+	ISINT(arg1b)
 	jne	1f
-	andb	object_flags(arg0),closureb
+	andb	object_flags(arg1),closureb
 
 1:	orb	$OBJ_READONLY,closureb
-	movb	closureb,object_flags(arg1)
+	movb	closureb,object_flags(arg0)
 
-	movl	arg1,arg0
+	movl	-WORD_SIZE(%ebp),closure /* restore value */
 
-	movl	-WORD_SIZE(%ebp),closure
 	FUNC_RETURN
 GEND(bpcons)
 
-	/* Allocate vector of arg0 bytes, return in arg1 */
+	/* Allocate vector of arg0 bytes, return in arg0 */
 GFUNC(balloc_vector)
 	GCSTAT_ADD(type_vector, arg0)
 	call	alloc_bytes
-	movl	$garbage_record | type_vector << 8, object_info(arg1)
+	movl	$garbage_record | type_vector << 8, object_info(arg0)
 	ret
 GEND(balloc_vector)
 
@@ -882,7 +884,7 @@ GFUNC(bcall)
 	ISINT(closure_inb)
 	jne	bcall_error_bad_function
 
-	movw	$DEFAULT_SECLEVEL,N(internal_seclevel)
+	movb	$DEFAULT_SECLEVEL,N(internal_seclevel)
 
 	cmpb	$type_closure,object_type(closure_in)
 	je	call_closure
@@ -929,12 +931,13 @@ call_closure:
 
 call_secure:
 	mov	primitive_op(closure_in),%ecx
-	movw	primop_seclevel(%ecx),%di
-	cmpw	%di,N(internal_seclevel)
+	movzbl	primop_seclevel(%ecx),%edi
+	mov     %edi,%ecx
+	cmpb	%cl,N(internal_seclevel)
 	jb	bcall_error_security_violation
 	mov	N(maxseclevel),%ecx
 	INTVAL(%ecx)
-	cmpw	%di,%cx
+	cmp	%edi,%ecx
 	jb	bcall_error_security_violation
 	/* fallthrough */
 
@@ -966,17 +969,17 @@ GFUNC(bcall_primitive_tail)
 	FUNC_RETURN
 GEND(bcall_primitive_tail)
 
-	/* input: argcnt in %eax, seclev in %cx, secure in %edx */
+	/* input: argcnt in %eax, seclev in %ecx, secure in %edx */
 GFUNC(bcall_secure)
 	mov	primitive_op(closure_in),closure_in
 	/* Check the immediate caller's security level */
-	cmpw	primop_seclevel(closure_in),%cx
+	cmpb	primop_seclevel(closure_in),%cl
 	jb	E(error_security_violation)
-	movw	%cx,N(internal_seclevel)
+	movb	%cl,N(internal_seclevel)
 	/* Check the session's security level */
 	mov	N(maxseclevel),%ecx
 	INTVAL(%ecx)
-	cmpw	primop_seclevel(closure_in),%cx
+	cmpb	primop_seclevel(closure_in),%cl
 	jb	E(error_security_violation)
 	/* Check arg count */
 	cmpw	argcountw,primop_nargs(closure_in)
@@ -995,11 +998,11 @@ GFUNC(bcall_secure)
 GEND(bcall_secure)
 
 	/* call varargs primitive in %edx (closure) with %eax
-	   (argcount) arguments from the stack, at seclevel in %cx */
+	   (argcount) arguments from the stack, at seclevel in %ecx */
 GFUNC(bcall_varargs)
 	FUNC_ENTER
 
-	movw	%cx,N(internal_seclevel)
+	movb	%cl,N(internal_seclevel)
 
 	SAVE_CALLEE
 	END_PREVIOUS_FRAME_REG(%ecx)
@@ -1017,10 +1020,10 @@ GEND(bcall_varargs)
 
 GFUNC(bapply_varargs)
 	/* call varargs primitive in closure (%edx) with arguments in
-	   vector on stack at seclevel %cx */
+	   vector on stack at seclevel %ecx */
 	FUNC_ENTER
 
-	movw	%cx,N(internal_seclevel)
+	movb	%cl,N(internal_seclevel)
 	push	argn(0)
 	push	closure_in
 
@@ -1119,12 +1122,12 @@ GFUNC(invoke1plus)
 	jmp	0f
 GEND(invoke1plus)
 
-GFUNC(invoke)
+GFUNC(invokev)
 	START_INVOKE
 	mov	argn(1),%esi
 	PUSH_VECTORARGS
 	jmp	0f
-GEND(invoke)
+GEND(invokev)
 
 GFUNC(invoke0)
 	START_INVOKE

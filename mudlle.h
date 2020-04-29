@@ -13,6 +13,7 @@ typedef unsigned long mpz_t;
 typedef char mp_limb_t;
 #  define mpz_init_set_str(m, s, n) ((m) = 0)
 #  define mpz_cmp(b1, b2) 1
+#  define mpz_neg(b1, b2) ((void)0)
 #endif /* ! USE_GMP */
 
 #  include <assert.h>

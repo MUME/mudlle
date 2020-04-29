@@ -22,9 +22,9 @@
 #include "mudlle-config.h"
 
 #include <setjmp.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <sys/resource.h>
 #include <sys/time.h>
@@ -95,8 +95,8 @@ static bool safe_mcatch(void (*fn)(void *x), void *x,
 #ifdef USE_CCONTEXT
 #define __CALLER_GCCHECK(n, reg) GCCHECK(ccontext.caller.reg)
 #define __CALLEE_GCCHECK(n, reg) GCCHECK(ccontext.callee.reg)
-      FOR_CALLER_SAVE(__CALLER_GCCHECK, ;);
-      FOR_CALLEE_SAVE(__CALLEE_GCCHECK, ;);
+      FOR_CALLER_SAVE(__CALLER_GCCHECK, SEP_SEMI);
+      FOR_CALLEE_SAVE(__CALLEE_GCCHECK, SEP_SEMI);
 #undef __CALLEE_GCCHECK
 #undef __CALLER_GCCHECK
 #endif
@@ -200,7 +200,7 @@ bool is_mjmpbuf(value buf)
 struct session_context *session_context;
 
 ulong xcount;			/* Loop detection */
-uint16_t minlevel;			/* Minimum security level */
+seclev_t minlevel;		/* Minimum security level */
 
 ulong mudlle_stack_limit, hard_mudlle_stack_limit;
 

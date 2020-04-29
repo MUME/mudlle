@@ -129,6 +129,9 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 
   word_size = (INTBITS + 1) / 8;
 
+  | darwin? |
+  darwin? = string_equal?(uname()[un_sysname], "Darwin");
+
   describe_seclev = fn (int lev)
     if (function?(mc:describe_seclev))
       mc:describe_seclev(lev)
@@ -219,7 +222,9 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
 
           | fname |
           fname = func_name(f);
-          dformat(".align 16\n.globl %s\n%s:\n", fname, fname);
+	  // .align uses bytes on GNU, trailing zero bits on Darwin
+          dformat(".align %d\n.globl %s\n%s:\n",
+		  if (darwin?) 4 else 16, fname, fname);
 
           | code, nextra |
           code = f[pfn_code];
@@ -241,10 +246,22 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
                 [
                   if (i == cl)
                     [
-                      dformat("\n.size %s, . - %s\n", fname, fname);
+		      newline();
+		      if (!darwin?)
+			dformat(".size %s, . - %s\n", fname, fname);
                       if (nextra > 0)
                         [
-                          dformat("\n.align %d\n", word_size);
+			  | align |
+			  align = if (darwin?)
+			    match! (word_size)
+			      [
+				4 => 2;
+				8 => 3;
+			      ]
+			  else
+			    word_size;
+
+                          dformat("\n.align %d\n", align);
                           i = (i + word_size - 1) & -word_size;
                           if (i == e)
                             exit<at_e> null;
@@ -261,12 +278,11 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
               arg = caar(data);
               if (!pair?(arg))
                 arg = arg . ((INTBITS + 1) / 8);
-              match (arg)
+              match! (arg)
                 [
                   (s . 2) => [ dformat(".word %s\n", sname(s)); i += 2 ];
                   (s . 4) => [ dformat(".long %s\n", sname(s)); i += 4 ];
                   (s . 8) => [ dformat(".quad %s\n", sname(s)); i += 8 ];
-                  _ => fail();
                 ];
               data = cdr(data);
             ];
@@ -623,12 +639,11 @@ writes mc:this_filenames, mc:this_module, mc:erred, mc:linkrun
     [
       | info, arguments, args_from_list, flags, pfn_marker |
 
-      match (my:assq(top, prelinked_fns))
+      match! (my:assq(top, prelinked_fns))
         [
           ,false => null;           // fallthrough
           (_ . v) && vector?(v) => exit<function> v;
           (_ . ,false) => fail_message("recursion in prelink()");
-          _ => fail();
         ];
 
       // add marker to catch any recursion

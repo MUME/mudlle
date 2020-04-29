@@ -1455,8 +1455,6 @@ DEVELOPMENT AND DEBUGGING
   profile: fn -> x. Returns profiling information for function fn:
   (#calls #instructions) for mudlle functions, #calls for primitives
 
-  dump_memory:  -> . Dumps GC memory (for use by external profiler)
-
   debug: n -> . Set debug level (0 = no debug). This is most useful if
   you know how the mudlle internals work ...
 

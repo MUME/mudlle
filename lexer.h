@@ -25,22 +25,23 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-extern const char *lexer_filename;
-extern const char *lexer_nicename;
+#include "mparser.h"
+
+struct filename;
 
 struct reader_state {
-  const char *filename;
-  const char *nicename;
-  bool force_constant;
+  struct lexer_state *data;
 };
 
 int yylex(void);
 
-void read_from_strings(const char *const *strs, const char *afilename,
-                       const char *anicename, bool force_constant);
-void read_from_file(FILE *f, const char *afilename, const char *anicename);
+void read_from_strings(const char *const *strs, const struct filename *fname,
+                       bool force_const);
+void read_from_file(FILE *f, const struct filename *fname);
+
+/* always call {save,restore}_reader_state() around use of read_from_xxx() */
 void save_reader_state(struct reader_state *state);
-void restore_reader_state(const struct reader_state *state);
+void restore_reader_state(struct reader_state *state);
 
 bool allow_comma_expression(void);
 

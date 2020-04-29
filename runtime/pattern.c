@@ -163,7 +163,7 @@ static bool recurse(value lhs, value rhs, struct seen_values *seen)
         struct symbol *sympat = lhs, *symval = rhs;
         size_t symlen = string_len(sympat->name);
         return (symlen == string_len(symval->name)
-                && mem8icmp(sympat->name->str, symval->name->str, symlen) == 0
+                && mem7icmp(sympat->name->str, symval->name->str, symlen) == 0
                 && recurse(sympat->data, symval->data, seen));
       }
     case type_vector:
@@ -217,7 +217,7 @@ TYPEDOP(equalp, "equal?",
         "The graph of the container objects (pairs, vectors, symbols, and"
         " tables) in `x0 and `x1 must be homomorphic. This matters if the"
         " same container is referenced more than once.",
-        2, (value lhs, value rhs),
+        (value lhs, value rhs),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "xx.n")
 {

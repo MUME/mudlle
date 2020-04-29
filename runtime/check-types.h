@@ -23,10 +23,13 @@
                          in 'dst' (a long).
     CT_INT_P(arg, pred)  Check that var is an integer; check that
                          pred(intval(var), errmsg, arg) returns error_none.
+    CT_AUTO_RANGE(dst)   Check that var is an integer; check that intval(var)
+                         fits in 'dst'; store the result in 'dst'.
+                         Warning: don't use on 'dst' enums.
     CT_RANGE(dst, min, max)
                          Check that var is an integer; check that
                          min <= intval(var) <= max; store the result in
-                         'dist' (no type check).
+                         'dst' (no type check).
     CT_TYPED_RANGE(type, dst, min, max)
                          Check that var is an integer; check that
                          min <= intval(var) <= max; store the result in 'dst';
@@ -113,7 +116,12 @@
 #define __CE(v, t) IF_MTYPE(t)(, ___CE(__CT_E_ ## t(v)))
 #define __CARGS(...) FOR_PAIRS(ARGN1, SEP_COMMA, __VA_ARGS__)
 
+#if __clang_major__ >= 8 && ! defined __OPTIMIZE__
+/* clang 8 doesn't optimize this away */
+static inline void check_types_wrong_nargs(void) { abort(); }
+#else
 void check_types_wrong_nargs(void); /* used to signal an error below */
+#endif
 
 #define _CT_FAIL(s) _Static_assert(0, s)
 
@@ -153,8 +161,7 @@ void check_types_wrong_nargs(void); /* used to signal an error below */
         __CARGS(__VA_ARGS__));                          \
     if (false FOR_PAIRS(__CE, __NOTHING, __VA_ARGS__))  \
       {                                                 \
-        goto __ct_error_label;                          \
-      __ct_error_label:                                 \
+      __ct_error_label: UNUSED;                         \
         primitive_runtime_error_msg(                    \
           __ct_error, __ct_errmsg, op, count,           \
           __CARGS(__VA_ARGS__));                        \
@@ -167,8 +174,7 @@ void check_types_wrong_nargs(void); /* used to signal an error below */
   __CHECK_NARGS(op, 0);                         \
   if (false)                                    \
     {                                           \
-      goto __ct_error_label;                    \
-    __ct_error_label:                           \
+    __ct_error_label: UNUSED;                   \
       primitive_runtime_error_msg(              \
         __ct_error, __ct_errmsg, op, 0);        \
     }
@@ -186,8 +192,11 @@ void check_types_wrong_nargs(void); /* used to signal an error below */
 #define CHECK_TYPES_OP(op, ...)                                         \
   __CHECK_TYPES(op, VA_NPAIRS(__VA_ARGS__), __VA_ARGS__)
 
-/* use "default" for type to allow any type */
-#define __ASSERT_TYPE(x, t) _Generic((x), t: (void)0)
+/* just _Generic(..., enum e: 1) doesn't work on clang 8 */
+#define __ASSERT_TYPE(x, t) ((void)sizeof (struct {             \
+        _Static_assert(_Generic((x), t: 1, default: 0),         \
+                       "'" #x "' is not of type '" #t "'");     \
+  }))
 
 #define __CT_INT_P_E(var, msg, arg_pred)                \
   (ARGN2 arg_pred(intval(var), msg, ARGN1 arg_pred))
@@ -215,12 +224,13 @@ static inline enum runtime_error ct_range_e(long v, long min, long max,
 }
 
 #define ___CT_RANGE_E(v, msg, dst, type, min, max)                      \
-  (__ASSERT_TYPE(dst, type),                                            \
-   (__ct_error = ct_range_e(                                            \
+  (IF_EMPTY(type)(,__ASSERT_TYPE(dst, type),)                           \
+   __ct_error = ct_range_e(                                             \
      v,                                                                 \
      (min) < LONG_MIN ? LONG_MIN : (min),                               \
      (max) > LONG_MAX ? LONG_MAX : (max),                               \
-     msg)) == error_none && (dst = v),                                  \
+     msg),                                                              \
+   __ct_error == error_none ? (dst = v) : 0,                            \
    __ct_error)
 
 #define __CT_RANGE_E(v, msg, dst_type_min_max)                          \
@@ -229,7 +239,13 @@ static inline enum runtime_error ct_range_e(long v, long min, long max,
 
 #define CT_TYPED_RANGE(type, dst, min, max)             \
   CT_INT_P((dst, type, min, max), __CT_RANGE_E)
-#define CT_RANGE(dst, min, max) CT_TYPED_RANGE(default, dst, min, max)
+#define CT_RANGE(dst, min, max) CT_TYPED_RANGE(, dst, min, max)
+
+/* &dst catches if dst is a bitfield; add 0L to avoid warning on 64-bit gcc */
+#define CT_AUTO_RANGE(dst)                                      \
+  CT_TYPED_RANGE(, dst,                                         \
+                 ((void)&dst, 0L + MIN_VALUE(dst)),             \
+                 0L + MAX_VALUE(dst))
 
 #define __CT_FALSE_E(var, msg, arg)                             \
   (isfalse(var)                                                 \

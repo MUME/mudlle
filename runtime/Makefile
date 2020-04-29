@@ -38,7 +38,12 @@ CSTFILES := error.h module.h types.h			\
 	runtime/basic.h runtime/files.h runtime/io.h
 
 ifneq ($(USE_XML),)
-CPPFLAGS += -isystem /usr/include/libxml2
+XML_CFLAGS:=$(shell xml2-config --cflags || echo ' !!!FAIL!!! ')
+ifneq ($(filter !!!FAIL!!!, $(XML_CFLAGS)),)
+$(error Failed running xml2-config)
+endif
+XML_CFLAGS:=$(patsubst -I%,-isystem %,$(XML_CFLAGS))
+CPPFLAGS += $(XML_CFLAGS)
 CSTFILES += runtime/mudlle-xml.h
 endif
 

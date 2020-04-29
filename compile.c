@@ -21,8 +21,8 @@
 
 #include "mudlle-config.h"
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "alloc.h"
 #include "call.h"
@@ -49,8 +49,8 @@
 static ulong g_get_static, g_symbol_set, g_symbol_get;
 static ulong g_make_variable_ref, g_make_symbol_ref;
 
-static ulong builtin_functions[last_builtin];
-static const uint8_t builtin_ops[last_builtin] = {
+static ulong builtin_functions[parser_builtins];
+static const uint8_t builtin_ops[parser_builtins] = {
   [b_add]      = op_builtin_add,
   [b_bitand]   = op_builtin_bitand,
   [b_bitor]    = op_builtin_bitor,
@@ -216,11 +216,12 @@ value make_constant(const struct constant *c)
 {
   switch (c->vclass)
     {
+    case cst_null:   return NULL;
     case cst_string: return make_string(&c->u.string);
     case cst_list:   return make_list(c->u.constants);
     case cst_array:  return make_array(c->u.constants);
     case cst_int:    return makeint(c->u.integer);
-    case cst_float:  return alloc_mudlle_float(c->u.mudlle_float);
+    case cst_float:  return alloc_float(c->u.mudlle_float);
     case cst_bigint: return make_bigint(c->u.bigint);
     case cst_ctable: return make_table(c->u.constants, true);
     case cst_table:  return make_table(c->u.constants, false);
@@ -449,7 +450,7 @@ static void generate_block(struct block *b, bool leave_result,
 
   if (!env_block_push(b->locals, b->statics))
     {
-      log_error(&b->loc, "too many local variables in function");
+      compile_error(&b->loc, "too many local variables in function");
       return;
     }
 
@@ -477,14 +478,12 @@ static void generate_block(struct block *b, bool leave_result,
   for (struct vlist *vl = b->locals; vl; vl = vl->next)
     if (!vl->was_written)
       if (!vl->was_read)
-	warning_loc(b->filename, b->nicename, &vl->loc,
-                    "local variable %s is unused", vl->var);
+	compile_warning(&vl->loc, "local variable %s is unused", vl->var);
       else
-	warning_loc(b->filename, b->nicename, &vl->loc,
-                    "local variable %s is never written", vl->var);
+	compile_warning(&vl->loc, "local variable %s is never written",
+                        vl->var);
     else if (!vl->was_read)
-      warning_loc(b->filename, b->nicename, &vl->loc,
-                  "local variable %s is never read", vl->var);
+      compile_warning(&vl->loc, "local variable %s is never read", vl->var);
   env_block_pop();
 }
 
@@ -517,20 +516,21 @@ static void generate_execute(const struct loc *loc,
 }
 
 static void generate_builtin(struct component *comp,
-                             enum builtin_op op, struct clist *args,
                              bool leave_result, struct fncode *fn)
 {
-  switch (op)
+  struct clist *args = comp->u.builtin.args;
+
+  switch (comp->u.builtin.fn)
     {
     case b_if: {
       struct block *cb = new_codeblock(
         fnmemory(fn), NULL,
         new_clist(fnmemory(fn), args->next->c,
                   new_clist(fnmemory(fn), component_undefined, NULL)),
-        NULL, NULL, NO_LOC);
+        &args->next->c->loc);
       generate_if(
         args->c,
-        new_block_component(fnmemory(fn), &args->next->c->loc, cb),
+        new_block_component(fnmemory(fn), cb),
         component_undefined, leave_result, fn);
       return;
     }
@@ -571,7 +571,7 @@ static void generate_builtin(struct component *comp,
       {
         uint16_t count;
 
-        assert(comp->u.builtin.fn < last_builtin);
+        assert(comp->u.builtin.fn < parser_builtins);
         generate_args(args, fn, &count);
         set_lineno(comp->loc.line, fn);
         ins0(builtin_ops[comp->u.builtin.fn], fn);
@@ -581,7 +581,7 @@ static void generate_builtin(struct component *comp,
       {
         uint16_t count;
 
-        assert(comp->u.builtin.fn < last_builtin);
+        assert(comp->u.builtin.fn < parser_builtins);
         generate_args(args, fn, &count);
         mexecute(&comp->loc, builtin_functions[comp->u.builtin.fn],
                  NULL, count, fn);
@@ -714,9 +714,10 @@ static void generate_component(struct component *comp, bool leave_result,
       if (!exit_block(comp->u.labeled.name, fn))
         {
           if (!comp->u.labeled.name)
-            log_error(&comp->loc, "no loop to exit from");
+            compile_error(&comp->loc, "no loop to exit from");
           else
-            log_error(&comp->loc, "no block labeled %s", comp->u.labeled.name);
+            compile_error(&comp->loc, "no block labeled %s",
+                          comp->u.labeled.name);
         }
       break;
     case c_execute:
@@ -727,8 +728,7 @@ static void generate_component(struct component *comp, bool leave_result,
 	break;
       }
     case c_builtin:
-      generate_builtin(comp, comp->u.builtin.fn, comp->u.builtin.args,
-                       leave_result, fn);
+      generate_builtin(comp, leave_result, fn);
       return;
     default: abort();
     }
@@ -753,18 +753,14 @@ static struct obj *make_arguments(struct function *f)
   GCPRO(result);
   for (struct vlist *a = f->args; --i, a; a = a->next)
     {
-      struct list *e = make_readonly(alloc_list(
+      struct list *e = make_immutable(alloc_list(
         a->var[0] == '$' ? makebool(false) : alloc_string(a->var),
         makeint(a->typeset)));
-      if (!check_immutable(make_readonly(e)))
-        abort();
       result->data[i] = e;
     }
   UNGCPRO();
 
-  if (!check_immutable(make_readonly(result)))
-    abort();
-  return &result->o;
+  return make_immutable(result);
 }
 
 static void generate_typeset_check(unsigned typeset, unsigned arg,
@@ -798,19 +794,15 @@ static struct icode *generate_function(struct function *f, bool toplevel,
   struct string *help = NULL;
   if (f->help.len)
     help = make_string(&f->help);
-  struct string *varname = NULL, *filename = NULL, *nicename = NULL;
+  struct string *varname = NULL;
   struct obj *arguments = NULL;
-  GCPRO(help, varname, filename, nicename, arguments);
+  GCPRO(help, varname, arguments);
 
   /* Make variable name (if present) */
   if (f->varname)
     varname = scache_alloc_str(f->varname);
   else
     varname = NULL;
-
-  /* Make filename string */
-  filename = scache_alloc_str(f->filename);
-  nicename = scache_alloc_str(f->nicename);
 
   arguments = make_arguments(f);
 
@@ -870,7 +862,7 @@ static struct icode *generate_function(struct function *f, bool toplevel,
   peephole(newfn);
 
   struct icode *c = generate_fncode(
-    newfn, help, varname, filename, nicename, &f->loc, arguments,
+    newfn, help, varname, &f->loc, arguments,
     f->typeset, compile_level);
   struct variable_list *closure = env_pop(&c->nb_locals);
 
@@ -899,12 +891,6 @@ struct closure *compile_code(struct mfile *f, seclev_t seclev)
 {
   init_string_cache();
 
-  const char *filename = (f->body->filename
-                          ? f->body->filename
-                          : "");
-  const char *nicename = (f->body->nicename
-                          ? f->body->nicename
-                          : "");
   compile_level = seclev;
   erred = false;
   env_reset();
@@ -913,13 +899,13 @@ struct closure *compile_code(struct mfile *f, seclev_t seclev)
   struct block *body = new_toplevel_codeblock(
     fnmemory(top), f->statics, f->body);
   struct function *func = new_fn(
-    fnmemory(top), new_block_component(fnmemory(top), NO_LOC, body),
-    &body->loc, filename, nicename);
+    fnmemory(top), new_block_component(fnmemory(top), body),
+    &body->loc);
   func->varname = "top-level";
   struct icode *cc = generate_function(func, true, top);
 
   GCPRO(cc);
-  generate_fncode(top, NULL, NULL, NULL, NULL, &f->loc, &empty_vector->o,
+  generate_fncode(top, NULL, NULL, &f->loc, &empty_vector->o,
                   TYPESET_ANY, seclev);
   uint16_t dummy;
   env_pop(&dummy);
@@ -943,7 +929,7 @@ static void docall0(void *_ci)
   *ci->result = call0(ci->f);
 }
 
-bool interpret(value *result, seclev_t seclev, int reload)
+bool interpret(value *result, seclev_t seclev, bool reload)
 {
   ASSERT_NOALLOC_START();
   struct alloc_block *parser_block = new_block();
@@ -992,8 +978,8 @@ bool interpret(value *result, seclev_t seclev, int reload)
   return ok;
 }
 
-bool load_file(const char *fullname, const char *filename,
-               const char *nicename, seclev_t seclev, bool reload)
+bool load_file(const char *fullname, const struct filename *fname,
+               seclev_t seclev, bool reload)
 {
   FILE *f = fopen(fullname, "r");
   if (f == NULL)
@@ -1001,7 +987,7 @@ bool load_file(const char *fullname, const char *filename,
 
   struct reader_state rstate;
   save_reader_state(&rstate);
-  read_from_file(f, filename, nicename);
+  read_from_file(f, fname);
   value result;
   bool ok = interpret(&result, seclev, reload);
   fclose(f);
@@ -1025,10 +1011,7 @@ void compile_init(void)
     compile_block, NO_LOC, new_int_constant(compile_block, false));
 
   constant_null = allocate(compile_block, sizeof *constant_null);
-  *constant_null = (struct constant){
-    .vclass = cst_list,
-    .u.constants = NULL
-  };
+  *constant_null = (struct constant){ .vclass = cst_null };
 
   builtin_functions[b_bitnot]      = global_lookup("~");
   builtin_functions[b_bitxor]      = global_lookup("^");

@@ -37,6 +37,7 @@
 #include "error.h"
 #include "lexer.h"
 #include "print.h"
+#include "tree.h"
 #include "types.h"
 
 #include "runtime/runtime.h"
@@ -46,7 +47,11 @@ static void execute(const char *line, bool show_result)
   const char *const lines[] = { line, NULL };
   struct reader_state rstate;
   save_reader_state(&rstate);
-  read_from_strings(lines, NULL, NULL, false);
+  static const struct filename fname = {
+    .path = "<string>",
+    .nice = "<string>"
+  };
+  read_from_strings(lines, &fname, false);
 
   value result;
   if (interpret(&result, 1, true) && show_result)

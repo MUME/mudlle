@@ -25,8 +25,8 @@
 #include "call.h"
 #include "global.h"
 #include "module.h"
-#include "table.h"
 #include "mvalues.h"
+#include "table.h"
 
 /* Module states automaton:
 
@@ -147,7 +147,7 @@ static enum module_status module_load(const char *name)
     {
       struct string *mname = alloc_string(name);
 
-      mcatch_call1("call-load-library", GVAR(load_library), mname);
+      mcatch_call("call-load-library", GVAR(load_library), mname);
     }
   return module_status(name);
 }

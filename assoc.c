@@ -1,10 +1,11 @@
 #include "mudlle-config.h"
 
-#include <assert.h>
+#  include <assert.h>
 #include <stdlib.h>
 
 #include "assoc.h"
 #include "charset.h"
+#include "hash.h"
 #include "table.h"
 
 struct assoc_array_node {
@@ -21,7 +22,7 @@ static struct assoc_array_node *assoc_array_lookup_node(
   if (assoc->used == 0) return NULL;
 
   unsigned hash = assoc->type->hash(key);
-  unsigned bucket = hash & (assoc->size - 1);
+  unsigned bucket = fold_hash(hash, assoc->size_bits);
   for (struct assoc_array_node *node = assoc->nodes[bucket];
        node;
        node = node->next)
@@ -30,33 +31,47 @@ static struct assoc_array_node *assoc_array_lookup_node(
   return NULL;
 }
 
+static inline int bits_size(int bits)
+{
+  if (bits <= 0)                /* bits = 0 is special-case */
+    return 0;
+  return P(bits);
+}
+
 void *assoc_array_lookup(const struct assoc_array *assoc, const void *key)
 {
   struct assoc_array_node *node = assoc_array_lookup_node(assoc, key);
   return node ? node->data : NULL;
 }
 
-static void rehash_assoc_array(struct assoc_array *assoc, int size)
+void **assoc_array_lookup_ref(const struct assoc_array *assoc, const void *key)
 {
-  assert(size && (size & (size - 1)) == 0);
+  struct assoc_array_node *node = assoc_array_lookup_node(assoc, key);
+  return node ? &node->data : NULL;
+}
 
+static void rehash_assoc_array(struct assoc_array *assoc, int size_bits)
+{
+  int size = bits_size(size_bits);
+  assert(size > 0);
   struct assoc_array_node **nodes = calloc(size, sizeof *nodes);
 
-  for (int i = 0; i < assoc->size; ++i)
+  int old_size = bits_size(assoc->size_bits);
+  for (int i = 0; i < old_size; ++i)
     for (struct assoc_array_node *node = assoc->nodes[i], *next;
          node;
          node = next)
       {
         next = node->next;
         unsigned hash = node->hash;
-        unsigned bucket = hash & (size - 1);
+        unsigned bucket = fold_hash(hash, size_bits);
         node->next = nodes[bucket];
         nodes[bucket] = node;
       }
 
   free(assoc->nodes);
   assoc->nodes = nodes;
-  assoc->size = size;
+  assoc->size_bits = size_bits;
 }
 
 /* must know that "key" isn't in the table */
@@ -64,7 +79,7 @@ static void assoc_array_add(struct assoc_array *assoc,
                             const void *key, void *data)
 {
   unsigned hash = assoc->type->hash(key);
-  unsigned bucket = hash & (assoc->size - 1);
+  unsigned bucket = fold_hash(hash, assoc->size_bits);
 
   struct assoc_array_node *node = malloc(sizeof *node);
   *node = (struct assoc_array_node){
@@ -90,8 +105,8 @@ void assoc_array_set(struct assoc_array *assoc,
       return;
     }
 
-  if (assoc->used * 3 >= assoc->size * 2)
-    rehash_assoc_array(assoc, assoc->size ? assoc->size * 2 : 16);
+  if (assoc->used * 3 >= bits_size(assoc->size_bits) * 2)
+    rehash_assoc_array(assoc, assoc->size_bits ? assoc->size_bits + 1 : 4);
 
   assoc_array_add(assoc, key, data);
 }
@@ -102,7 +117,7 @@ int assoc_array_remove(struct assoc_array *assoc, const void *key)
   if (assoc->used == 0) return false;
 
   unsigned hash = assoc->type->hash(key);
-  unsigned bucket = hash & (assoc->size - 1);
+  unsigned bucket = fold_hash(hash, assoc->size_bits);
 
   for (struct assoc_array_node **nodep = &assoc->nodes[bucket];
        *nodep;
@@ -128,7 +143,8 @@ bool assoc_array_exists(struct assoc_array *assoc,
 			bool (*f)(const void *key, void *data, void *idata),
 			void *idata)
 {
-  for (int i = 0; i < assoc->size; ++i)
+  int size = bits_size(assoc->size_bits);
+  for (int i = 0; i < size; ++i)
     for (struct assoc_array_node *node = assoc->nodes[i], *next;
          node;
          node = next)
@@ -144,7 +160,8 @@ bool assoc_array_exists(struct assoc_array *assoc,
 
 void assoc_array_free(struct assoc_array *assoc)
 {
-  for (int i = 0; i < assoc->size; ++i)
+  int size = bits_size(assoc->size_bits);
+  for (int i = 0; i < size; ++i)
     for (struct assoc_array_node *node = assoc->nodes[i], *next;
          node;
          node = next)
@@ -157,7 +174,7 @@ void assoc_array_free(struct assoc_array *assoc)
         free(node);
       }
   free(assoc->nodes);
-  assoc->used = assoc->size = 0;
+  assoc->used = assoc->size_bits = 0;
   assoc->nodes = NULL;
 }
 
@@ -170,10 +187,54 @@ static unsigned assoc_array_hash_string(const void *k)
 {
   const char *s = k;
   size_t len = strlen(s);
-  return case_symbol_hash_len(s, len, MAX_TAGGED_INT + 1);
+  return symbol_nhash(s, len, TAGGED_INT_BITS - 1);
 }
 
 const struct assoc_array_type const_charp_to_voidp_assoc_array_type = {
   .cmp       = assoc_array_cmp_string,
   .hash      = assoc_array_hash_string
+};
+
+static void assoc_array_freep(void *p)
+{
+  free(p);
+}
+
+static int assoc_array_cmp_long(const void *_a, const void *_b)
+{
+  long a = (long)_a, b = (long)_b;
+  return a < b ? -1 : a > b;
+}
+
+static unsigned assoc_array_hash_long(const void *_k)
+{
+  long l = (long)_k;
+  return symbol_nhash((const char *)&l, sizeof l,
+                      CHAR_BIT * sizeof (unsigned));
+}
+
+const struct assoc_array_type long_to_mallocp_assoc_array_type = {
+  .cmp       = assoc_array_cmp_long,
+  .hash      = assoc_array_hash_long,
+  .free_data = assoc_array_freep
+};
+
+const struct assoc_array_type long_to_voidp_assoc_array_type = {
+  .cmp       = assoc_array_cmp_long,
+  .hash      = assoc_array_hash_long,
+};
+
+static unsigned assoc_array_hash_istring(const void *k)
+{
+  return string_7hash(k);
+}
+
+static int assoc_array_cmp_istring(const void *a, const void *b)
+{
+  return str7icmp(a, b);
+}
+
+const struct assoc_array_type const_icharp_to_voidp_assoc_array_type = {
+  .cmp       = assoc_array_cmp_istring,
+  .hash      = assoc_array_hash_istring
 };

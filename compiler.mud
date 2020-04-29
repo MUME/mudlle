@@ -22,17 +22,9 @@
 library compiler
 requires vars, misc, sequences
 
-defines mc:c_class, mc:c_loc,
+defines
 
-  mc:c_asymbol, mc:c_avalue,
-
-  mc:c_rsymbol,
-
-  mc:c_cvalue,
-
-  mc:c_freturn_typeset, mc:c_freturn_itype, mc:c_fhelp, mc:c_fargs,
-  mc:c_fvarargs, mc:c_fvalue,
-  mc:c_ffilename, mc:c_fnicename, mc:c_fvar,
+  mc:c_freturn_itype, mc:c_fvar,
   mc:c_flocals, mc:c_flocals_write, mc:c_fclosure, mc:c_fclosure_write,
   mc:c_fglobals, mc:c_fglobals_write, mc:c_fnoescape, mc:c_fnumber, mc:c_fmisc,
   mc:c_fnvars, mc:c_fallvars,
@@ -40,23 +32,7 @@ defines mc:c_class, mc:c_loc,
   mc:c_fm_argsbase, mc:c_fm_closurebase, mc:c_fm_globalsbase,
   mc:c_fm_regs_callee,
 
-  mc:c_efnargs,
-
-  mc:c_bfn, mc:c_bargs,
-
-  mc:c_klocals, mc:c_ksequence,
-
-  mc:c_lname, mc:c_lexpression,
-
-  mc:c_ename, mc:c_eexpression,
-
-  mc:b_sc_or, mc:b_sc_and, mc:b_eq, mc:b_ne, mc:b_lt, mc:b_le, mc:b_gt,
-  mc:b_ge, mc:b_bitor, mc:b_bitxor, mc:b_bitand, mc:b_shift_left,
-  mc:b_shift_right, mc:b_add, mc:b_subtract, mc:b_multiply, mc:b_divide,
-  mc:b_remainder, mc:b_negate, mc:b_not, mc:b_bitnot, mc:b_ifelse, mc:b_if,
-  mc:b_while, mc:b_loop, mc:b_ref, mc:b_set, mc:b_cons, mc:b_assign, mc:b_car,
-  mc:b_cdr, mc:parser_builtins,
-
+  mc:b_assign, mc:b_car, mc:b_cdr,
   mc:b_slength, mc:b_vlength, mc:b_iadd, mc:b_typeof, mc:b_loop_count,
   mc:b_max_loop_count, mc:b_symbol_name, mc:b_symbol_get, mc:b_vector,
   mc:b_sequence, mc:b_pcons, mc:b_symbol_ref,
@@ -98,131 +74,106 @@ writes mc:erred
 
 
   // Component structure:
-  //   It is a vector whose first element is one of mc:c_assign, c_recall, etc
+  //   It is a vector whose first element is one of mc:c_assign, c_recall, etc.
+  //   See FOR_COMPONENT_CLASSES in tree.h
   //   The remaining elements depend on the value of the first, as follows:
 
-  mc:c_class = 0;		// class of component
-  mc:c_loc = 1;                 // location (line . column) of component
+  // mc:c_class			// class of component
+  // mc:c_loc			// location (line . column) of component
 
   // mc:c_assign - assignment statement
-   mc:c_asymbol = 2;		// var name (string, after phase1: var)
-   mc:c_avalue = 3;		// value (component)
+  //  mc:c_asymbol		// var name (string, after phase1: var)
+  //  mc:c_avalue		// value (component)
 
   // mc:c_recall - value of a variable
-  // mc:c_vref   - (container of) a variable
-   mc:c_rsymbol = 2;		// var name (string, after phase1: var)
+  // mc:c_vref	 - (container of) a variable
+  //  mc:c_rsymbol		// var name (string, after phase1: var)
 
   // mc:c_constant - a constant
-   mc:c_cvalue = 2;		// value of constant (any type)
+  //  mc:c_cvalue		// value of constant (any type)
 
   // mc:c_closure - a function
-   mc:c_freturn_typeset = 2;	// return value typeset
-   mc:c_fhelp = 3;		// help string (string or null)
-   mc:c_fargs = 4;		// argument names (list of [string, type, loc]
-                                //     after phase1: list of var)
-   mc:c_fvarargs = 5;		// true if this is a varargs function
-   mc:c_fvalue = 6;		// function value (component)
-   mc:c_ffilename = 7;		// filename on disk (string)
-   mc:c_fnicename = 8;          // pretty-printed filename (string)
+  //  mc:c_freturn_typeset	// return value typeset
+  //  mc:c_fhelp		// help string (string or null)
+  //  mc:c_fargs		// argument names (list of [string, type, loc]
+  //				//     after phase1: list of var)
+  //  mc:c_fvarargs		// true if this is a varargs function
+  //  mc:c_fvalue		// function value (component)
+  //  mc:c_ffilename		// filename on disk (string)
+  //  mc:c_fnicename		// pretty-printed filename (string)
 
    // Added by phase1
-   mc:c_freturn_itype = 9;	// return value itypes
-   mc:c_fvar = 11;		// variable in which function is stored
-   mc:c_flocals = 12;		// local variables (list of var)
-   mc:c_flocals_write = 13;	// local variables (list of var) (those
-                                // written)
-   mc:c_fclosure = 14;		// closure variables (list of var)
-   mc:c_fclosure_write = 15;	// closure variables (list of var) (those
-                                // written)
-   mc:c_fglobals = 16;		// the global variables used (list of var)
-   mc:c_fglobals_write = 17;	// the global variables written (list of var)
+   | ccf |
+   ccf = mc:c_closure_fields;
+   mc:c_freturn_itype  = ccf + 0; // return value itypes
+   mc:c_fvar           = ccf + 1; // variable in which function is stored
+   mc:c_flocals        = ccf + 2; // local variables (list of var)
+   mc:c_flocals_write  = ccf + 3; // local variables (list of var) (those
+                                  // written)
+   mc:c_fclosure       = ccf + 4; // closure variables (list of var)
+   mc:c_fclosure_write = ccf + 5; // closure variables (list of var) (those
+                                  // written)
+   mc:c_fglobals       = ccf + 6; // the global variables used (list of var)
+   mc:c_fglobals_write = ccf + 7; // the global variables written (list of var)
 
-   mc:c_fnoescape = 10;         // true if no calls from here escapes (does not
-                                // call op_noescape); may still write closure
-                                // variables in mc:c_fclosure_write
+   mc:c_fnoescape      = ccf + 8; // true if no calls from here escapes (does
+                                  // not call op_noescape); may still write
+                                  // closure variables in mc:c_fclosure_write
 
    // Set by phase2:
-   mc:c_fnumber = 0;		// a unique number for this closure (int,
-                                // display)
+   mc:c_fnumber = 0;		// a unique number for this closure (int)
 
    // Set by phase 4:
-   mc:c_fmisc = 18;		// miscellaneous info
+   mc:c_fmisc = ccf + 9;	// miscellaneous info
     mc:c_fm_argsbase = 0;	// true if function needs arguments base
     mc:c_fm_closurebase = 1;	// true if function needs closure base
     mc:c_fm_globalsbase = 2;	// true if function needs globals base
-    mc:c_fm_regs_callee = 3;    // callee registers used by the backend
-   mc:c_fnvars = 19;		// number of vars (global, closure, local) used
-                                // (int, phase3)
-   mc:c_fallvars = 20;		// all vars (global, closure, local) used
-                                // (vector, phase3)
+    mc:c_fm_regs_callee = 3;	// callee registers used by the backend
+   mc:c_fnvars = ccf + 10;	// number of vars (global, closure, local)
+				// used (int, phase3)
+   mc:c_fallvars = ccf + 11;	// all vars (global, closure, local) used
+				// (vector, phase3)
 
   // mc:c_execute - execute a function
-   mc:c_efnargs = 2;		// list of function, followed by arguments
-                                // (list of component)
+  //  mc:c_efnargs		// list of function, followed by arguments
+  //				// (list of component)
 
   // mc:c_builtin - execute a primitive
-   mc:c_bfn = 2;		// number of primitive (integer, see below)
-   mc:c_bargs = 3;		// arguments (list of component)
+  //  mc:c_bfn			// number of primitive (integer, see below)
+  //  mc:c_bargs		// arguments (list of component)
 
   // mc:c_block - a block
-   mc:c_klocals = 2;		// local variables (list of string)
-   mc:c_ksequence = 3;		// code (list of component)
+  //  mc:c_klocals		// local variables (list of string)
+  //  mc:c_ksequence		// code (list of component)
 
   // mc:c_labeled - labeled expression
-   mc:c_lname = 2;		// label name (string)
-   mc:c_lexpression = 3;	// expression value (component)
+  //  mc:c_lname		// label name (string)
+  //  mc:c_lexpression		// expression value (component)
 
   // mc:c_exit
-   mc:c_ename = 2;		// label name (string or null)
-   mc:c_eexpression = 3;	// exit expression (component)
+  //  mc:c_ename		// label name (string or null)
+  //  mc:c_eexpression		// exit expression (component)
 
   // language primitives, some are functions, others are control structures
-  mc:b_sc_or = 0;
-  mc:b_sc_and = 1;
-  mc:b_eq = 2;                  // the following 6 ops are inverted by ^= 1
-  mc:b_ne = 3;
-  mc:b_lt = 4;
-  mc:b_ge = 5;
-  mc:b_le = 6;
-  mc:b_gt = 7;
-  mc:b_bitor = 8;
-  mc:b_bitxor = 9;
-  mc:b_bitand = 10;
-  mc:b_shift_left = 11;
-  mc:b_shift_right = 12;
-  mc:b_add = 13;
-  mc:b_subtract = 14;
-  mc:b_multiply = 15;
-  mc:b_divide = 16;
-  mc:b_remainder = 17;
-  mc:b_negate = 18;
-  mc:b_not = 19;
-  mc:b_bitnot = 20;
-  mc:b_ifelse = 21;
-  mc:b_if = 22;
-  mc:b_while = 23;
-  mc:b_loop = 24;
-  mc:b_ref = 25;
-  mc:b_set = 26;
-  mc:b_cons = 27;
-  mc:parser_builtins = 28;
+
   // Compiler generated ops
-  mc:b_assign = 28;
-  mc:b_car = 29;
-  mc:b_cdr = 30;
-  mc:b_slength = 31;
-  mc:b_vlength = 32;
-  mc:b_iadd = 33; // integer addition
-  mc:b_typeof = 34;
-  mc:b_loop_count = 35;
+  assert(mc:parser_builtins == 28);
+  mc:b_assign         = 28;
+  mc:b_car            = 29;
+  mc:b_cdr            = 30;
+  mc:b_slength        = 31;
+  mc:b_vlength        = 32;
+  mc:b_iadd           = 33;     // integer addition
+  mc:b_typeof         = 34;
+  mc:b_loop_count     = 35;
   mc:b_max_loop_count = 36;
-  mc:b_symbol_name = 37;
-  mc:b_symbol_get = 38;
-  mc:b_vector = 39;
-  mc:b_sequence = 40;
-  mc:b_pcons = 41;
-  mc:b_symbol_ref = 42;
-  mc:builtins = 43;
+  mc:b_symbol_name    = 37;
+  mc:b_symbol_get     = 38;
+  mc:b_vector         = 39;
+  mc:b_sequence       = 40;
+  mc:b_pcons          = 41;
+  mc:b_symbol_ref     = 42;
+  mc:builtins         = 43;
 
   mc:builtin_names =
     '[ 0 0 "==" "!=" "<" ">=" "<=" ">"

@@ -34,7 +34,7 @@
 #include "types.h"
 
 /* increase this as compiled mudlle suffers a backwards-incompatible change */
-#define MCODE_VERSION 7
+#define MCODE_VERSION 9
 
 /* Objects are either null, integers or pointers to more complex things (like
    variables). Null is represented by NULL. Integers have the lowest bit set.
@@ -59,6 +59,7 @@ static inline bool is_any_primitive(value p)
    ? is_const_typeset(v, typeset)               \
    : is_generic_typeset(v, typeset))
 
+__attribute__((always_inline))
 static inline bool is_const_typeset(value v, unsigned typeset)
 {
   if (typeset == TYPESET_ANY)
@@ -79,7 +80,7 @@ static inline bool is_const_typeset(value v, unsigned typeset)
       return true;
     case TYPESET_PRIMITIVE:
       return is_any_primitive(obj);
-#define __ISTYPE(arg, t)                        \
+#define __ISTYPE(t, arg)                        \
       case P(type_ ## t):                       \
         return obj->type == type_ ## t;
       FOR_PLAIN_TYPES(__ISTYPE,)
@@ -122,6 +123,7 @@ enum {
 };
 
 #define TAGGED_INT_BITS (CHAR_BIT * sizeof (long) - 1)
+#define MAX_TAGGED_UINT (ULONG_MAX >> 1)
 #define MAX_TAGGED_INT  (LONG_MAX >> 1)
 #define MIN_TAGGED_INT  (-MAX_TAGGED_INT - 1)
 
@@ -165,25 +167,21 @@ static inline value make_readonly(value v)
   return v;
 }
 
-#define STATIC_STRING(name, value)                      \
-  static ulong static_data_ ## name;                    \
-  static const struct {                                 \
-    struct static_obj s;                                \
-    char str[sizeof value];                             \
-  } name = {                                            \
-    .s = {                                              \
-      .static_data = &static_data_ ## name,             \
-      .o = {                                            \
-        .size = sizeof (struct string) + sizeof value,  \
-        .garbage_type = garbage_static_string,          \
-        .type = type_string,                            \
-        .flags = OBJ_IMMUTABLE | OBJ_READONLY           \
-      }                                                 \
-    },                                                  \
-    .str = value                                        \
+#define STATIC_STRING(name, value)                              \
+  static const struct {                                         \
+    struct obj o;                                               \
+    char str[sizeof value];                                     \
+  } name = {                                                    \
+    .o = {                                                      \
+      .size         = sizeof (struct obj) + sizeof value,       \
+      .garbage_type = garbage_static_string,                    \
+      .type         = type_string,                              \
+      .flags        = OBJ_IMMUTABLE | OBJ_READONLY              \
+    },                                                          \
+    .str = value                                                \
   }
 
-#define GET_STATIC_STRING(name) ((struct string *)&(name).s.o)
+#define GET_STATIC_STRING(name) ((struct string *)&(name).o)
 
 /* How each class of object is structured */
 
@@ -217,6 +215,9 @@ struct code
   seclev_t seclevel;
   unsigned return_typeset : 24;
   unsigned column : 8;
+#ifdef PROFILE_CALL_COUNT
+  uint32_t call_count;
+#endif
 };
 CASSERT(P(24) > TYPESET_ANY);
 
@@ -230,22 +231,28 @@ struct icode
 {
   struct code code;
   uint32_t instruction_count;
-  uint32_t call_count;		/* Profiling */
   uint16_t nb_constants;
   uint16_t nb_locals;
   uint16_t stkdepth;
   uint16_t dummy0;
-  ulong dummy1[2];
+  ulong dummy1;
 
   /* Machine code jump to interpreter. This is at the same offset as
      mcode in struct mcode */
 #ifdef __i386__
-  uint8_t magic_dispatch[8];
+  uint32_t dummy2[2];
+  struct magic_dispatch {
+    uint8_t movl_ecx;
+    void (*invoke)(void);
+    uint8_t jmp_ecx[2];
+    uint8_t nop1[1];
+  } __attribute__((__packed__)) magic_dispatch;
 #elif defined __x86_64__
   struct magic_dispatch {
     uint8_t movq_r11[2];
     void (*invoke)(void);
     uint8_t jmpq_r11[3];
+    uint8_t nop3[3];
   } __attribute__((__packed__)) magic_dispatch;
 #else
   #error Unsupported architecture
@@ -272,9 +279,11 @@ struct mcode /* machine-language code object */
 
   bool dwarf_seen : 1;
   unsigned : 7;
+
 #ifdef __x86_64__
-  uint32_t dummy[3];
+  uint32_t dummy;
 #endif
+
   uint8_t magic[8];             /* Magic pattern that doesn't occur in code */
 
   uint8_t mcode[/*code_length*/]; /* Aligned on CODE_ALIGNMENT */

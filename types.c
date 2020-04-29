@@ -191,6 +191,7 @@ void record_allocation(enum mudlle_type type, long size)
       case call_compiled:
       case call_primop:
       case call_invalid:
+      case call_invalid_argp:
       case call_session:
         break;
       case call_string:
@@ -299,14 +300,12 @@ struct variable *alloc_variable(value val)
   return newp;
 }
 
-struct mudlle_float *alloc_mudlle_float(double d)
+struct mudlle_float *alloc_float(double d)
 {
-  struct mudlle_float *newp;
-
-  newp = (struct mudlle_float *)allocate_string(type_float, sizeof d);
+  struct mudlle_float *newp = (struct mudlle_float *)allocate_string(
+    type_float, sizeof d);
   newp->d = d;
   newp->o.flags |= OBJ_READONLY | OBJ_IMMUTABLE;
-
   return newp;
 }
 
@@ -324,10 +323,10 @@ struct bigint *alloc_bigint(mpz_t mpz)
   struct bigint *newp;
 
 #ifdef USE_GMP
-  newp = (struct bigint *)
-    allocate_string(type_bigint,
-		    sizeof(mpz_t) +
-		    sizeof(mp_limb_t) * mpz[0]._mp_alloc);
+  newp = (struct bigint *)allocate_string(
+    type_bigint,
+    sizeof(mpz_t) +
+    sizeof(mp_limb_t) * mpz[0]._mp_alloc);
   newp->mpz[0]._mp_alloc = mpz[0]._mp_alloc;
   newp->mpz[0]._mp_size = mpz[0]._mp_size;
   newp->mpz[0]._mp_d = (mp_limb_t *)0xdeadbeef;
@@ -472,7 +471,7 @@ bool mudlle_strtolong(const char *sp, size_t len, long *l, int base,
 
   /* only allow the sign bit to be set if no + or - and base != 10 */
   long lim = (!sign && base != 10
-              ? (MAX_TAGGED_INT << 1) + 1
+              ? MAX_TAGGED_UINT
               : ((sign == -1 || allow_one_overflow)
                  ? -MIN_TAGGED_INT
                  : MAX_TAGGED_INT));

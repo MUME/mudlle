@@ -66,6 +66,9 @@ writes mc:this_function
     else
       false;
 
+  | compute_add |
+  compute_add = fn (x, y) if (integer?(x) && integer?(y)) true . x + y else false;
+
   compute_ops = sequence
     (false,                     // sc_or
      false,                     // sc_and
@@ -80,7 +83,7 @@ writes mc:this_function
      fn (x, y) if (integer?(x) && integer?(y)) true . x & y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x << y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x >> y else false,
-     fn (x, y) if (integer?(x) && integer?(y)) true . x + y else false,
+     compute_add,
      fn (x, y) if (integer?(x) && integer?(y)) true . x - y else false,
      fn (x, y) if (integer?(x) && integer?(y)) true . x * y else false,
      fn (x, y) [
@@ -121,7 +124,7 @@ writes mc:this_function
      fn (x) if (pair?(x)) true . cdr(x) else false,
      fn (x) if (string?(x)) true . string_length(x) else false,
      fn (x) if (vector?(x)) true . vector_length(x) else false,
-     fn (x, y) if (integer?(x) && integer?(y)) true . x + y else false,
+     compute_add,
      fn (x) true . typeof(x),
      fn () false,               // loop_count
      fn () false,               // max_loop_count
@@ -257,31 +260,22 @@ writes mc:this_function
 	[
 	  ins[mc:i_bop] = mc:branch_always;
 	  // remove fall through edge
-	  graph_edges_out_apply(fn (e) [
-            if (graph_edge_get(e))
-              [
-                | toil |
-                toil = dget(graph_node_get(graph_edge_to(e))[mc:f_ilist]);
-                assert(toins == null);
-                toins = toil[mc:il_ins];
-                graph_remove_edge(e)
-              ]
-          ], il[mc:il_node]);
+          | edge, toil |
+          edge = graph_edges_out_exists?(graph_edge_get, il[mc:il_node]);
+          toil = dget(graph_node_get(graph_edge_to(edge))[mc:f_ilist]);
+          toins = toil[mc:il_ins];
+          graph_remove_edge(edge)
 	]
       else
 	[
-          | toil, tonode |
+          | toil |
 	  ins[mc:i_bop] = mc:branch_never;
           toil = ins[mc:i_bdest][mc:l_ilist];
-	  tonode = toil[mc:il_node];
           toins = toil[mc:il_ins];
 	  // remove label's edge
-	  graph_edges_out_apply(
-            fn (e) if (!graph_edge_get(e)) [
-              assert(graph_edge_to(e) == tonode);
-              graph_remove_edge(e)
-            ],
-            il[mc:il_node]);
+	  graph_remove_edge(
+            graph_edges_out_exists?(fn (e) !graph_edge_get(e),
+                                    il[mc:il_node]));
 	];
       ins[mc:i_bargs] = null;
       change = true;
@@ -1149,10 +1143,7 @@ writes mc:this_function
       else
 	[
 	  // find fall through block
-	  graph_edges_out_apply(fn (e) if (graph_edge_get(e))
-				nblock = graph_edge_to(e),
-				block);
-	  assert(nblock != null);
+	  nblock = graph_edge_to(graph_edges_out_exists?(graph_edge_get, block));
 
 	  // if block was entry block, change
 	  if (car(f[mc:c_fvalue]) == block)

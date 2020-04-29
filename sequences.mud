@@ -30,8 +30,8 @@ defines
   lreverse!, dreverse!, sreverse!, vreverse!,
   lappend, dappend, sappend, vappend,
   lappend!, dappend!,
-  lmap, dmap, smap, smapi, vmap, vmapi, table_map,
-  lmap!, dmap!, smap!, smapi!, vmap!, vmapi!, table_map!,
+  lmap, lmapi, dmap, smap, smapi, vmap, vmapi, table_map,
+  lmap!, lmapi!, dmap!, smap!, smapi!, vmap!, vmapi!, table_map!,
   lforeach, dforeach, sforeach, vforeach,
   lforeachi, vforeachi, sforeachi,
   lexists?, dexists?, sexists?, vexists?,
@@ -49,8 +49,8 @@ defines
 // copy, reverse, reverse!, append, append!, map, map!, foreach
 // exists?, forall?, reduce, delete, delete!, filter, filter!, find?
 
-// Each operation starts with one of 4 letters (l, d, v, s) to indicate the type
-// of sequence on which it operates.
+// Each operation starts with one of 4 letters (l, d, v, s) to indicate the
+// type of sequence on which it operates.
 
 // Predicates terminate in ?
 // Operations that mutate the structure end in !
@@ -319,6 +319,29 @@ lmap = fn "`f `l1 -> `l2. Applies `f to every element of `l1 (from 1st to last) 
       first
     ];
 
+
+lmapi = fn "`f `l1 -> `l2. Applies `f(`x, `n) to every element `x of `l1 at (zero-based) index `n (from 1st to last) and returns a new list with the results." (function f, list l)
+  if (l == null) null
+  else
+    [
+      | first, last, n |
+
+      last = first = f(0, car(l)) . null;
+      l = cdr(l);
+      n = 1;
+      while (l != null)
+	[
+	  | new |
+
+	  new = f(n, car(l)) . null;
+	  set_cdr!(last, new);
+	  last = new;
+          ++n;
+	  l = cdr(l);
+	];
+      first
+    ];
+
 dmap = fn "`f `d1 -> `d2. Returns result of applying `f to the elements of `d1, in order" (function f, {null,vector} d)
   if (d == null) null
   else
@@ -373,6 +396,20 @@ lmap! = fn "`f `l -> `l. Applies `f to every element of `l (from 1st to last) an
     while (l != null)
       [
 	set_car!(l, f(car(l)));
+	l = cdr(l)
+      ];
+    s
+  ];
+
+lmapi! = fn "`f `l -> `l. Applies `f(`n, `x) to every element `x at index `n (zero-based) and returns the modified list with the results." (function f, list l)
+  [
+    | s, n |
+    n = 0;
+    s = l;
+    while (l != null)
+      [
+	set_car!(l, f(n, car(l)));
+        ++n;
 	l = cdr(l)
       ];
     s

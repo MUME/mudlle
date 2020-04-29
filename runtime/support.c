@@ -29,7 +29,6 @@
 #include "prims.h"
 #include "support.h"
 
-#include "../alloc.h"
 #include "../builtins.h"
 #include "../calloc.h"
 #include "../context.h"
@@ -41,10 +40,10 @@
 #include "../tree.h"
 #include "../utils.h"
 
-TYPEDOP(mudlle_parse, 0, "`s0 `s1 -> `v. Parses mudlle expression `s0 and"
+TYPEDOP(mudlle_parse, , "`s0 `s1 -> `v. Parses mudlle expression `s0 and"
         " returns a parse tree, or false if unsuccessful.\n`s1 is the"
         " filename; can be null for \"<string>\".",
-        2, (struct string *code, struct string *name),
+        (struct string *code, struct string *name),
         OP_LEAF | OP_NOESCAPE,
         "s[su].[vz]")
 {
@@ -56,8 +55,11 @@ TYPEDOP(mudlle_parse, 0, "`s0 `s1 -> `v. Parses mudlle expression `s0 and"
   struct reader_state rstate;
   save_reader_state(&rstate);
   struct alloc_block *memory = new_block();
-  const char *cname = name ? heap_allocate_string(memory, name->str) : NULL;
-  read_from_strings(lines, cname, cname, false);
+  const char *cname = (name
+                       ? heap_allocate_string(memory, name->str)
+                       : "<string>");
+  struct filename fname = { .path = cname, .nice = cname };
+  read_from_strings(lines, &fname, false);
   struct mfile *f;
   ASSERT_NOALLOC();
   bool ok = parse(memory, &f);
@@ -72,13 +74,13 @@ TYPEDOP(mudlle_parse, 0, "`s0 `s1 -> `v. Parses mudlle expression `s0 and"
   return parsed;
 }
 
-UNSAFETOP(mudlle_parse_file, 0,
-          "`s1 `s2 `s3 -> `v. Parse the file `s1, recording `s2 as its"
-          " file name and `s3 as its nice name,"
-          " and return its parse tree `v, or false if unsuccessful",
-          3, (struct string *filename, struct string *name,
-              struct string *nicename),
-          OP_LEAF | OP_NOESCAPE, "sss.[vz]")
+UNSAFEOP(mudlle_parse_file, ,
+         "`s1 `s2 `s3 -> `v. Parse the file `s1, recording `s2 as its"
+         " file name and `s3 as its nice name,"
+         " and return its parse tree `v, or false if unsuccessful",
+         (struct string *filename, struct string *name,
+          struct string *nicename),
+         OP_LEAF | OP_NOESCAPE, "sss.[vz]")
 {
   ASSERT_NOALLOC_START();
 
@@ -102,8 +104,11 @@ UNSAFETOP(mudlle_parse_file, 0,
   struct reader_state rstate;
   save_reader_state(&rstate);
   struct alloc_block *memory = new_block();
-  read_from_file(f, heap_allocate_string(memory, name->str),
-                 heap_allocate_string(memory, nicename->str));
+  struct filename fname = {
+    .path = heap_allocate_string(memory, name->str),
+    .nice = heap_allocate_string(memory, nicename->str)
+  };
+  read_from_file(f, &fname);
 
   struct mfile *mf;
   ASSERT_NOALLOC();
@@ -217,14 +222,17 @@ static inline value assert_immutable(value v)
 
 #endif /* ! NOCOMPILER */
 
-UNSAFETOP(register_mcode_module, 0,
-          "`l -> . Register mcode objects in `l as a code module.",
-          1, (struct list *l),
-          OP_LEAF | OP_NOESCAPE | OP_NOALLOC,
-          "l.")
+UNSAFEOP(register_mcode_module, ,
+         "`l -> . Register mcode objects in `l as a code module.",
+         (struct list *l),
+         OP_LEAF | OP_NOESCAPE | OP_NOALLOC,
+         "l.")
 {
   CHECK_TYPES(l, CT_TYPES(null, pair));
 
+#ifdef NOCOMPILER
+  RUNTIME_ERROR(error_abort, "not supported");
+#else
   struct ary mcodes = ARY_NULL;
   for (; l; l = l->cdr)
     {
@@ -237,25 +245,26 @@ UNSAFETOP(register_mcode_module, 0,
   register_dwarf_mcodes(0, &mcodes);
   ary_free(&mcodes);
   undefined();
+#endif
 }
 
-TYPEDOP(dwarf_line_number_info, 0,
+TYPEDOP(dwarf_line_number_info, ,
         "`v -> `s. Returns DWARF line number information for locations"
         " in `v, a vector of (`address . `line). The addresses must be sorted,"
         " lowest first.",
-        1, (struct vector *v), OP_LEAF | OP_NOESCAPE, "v.s")
+        (struct vector *v), OP_LEAF | OP_NOESCAPE, "v.s")
 {
   CHECK_TYPES(v, vector);
 
-  const long nstates = vector_len(v);
+  long nstates = vector_len(v);
   uint32_t last = 0;
-  for (long l = 0; l < nstates; ++l)
+  for (long l = 0; l < vector_len(v); ++l)
     {
       struct list *loc = v->data[l];
       TYPEIS(loc, pair);
-      long adr  = GETRANGE(loc->car, last, UINT32_MAX);
+      long adr = GETRANGE(loc->car, last, UINT32_MAX);
       last = adr;
-      GETRANGE(loc->car, 0, INT32_MAX);
+      GETRANGE(loc->cdr, 1, INT32_MAX);
     }
 
   struct lni_state *states = nstates ? malloc(sizeof *states * nstates) : NULL;
@@ -273,7 +282,7 @@ TYPEDOP(dwarf_line_number_info, 0,
   return lni;
 }
 
-VARTOP(link, 0,
+VAROP(link, ,
        "`s1 `n1 `s2 `s3 `s4 `p `l1 `l2 `l3 `l4 `l5 `l6"
        " `n2 `n3 `s5 `s6 `n4 `s7 -> `code. Builds a code object from:\n"
        "its machine code `s1,\n"
@@ -320,7 +329,7 @@ VARTOP(link, 0,
     lv_number_of_fields
   };
 
-  assert(strlen(THIS_OP->type[0]) == lv_number_of_fields + 2);
+  assert(strlen(THIS_OP->types[0]) == lv_number_of_fields + 2);
 
 
   if (nargs != lv_number_of_fields) runtime_error(error_wrong_parameters);
@@ -536,13 +545,9 @@ VARTOP(link, 0,
   static const char *const nops[] =
     {
       "",
-      "\x90",
-      "\x66\x90",
-      "\x0f\x1f\x00",
-      "\x0f\x1f\x40\x00",
-      "\x0f\x1f\x44\x00\x00",
-      "\x66\x0f\x1f\x44\x00\x00",
-      "\x0f\x1f\x80\x00\x00\x00\x00",
+#define _NOP(n, arg) NOP ## n
+      FORN(7, _NOP, SEP_COMMA, )
+#undef _NOP
     };
   assert(mfields.code_pad <= VLENGTH(nops));
 
@@ -569,7 +574,7 @@ VARTOP(link, 0,
         {
         case sl_c:
           {
-            uint16_t l = seclev;
+            uint32_t l = seclev;
             memcpy(newp->mcode + ofs, &l, sizeof l);
             break;
           }
@@ -699,24 +704,24 @@ VARTOP(link, 0,
 #endif /* !NOCOMPILER */
 }
 
-UNSAFETOP(make_closure, 0, "`mcode -> `f. Makes a function with no closure"
-          " vars from given `mcode object",
-	  1, (struct mcode *mcode),
-          OP_LEAF | OP_NOESCAPE, "o.f")
+UNSAFEOP(make_closure, , "`mcode -> `f. Makes a function with no closure"
+         " vars from given `mcode object",
+         (struct mcode *mcode),
+         OP_LEAF | OP_NOESCAPE, "o.f")
 {
   CHECK_TYPES(mcode, mcode);
   return alloc_closure0(&mcode->code);
 }
 
 TYPEDOP(closurep, "closure?", "`x -> `b. True if `x is a closure.",
-	1, (value x),
+	(value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, closure));
 }
 
 TYPEDOP(securep, "secure?", "`x -> `b. True if `x is a secure primitive.",
-	1, (value x),
+	(value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, secure));
@@ -724,7 +729,7 @@ TYPEDOP(securep, "secure?", "`x -> `b. True if `x is a secure primitive.",
 
 TYPEDOP(primitivep, "primitive?", "`x -> `b. True if `x is a primitive."
         " See also `any_primitive?().",
-	1, (value x),
+	(value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, primitive));
@@ -732,7 +737,7 @@ TYPEDOP(primitivep, "primitive?", "`x -> `b. True if `x is a primitive."
 
 TYPEDOP(varargsp, "varargs?",
         "`x -> `b. True if `x is a variable argument primitive.",
-	1, (value x),
+	(value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, varargs));
@@ -740,31 +745,31 @@ TYPEDOP(varargsp, "varargs?",
 
 TYPEDOP(any_primitivep, "any_primitive?", "`x -> `b. True if `x is either"
         " primitive, secure, or varargs.",
-	1, (value x),
+	(value x),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(is_any_primitive(x));
 }
 
-TYPEDOP(primitive_nargs, 0,
+TYPEDOP(primitive_nargs, ,
         "`primitive -> `n. Returns # of arguments of primitive"
         " or secop; -1 for varargs",
-	1, (struct primitive *p),
+	(struct primitive *p),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
   CHECK_TYPES(p, CT_TYPESET(TYPESET_PRIMITIVE));
   return makeint(p->op->nargs);
 }
 
-TYPEDOP(primitive_flags, 0, "`primitive -> `n. Returns flags of primitive.",
-	1, (struct primitive *p),
+TYPEDOP(primitive_flags, , "`primitive -> `n. Returns flags of primitive.",
+	(struct primitive *p),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
   CHECK_TYPES(p, CT_TYPESET(TYPESET_PRIMITIVE));
   return makeint(p->op->flags);
 }
 
-static void recurse_typing(char *start, size_t size,
+static void recurse_prim_types(char *start, size_t size,
                            const char *from, char *to, struct list **l)
 {
   for (;;)
@@ -776,7 +781,7 @@ static void recurse_typing(char *start, size_t size,
           for (++from; from < end; ++from)
             {
               *to = *from;
-              recurse_typing(start, size, end + 1, to + 1, l);
+              recurse_prim_types(start, size, end + 1, to + 1, l);
             }
           return;
         }
@@ -793,53 +798,53 @@ static void recurse_typing(char *start, size_t size,
     }
 }
 
-TYPEDOP(primitive_type, 0, "`primitive -> `l. Returns a list of type"
+TYPEDOP(primitive_type, , "`primitive -> `l. Returns a list of type"
         " signatures for `primitive.\n"
         "`null means no type information is available.",
-	1, (struct primitive *p),
+	(struct primitive *p),
 	OP_LEAF | OP_NOESCAPE, "f.l")
 {
   CHECK_TYPES(p, CT_TYPESET(TYPESET_PRIMITIVE));
 
-  const char *const *atyping = p->op->type;
-  if (atyping == NULL)
+  const char *const *types = p->op->types;
+  if (types == NULL)
     return NULL;
 
   struct list *l = NULL;
   GCPRO(l);
-  for (; *atyping; ++atyping)
+  for (; *types; ++types)
     {
-      size_t size = strlen(*atyping) + 1;
+      size_t size = strlen(*types) + 1;
       char t[size];
-      recurse_typing(t, size, *atyping, t, &l);
+      recurse_prim_types(t, size, *types, t, &l);
     }
   UNGCPRO();
   return l;
 }
 
-TYPEDOP(closure_arguments, 0, "`c -> `v. Returns a"
+TYPEDOP(closure_arguments, , "`c -> `v. Returns a"
         " vector(`name|false . `typeset) for `c's arguments.\n"
         "`name is a string; `typeset is a bitfield of 1 << `type_xxx.\n"
         "Returns just `name for vararg closures.",
-        1, (struct closure *c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE,
+        (struct closure *c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE,
         "f.[vs]")
 {
   CHECK_TYPES(c, closure);
   return c->code->arguments.obj;
 }
 
-TYPEDOP(closure_return_typeset, 0, "`c -> `n. Returns possible return types of"
+TYPEDOP(closure_return_typeset, , "`c -> `n. Returns possible return types of"
         " closure `c, a bitfield of 1 << `type_xxx.",
-        1, (struct closure *c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
+        (struct closure *c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
   CHECK_TYPES(c, closure);
   return makeint(c->code->return_typeset);
 }
 
-TYPEDOP(closure_return_itype, 0, "`c -> `n. Returns possible return itypes of"
+TYPEDOP(closure_return_itype, , "`c -> `n. Returns possible return itypes of"
         " closure `c, a bitfield of `itype_xxx. Returns -1 for interpreted"
         " code.",
-        1, (struct closure *c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
+        (struct closure *c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "f.n")
 {
   CHECK_TYPES(c, closure);
   if (c->code->o.type != type_mcode)
@@ -851,9 +856,9 @@ TYPEDOP(closure_return_itype, 0, "`c -> `n. Returns possible return itypes of"
 #endif
 }
 
-TYPEDOP(closure_flags, 0, "`c -> `n. Returns closure flags for `c (closure,"
+TYPEDOP(closure_flags, , "`c -> `n. Returns closure flags for `c (closure,"
         " code, or mcode), a bitset of `clf_xxx flags.",
-        1, (value c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "[fo].n")
+        (value c), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "[fo].n")
 {
   CHECK_TYPES(c, CT_TYPES(closure, code, mcode));
 
@@ -869,24 +874,24 @@ TYPEDOP(closure_flags, 0, "`c -> `n. Returns closure flags for `c (closure,"
   abort();
 }
 
-UNSAFETOP(closure_code, 0,
-          "`f -> `c. Returns the code or mcode object of closure `f.",
-          1, (struct closure *fn), OP_LEAF | OP_NOESCAPE, "f.o")
+UNSAFEOP(closure_code, ,
+         "`f -> `c. Returns the code or mcode object of closure `f.",
+         (struct closure *fn), OP_LEAF | OP_NOESCAPE, "f.o")
 {
   CHECK_TYPES(fn, closure);
   return fn->code;
 }
 
-UNSAFETOP(global_table, 0, "-> `t. Returns global symbol table",
-          0, (void),
-          OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
+UNSAFEOP(global_table, , "-> `t. Returns global symbol table",
+         (void),
+         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
 {
   return global;
 }
 
-TYPEDOP(global_name, 0, "`n -> `s. Returns the name of global `n"
+TYPEDOP(global_name, , "`n -> `s. Returns the name of global `n"
         " for 0 <= `n < `global_names()",
-        1, (value midx),
+        (value midx),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.s")
 {
   long idx;
@@ -894,9 +899,9 @@ TYPEDOP(global_name, 0, "`n -> `s. Returns the name of global `n"
   return GNAME(idx);
 }
 
-SECTOP(global_lookup, 0, "`s -> `n. Returns index of global variable `s."
+SECOP(global_lookup, , "`s -> `n. Returns index of global variable `s."
        " Creates it if it doesn't exist already.",
-       1, (struct string *name), SECLEVEL_GLOBALS,
+       (struct string *name), SECLEVEL_GLOBALS,
        OP_LEAF | OP_NOESCAPE, "s.n")
 {
   CHECK_TYPES(name, string);
@@ -906,29 +911,29 @@ SECTOP(global_lookup, 0, "`s -> `n. Returns index of global variable `s."
   return makeint(mglobal_lookup(name));
 }
 
-SECTOP(global_value, 0, "`n -> `x. Returns value of global variable `n"
-       " for 0 <= `n < `global_names()",
-       1, (value midx), SECLEVEL_GLOBALS,
-       OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.x")
+SECOP(global_value, , "`n -> `x. Returns value of global variable `n"
+      " for 0 <= `n < `global_names()",
+      (value midx), SECLEVEL_GLOBALS,
+      OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.x")
 {
   long idx;
   CHECK_TYPES(midx, CT_RANGE(idx, 0, intval(environment->used) - 1));
   return GVAR(idx);
 }
 
-TYPEDOP(global_names, 0,
+TYPEDOP(global_names, ,
         "-> `n. Returns the number of globals used. See also `global_name()"
         " and `global_value()",
-	0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
+	(void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")
 {
   return environment->used;
 }
 
-UNSAFETOP(global_set, "global_set!",
-          "`n `x -> `x. Sets global variable `n to `x."
-          " Fails if global `n is readonly.",
-          2, (value midx, value x),
-          OP_LEAF | OP_NOALLOC, "nx.2")
+UNSAFEOP(global_set, "global_set!",
+         "`n `x -> `x. Sets global variable `n to `x."
+         " Fails if global `n is readonly.",
+         (value midx, value x),
+         OP_LEAF | OP_NOALLOC, "nx.2")
 {
   long idx;
   CHECK_TYPES(midx, CT_RANGE(idx, 0, intval(environment->used) - 1),
@@ -940,14 +945,14 @@ UNSAFETOP(global_set, "global_set!",
 }
 
 NOT_DEFINED(global_read);
-TYPEDOP(global_read, 0, "", 1, (value midx), OP_OPERATOR, "n.x")
+TYPEDOP(global_read, , "", (value midx), OP_OPERATOR, "n.x")
 {
   /* only used to print error messages */
   undefined();
 }
 
 NOT_DEFINED(global_write);
-TYPEDOP(global_write, 0, "", 2, (value midx, value x), OP_OPERATOR, "nx.2")
+TYPEDOP(global_write, , "", (value midx, value x), OP_OPERATOR, "nx.2")
 {
   /* only used to print error messages */
   undefined();
@@ -964,77 +969,67 @@ void global_runtime_error(enum runtime_error error, bool is_write,
                           is_write ? 2 : 1, makeint(goffset), val);
 }
 
-TYPEDOP(module_status, 0, "`s -> `n. Returns status of module (library) `s,"
+TYPEDOP(module_status, , "`s -> `n. Returns status of module (library) `s,"
         " one of:\n"
         "  `module_unloaded   \thas not been loaded\n"
         "  `module_error      \tfailed to load\n"
         "  `module_loading    \tis currently loading\n"
         "  `module_loaded     \tloaded correctly\n"
         "  `module_protected  \tsystem module that cannot be unloaded",
-	1, (struct string *name),
+	(struct string *name),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
   CHECK_TYPES(name, string);
   return makeint(module_status(name->str));
 }
 
-TYPEDOP(module_seclevel, 0, "`s -> `n. Returns seclevel of module `s",
-	1, (struct string *name),
+TYPEDOP(module_seclevel, , "`s -> `n. Returns seclevel of module `s",
+	(struct string *name),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "s.n")
 {
   CHECK_TYPES(name, string);
   return makeint(module_seclevel(name->str));
 }
 
-UNSAFETOP(module_set, "module_set!",
-          "`s `n1 `n2 -> . Sets status of module `s to `n1, seclevel `n2",
-          3, (struct string *name, value status, value seclev),
-          OP_LEAF | OP_NOESCAPE, "snn.")
+UNSAFEOP(module_set, "module_set!",
+         "`s `n1 `n2 -> . Sets status of module `s to `n1, seclevel `n2",
+         (struct string *name, value status, value seclev),
+         OP_LEAF | OP_NOESCAPE, "snn.")
 {
   CHECK_TYPES(name,   string,
               status, integer,
               seclev, integer);
-
-  char *tname;
-  ALLOCA_STRING(tname, name, MAX_MODULE_NAME_LENGHT);
-  if (tname == NULL)
-    runtime_error(error_bad_value);
-
+  LOCAL_C_STR(tname, name, MAX_MODULE_NAME_LENGHT);
   module_set(tname, intval(status), intval(seclev));
-
   undefined();
 }
 
-UNSAFETOP(module_unload, 0, "`s -> `b. Unload module `s, false if protected",
-          1, (struct string *name),
-          OP_LEAF | OP_NOALLOC, "s.n")
+UNSAFEOP(module_unload, , "`s -> `b. Unload module `s, false if protected",
+         (struct string *name),
+         OP_LEAF | OP_NOALLOC, "s.n")
 {
   CHECK_TYPES(name, string);
   return makebool(module_unload(name->str));
 }
 
-TYPEDOP(module_require, 0,
+TYPEDOP(module_require, ,
         "`s -> `n. Load module s if needed, return its new status",
-	1, (struct string *name),
+	(struct string *name),
 	0, "s.n")
 {
   CHECK_TYPES(name, string);
-  char *tname;
-  ALLOCA_STRING(tname, name, MAX_MODULE_NAME_LENGHT);
-  if (tname == NULL)
-    runtime_error(error_bad_value);
-
+  LOCAL_C_STR(tname, name, MAX_MODULE_NAME_LENGHT);
   return makeint(module_require(tname));
 }
 
-TYPEDOP(module_vstatus, 0,
+TYPEDOP(module_vstatus, ,
         "`n0 -> `s/`n1. Return status of global variable `n0; either the"
         " name of the defining library, or one of:\n"
         "  `var_normal          \tnormal variable\n"
         "  `var_write           \twritten by mudlle\n"
         "  `var_system_write    \tanyone can read, but mudlle cannot write\n"
         "  `var_system_mutable  \tanyone may read or write",
-	1, (value goffset),
+	(value goffset),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "n.[sn]")
 {
   long idx;
@@ -1051,12 +1046,12 @@ TYPEDOP(module_vstatus, 0,
   return makeint(status);
 }
 
-UNSAFETOP(module_vset, "module_vset!",
-          "`n0 `s/`n1 -> b. Sets status of global variable `n0 to either the"
-          " name `s of the owning module, `var_normal, or `var_write."
-          " Returns true if successful.",
-          2, (value goffset, value status),
-          OP_LEAF | OP_NOALLOC, "n[ns].n")
+UNSAFEOP(module_vset, "module_vset!",
+         "`n0 `s/`n1 -> b. Sets status of global variable `n0 to either the"
+         " name `s of the owning module, `var_normal, or `var_write."
+         " Returns true if successful.",
+         (value goffset, value status),
+         OP_LEAF | OP_NOALLOC, "n[ns].n")
 {
   long idx;
   CHECK_TYPES(goffset, CT_RANGE(idx, 0, intval(environment->used) - 1),
@@ -1072,11 +1067,11 @@ UNSAFETOP(module_vset, "module_vset!",
   return makebool(module_vset(idx, intval(status), mod));
 }
 
-UNSAFETOP(module_table, 0, "-> `t. Returns the table of module status for"
-          " each named mudlle library. Each entry is a vector(`status,"
-          " `seclev) where `status is as returned by `module_status().",
-          0, (void),
-          OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
+UNSAFEOP(module_table, , "-> `t. Returns the table of module status for"
+         " each named mudlle library. Each entry is a vector(`status,"
+         " `seclev) where `status is as returned by `module_status().",
+         (void),
+         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".t")
 {
   return module_data;
 }
@@ -1123,11 +1118,20 @@ void support_init(void)
   DEFINE(module_vstatus);
   DEFINE(module_vset);
 
-#define __CDEF(name) system_define("mc:c_" #name, makeint(c_ ## name));
-  FOR_COMPONENT_CLASSES(__CDEF)
+#define ___CDEF(name) system_define("mc:c_" #name, makeint(c_ ## name))
+#define __CDEF(name, args)                                              \
+  ___CDEF(name);                                                        \
+  FOR_ARGS(___CDEF, SEP_SEMI, EXPAND_ARGS args, name ## _fields)
+
+  FOR_COMPONENT_CLASSES(__CDEF, SEP_SEMI);
+
+  ___CDEF(class);
+  ___CDEF(loc);
 #undef __CDEF
-#define __MDEF(name) system_define("mc:m_" #name, makeint(m_ ## name));
-  FOR_PARSER_MODULE_FIELDS(__MDEF)
+#undef ___CDEF
+
+#define __MDEF(name) system_define("mc:m_" #name, makeint(m_ ## name))
+  FOR_PARSER_MODULE_FIELDS(__MDEF, SEP_SEMI);
 #undef __MDEF
   system_define("mc:m_plain",   makeint(f_plain));
   system_define("mc:m_module",  makeint(f_module));
@@ -1147,8 +1151,19 @@ void support_init(void)
   system_define("mc:arch", makeint(ARCH));
   system_define("mc:mcode_version", makeint(MCODE_VERSION));
 
+#define DEF_BUILTIN(b) system_define("mc:" #b, makeint(b))
+  FOR_BUILTINS(DEF_BUILTIN, SEP_SEMI);
+#undef DEF_BUILTIN
+  system_define("mc:parser_builtins", makeint(parser_builtins));
+
   system_define(PREFIX "mcode_code_offset",
                 makeint(offsetof(struct mcode, mcode)));
+
+  value ccofs = NULL;
+#ifdef PROFILE_CALL_COUNT
+  ccofs = makeint(offsetof(struct code, call_count));
+#endif
+  system_define(PREFIX "code_call_count_offset", ccofs);
 
   system_define(PREFIX "object_offset", makeint(sizeof (struct obj)));
   system_define(PREFIX "object_size",   makeint(offsetof(struct obj, size)));

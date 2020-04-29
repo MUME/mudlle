@@ -30,27 +30,29 @@ defines x64:l_ins, x64:l_alias, x64:l_number, x64:il_label, x64:il_ins,
   x64:lglobal_constant, x64:lglobal_index, x64:gl_c, x64:gl_mudlle,
   x64:lprimitive, x64:lspecial, x64:lindirect,
   x64:lseclev, x64:sl_c, x64:sl_mudlle, x64:sl_maxlev,
-  x64:nregs, x64:reg_rax, x64:reg_rbx,
-  x64:reg_rcx, x64:reg_rdx, x64:reg_rsp, x64:reg_rbp, x64:reg_rsi, x64:reg_rdi,
-  x64:reg_r8, x64:reg_r9, x64:reg_r10, x64:reg_r11, x64:reg_r12, x64:reg_r13,
-  x64:reg_r14, x64:reg_r15,
+  x64:nregs, x64:reg_rax, x64:reg_rbx, x64:reg_rcx, x64:reg_rdx, x64:reg_rsp,
+  x64:reg_rbp, x64:reg_rsi, x64:reg_rdi, x64:reg_r8, x64:reg_r9, x64:reg_r10,
+  x64:reg_r11, x64:reg_r12, x64:reg_r13, x64:reg_r14, x64:reg_r15, x64:reg_rip,
   x64:bne, x64:be, x64:bg, x64:ble, x64:bge,
   x64:bl, x64:ba, x64:bbe, x64:bae, x64:bb, x64:bno, x64:bo, x64:bns, x64:bs,
   x64:bnp, x64:bp, x64:balways, x64:op_push, x64:op_pop, x64:op_call,
   x64:op_ret, x64:op_jmp, x64:op_jcc, x64:op_lea, x64:op_lea32, x64:op_mov,
-  x64:op_add, x64:op_sub, x64:op_cmp, x64:op_cmpbyte, x64:op_or, x64:op_xor,
-  x64:op_and, x64:op_test, x64:op_dec, x64:op_neg, x64:op_not,
-  x64:op_shl, x64:op_shr,
-  x64:op_setcc, x64:op_movzxbyte, x64:op_imul, x64:op_movbyte,
+  x64:op_add, x64:op_add32, x64:op_sub, x64:op_cmp, x64:op_cmpbyte, x64:op_or,
+  x64:op_xor, x64:op_and, x64:op_test, x64:op_dec, x64:op_neg, x64:op_not,
+  x64:op_shl, x64:op_shr, x64:op_imul,
+  x64:op_setcc, x64:op_cmovcc, x64:op_movzxbyte, x64:op_movbyte,
+  x64:op_movzxword, x64:op_movzx32,
   x64:op_orbyte, x64:op_xchg,
   x64:ops, x64:new_code,
   x64:set_instruction, x64:get_instructions, x64:rem_instruction,
   x64:copy_instruction, x64:mudlleint, x64:doubleint, x64:push, x64:pop,
-  x64:call, x64:ret, x64:jmp, x64:jcc, x64:lea, x64:lea32, x64:mov, x64:add, x64:sub,
-  x64:cmp, x64:cmpbyte, x64:or, x64:xor, x64:and, x64:test,
+  x64:call, x64:ret, x64:jmp, x64:jcc, x64:lea, x64:lea32, x64:mov,
+  x64:add, x64:add32, x64:sub, x64:cmp, x64:cmpbyte, x64:or, x64:xor,
+  x64:and, x64:test,
   x64:dec, x64:neg, x64:not,
-  x64:shl, x64:shr, x64:setcc, x64:movzxbyte, x64:imul, x64:movbyte,
-  x64:orbyte, x64:xchg,
+  x64:shl, x64:shr, x64:setcc, x64:cmovcc,
+  x64:movzxbyte, x64:movbyte, x64:movzxword, x64:movzx32,
+  x64:orbyte, x64:imul, x64:xchg,
   x64:new_label,
   x64:label, x64:set_label, x64:skip_label_alias, x64:ins_list, x64:print_ins,
   x64:resolve, x64:resolve64, x64:trap,
@@ -148,6 +150,8 @@ x64:reg_r13 = 13;
 x64:reg_r14 = 14;
 x64:reg_r15 = 15;
 
+x64:reg_rip = 16;               // treated differently from the other regs
+
 // branches, using x64 encoding
 x64:bne = 5;                    // ZF = 1
 x64:be = 4;                     // ZF = 0
@@ -188,6 +192,7 @@ x64:op_lea32 = 31;
 x64:op_mov = 7;
 
 x64:op_add = 8;
+x64:op_add32 = 32;
 x64:op_sub = 9;
 x64:op_cmp = 10;
 x64:op_cmpbyte = 11;
@@ -206,12 +211,15 @@ x64:op_shl = 25;
 x64:op_shr = 26;
 x64:op_sar = 23;
 x64:op_setcc = 27;
+x64:op_cmovcc = 33;
 x64:op_movzxbyte = 28;
 x64:op_movbyte = 22;
+x64:op_movzxword = 34;
+x64:op_movzx32 = 35;
 
 x64:op_imul = 15;
 
-x64:ops = 32;
+x64:ops = 36;
 
 | int31? |
 int31? = fn (int n) n >= -0x40000000 && n <= 0x3fffffff;
@@ -360,7 +368,8 @@ int31? = fn (int n) n >= -0x40000000 && n <= 0x3fffffff;
   x64:pop = generic_op1(x64:op_pop);
   x64:leave = generic_op0(x64:op_leave);
 
-  x64:call = generic_op1(x64:op_call);
+  x64:call = fn (fcode, m1, a1, noreturn?)
+    add_ins(fcode, vector(x64:op_call, x64:resolve(m1, a1), noreturn?));
   x64:ret = generic_op0(x64:op_ret);
   x64:jmp = fn (fcode, l)
     add_ins(fcode, vector(x64:op_jmp, l, null));
@@ -382,6 +391,7 @@ int31? = fn (int n) n >= -0x40000000 && n <= 0x3fffffff;
     ];
 
   x64:add = generic_op2(x64:op_add);
+  x64:add32 = generic_op2(x64:op_add32);
   x64:sub = generic_op2(x64:op_sub);
   x64:cmp = generic_op2(x64:op_cmp);
   x64:cmpbyte = generic_op2(x64:op_cmpbyte);
@@ -401,8 +411,16 @@ int31? = fn (int n) n >= -0x40000000 && n <= 0x3fffffff;
   x64:sar = generic_op2(x64:op_sar); // many restrictions on arg1
   x64:setcc = fn (fcode, cc, m1, a1)
     add_ins(fcode, vector(x64:op_setcc, cc, x64:resolve(m1, a1)));
+  x64:cmovcc = fn (fcode, cc, m1, a1, m2, a2)
+    [
+      assert(m2 == x64:lreg);
+      add_ins(fcode, vector(x64:op_cmovcc, x64:resolve(m1, a1),
+                            x64:resolve(x64:lidx, a2 . cc)));
+    ];
 
   x64:movzxbyte = generic_op2(x64:op_movzxbyte); // dest must be register
+  x64:movzxword = generic_op2(x64:op_movzxword); // dest must be register
+  x64:movzx32 = generic_op2(x64:op_movzx32); // dest must be register
 
   // labels
 
@@ -450,19 +468,50 @@ be generated in x64code" (fcode, label)
     [
       | l |
 
+      // fcode[2] is a list of [ errno loc label args label2 ]
+      //   errno    an error_xxx
+      //   loc      trap code location
+      //   label    jump label for this error trampoline
+      // where args and label2 are null except for error_bad_type:
+      //   args     cons(typeset, var)
+      //   label2   if typeset is null, this is the label to jump to after
+      //            moving var to arg0; if typeset is not null, the "tail"
+      //            label for moving typeset to arg1 and jumping to the
+      //            berror_xxx trampoline
+
       <found> [
         for ( | tl | tl = fcode[2]; tl != null; tl = cdr(tl))
           match (car(tl))
             [
-              [ ,n ,mc:get_loc() ,args label ] => [
-                l = label;
-                exit<found> null;
+              [ ,n ,(mc:get_loc()) label oargs label2 ] => [
+                if (equal?(args, oargs))
+                  [
+                    l = label;
+                    exit<found> null;
+                  ];
+
+                assert(n == error_bad_type);
+                | otype, type, var |
+                @(otype . _) = oargs;
+                @(type . var) = args;
+                if (equal?(type, otype))
+                  [
+                    | l2 |
+                    l = x64:new_label(fcode);
+                    if (label2)
+                      l2 = label2
+                    else
+                      car(tl)[4] = l2 = x64:new_label(fcode);
+                    fcode[2] = vector(n, mc:get_loc(), l, null . var, l2)
+                      . fcode[2];
+                    exit<found> null
+                  ];
               ]
             ];
 
         // new trap
         l = x64:new_label(fcode);
-        fcode[2] = vector(n, mc:get_loc(), args, l) . fcode[2];
+        fcode[2] = vector(n, mc:get_loc(), l, args, false) . fcode[2];
       ];
 
       if (cc == x64:balways)
@@ -506,7 +555,8 @@ be generated in x64code" (fcode, label)
     "leave" "dec" "neg" "not"
     "jcc32" "mov8" "sar" "or8"
     "shl" "shr" "setcc" "movzx8" "jmp32"
-    "xchg" "lea"
+    "xchg" "lea" "add32" "cmovcc"
+    "movzx16" "movzx32"
   ];
   assert(vlength(opname) == x64:ops);
 
@@ -514,7 +564,7 @@ be generated in x64code" (fcode, label)
 	     "s" "ns" "p" "np" "l" "ge" "le" "g"];
 
   rnames64 = '["rax" "rcx" "rdx" "rbx" "rsp" "rbp" "rsi" "rdi"
-               "r8" "r9" "r10" "r11" "r12" "r13" "r14" "r15"];
+               "r8" "r9" "r10" "r11" "r12" "r13" "r14" "r15" "rip"];
   rnames32 = '["eax" "ecx" "edx" "ebx" "esp" "ebp" "esi" "edi"
                "r8d" "r9d" "r10d" "r11d" "r12d" "r13d" "r14d" "r15d"];
   rnames16 = '["ax" "cx" "dx" "bx" "sp" "bp" "si" "di"
@@ -544,7 +594,11 @@ be generated in x64code" (fcode, label)
         [
           | r, disp |
           @(r . disp) = a;
-          format("%s[%s]", itoea(disp), rnames64[r])
+          disp = if (function?(disp))
+            disp(2)
+          else
+            itoea(disp);
+          format("%s[%s]", disp, rnames64[r])
         ]
       else if (m == x64:lridx)
         [
@@ -571,21 +625,19 @@ be generated in x64code" (fcode, label)
       else if (m == x64:lclosure)
 	format("closure[%s]", mc:fname(a))
       else if (m == x64:lseclev)
-        match (a) [
+        match! (a) [
           ,x64:sl_c => "seclev";
           ,x64:sl_mudlle => "seclev*2+1";
           ,x64:sl_maxlev => "maxseclev*2+1";
-          _ => fail()
         ]
       else if (m == x64:lcst)
         format(if (integer?(a)) "%s[%#x]" else "%s[%0w]", mode[m], a)
       else if (m == x64:lglobal)
         format("%s[%s]", mode[m], a)
       else if (m == x64:lglobal_index)
-        match (a) [
+        match! (a) [
           (name . ,x64:gl_c) => format("%s[%s]", mode[m], name);
           (name . ,x64:gl_mudlle) => format("%s[%s]*2+1", mode[m], name);
-          _ => fail();
         ]
       else if (m == x64:lindirect)
         if (string?(a))
@@ -617,30 +669,34 @@ be generated in x64code" (fcode, label)
 	dformat("j%s32 %s", cnames[a2], slabel(a1))
       else if (op == x64:op_setcc)
 	dformat("set%s %s", cnames[a1], eastr(a2, rnames8))
+      else if (op == x64:op_cmovcc)
+        [
+          | r2, cc |
+          @(,x64:lidx . (r2 . cc)) = a2;
+          dformat("cmov%s %s,%s", cnames[cc], eastr(a1, rnames64),
+                  rnames64[r2])
+        ]
       else if (op == x64:op_mov)
         [
           | rn2 |
           rn2 = match (car(a1))
             [
-              ,x64:lseclev && cdr(a1) == x64:sl_c => rnames16;
               ,x64:lseclev || ,x64:lglobal_index => rnames32;
               ,x64:limm => [
-                if (match (cdr(a1))
+                if (match! (cdr(a1))
                   [
                     (n . _) => n & (1 << 30);
                     n => n & (1 << 31);
-                    _ => fail();
                   ])
                   rnames64
                 else
                   rnames32;
               ];
               ,x64:limm64 => [
-                if ((match (cdr(a1))
+                if ((match! (cdr(a1))
                   [
                     (n . _) => n >> 31;
                     n => n >> 32;
-                    _ => fail();
                   ]) == 0)
                   rnames32
                 else
@@ -657,6 +713,12 @@ be generated in x64code" (fcode, label)
       else if (op == x64:op_movzxbyte)
 	dformat("%s %s,%s", opname[op], eastr(a1, rnames8),
                 eastr(a2, rnames32))
+      else if (op == x64:op_movzxword)
+	dformat("%s %s,%s", opname[op], eastr(a1, rnames16),
+                eastr(a2, rnames32))
+      else if (op == x64:op_movzx32)
+	dformat("%s %s,%s", opname[op], eastr(a1, rnames32),
+                eastr(a2, rnames32))
       else if (op == x64:op_imul)
         [
           | imm2, r2 |
@@ -664,12 +726,12 @@ be generated in x64code" (fcode, label)
           dformat("%s %d,%s,%s", opname[op], imm2, eastr(a1, rnames64),
                   rnames64[r2]);
         ]
-      else if (op == x64:op_lea32)
+      else if (op == x64:op_lea32 || op == x64:op_add32)
 	dformat("%s %s,%s", opname[op],
                 eastr(a1, rnames64), eastr(a2, rnames32))
       else if (a1 == null)
 	dformat("%s", opname[op])
-      else if (a2 == null)
+      else if (a2 == null || op == x64:op_call)
 	dformat("%s %s", opname[op], eastr(a1, rnames64))
       else
 	dformat("%s %s,%s", opname[op],

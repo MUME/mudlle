@@ -47,10 +47,10 @@
 #include "io.h"
 #include "list.h"
 #include "mudlle-float.h"
+#include "mudlle-string.h"
 #include "mudlle-xml.h"
 #include "pattern.h"
 #include "runtime.h"
-#include "mudlle-string.h"
 #include "support.h"
 #include "symbol.h"
 #include "vector.h"
@@ -64,11 +64,7 @@ static void system_set(ulong idx, value val)
   /* Technically this is not required, but you should think hard about whether
      adding a mutable or writable global is the right thing to do. */
   assert(readonlyp(val));
-  if (!immutablep(val))
-    {
-      check_immutable(val);
-      assert(immutablep(val));
-    }
+  make_immutable(val);
 
   assert(!GCONSTANT(idx));
 
@@ -117,9 +113,7 @@ struct vector *define_mstring_vector(struct string *name,
   for (int n = 0; n < count; ++n)
     SET_VECTOR(v, n, make_readonly(alloc_string(vec[n])));
   UNGCPRO();
-  make_readonly(v);
-  if (!check_immutable(&v->o))
-    abort();
+  make_immutable(v);
   if (name != NULL)
     system_string_define(name, v);
   return v;
@@ -134,27 +128,25 @@ void define_int_vector(struct string *name, const int *vec, int count)
   for (int n = 0; n < count; ++n)
     v->data[n] = makeint(vec[n]);
   UNGCPRO();
-  if (!check_immutable(make_readonly(v)))
-    abort();
-  system_string_define(name, v);
+  system_string_define(name, make_immutable(v));
 }
 
 #define tassert(what) do {                                      \
   if (!(what))                                                  \
     {                                                           \
       fprintf(stderr, "%s:%d: %s: Assertion `%s' failed.\n",    \
-              op->filename, op->lineno, op->name, #what);       \
+              op->filename, op->lineno, op->name->str, #what);  \
       abort();                                                  \
     }                                                           \
 } while (0)
 
-static void validate_typing(const struct prim_op *op)
+static void validate_prim_types(const struct prim_op *op)
 {
   static const char allowed[] = "fnzZsvluktryxo123456789dDbB";
 
-  for (const char *const *type = op->type; *type; ++type)
+  for (const char *const *types = op->types; *types; ++types)
     {
-      const char *this = *type;
+      const char *this = *types;
       int argc = 0;
       bool saw_period = false;
       for (const char *s = this; *s; ++s)
@@ -180,7 +172,7 @@ static void validate_typing(const struct prim_op *op)
           else if (*s == '*')
             {
               tassert(s > this && s[1] == '.' && !saw_period);
-              tassert(s[-1] != ']'); /* not supported by recurse_typing */
+              tassert(s[-1] != ']'); /* not supported by primitive_types() */
               continue;
             }
           else
@@ -210,12 +202,13 @@ static struct {
 
 void runtime_define(const struct prim_op *op)
 {
+  assert(TYPE(op->name, string) && staticp(op->name));
   assert(op->nargs <= MAX_PRIMITIVE_ARGS);
   assert(!primitives.locked);
 
-  ulong idx = global_lookup(op->name);
+  ulong idx = mglobal_lookup(op->name);
 
-  validate_typing(op);
+  validate_prim_types(op);
 
   struct primitive *prim = allocate_primitive(op);
 
@@ -318,13 +311,12 @@ static void catchint(int sig)
 #endif
 
 #include <stddef.h>
+
 #include "../builtins.h"
 
-#ifdef SA_SIGINFO
 static struct sigaction oldsegact;
 #ifdef __MACH__
 static struct sigaction oldbusact;
-#endif
 #endif
 
 /* export for gdb */
@@ -332,27 +324,30 @@ void got_real_segv(int sig);
 void got_real_segv(int sig)
 {
   /* reinstall the default handler; this will cause a real crash */
-#ifdef SA_SIGINFO
   if (sig == SIGSEGV)
     {
-      sigaction(sig, &oldsegact, NULL);
+      if (sigaction(sig, &oldsegact, NULL) < 0)
+        {
+          perror("sigaction()");
+          abort();
+        }
       return;
     }
 #ifdef __MACH__
   if (sig == SIGBUS)
     {
-      sigaction(sig, &oldbusact, NULL);
+      if (sigaction(sig, &oldbusact, NULL) < 0)
+        {
+          perror("sigaction()");
+          abort();
+        }
       return;
     }
 #endif
   abort();
-#else
-  signal(sig, SIG_DFL);
-#endif
 }
 
-#if ((defined __i386__ || __x86_64__) && !defined NOCOMPILER    \
-     && defined SA_SIGINFO)
+#if (defined __i386__ || __x86_64__) && !defined NOCOMPILER
  #define USE_ALTSTACK 1
 static char my_signal_stack[MINSIGSTKSZ + 8 * 1024];
 #else
@@ -454,18 +449,11 @@ static void check_segv(int sig, REG_CONTEXT_T *scp)
   got_real_segv(sig);
 }
 
-#ifdef SA_SIGINFO
 static void catchsegv(int sig, siginfo_t *siginfo, void *_sigcontext)
 {
   UCONTEXT_T *sigcontext = _sigcontext;
   check_segv(sig, &sigcontext->uc_mcontext);
 }
-#else
-static void catchsegv(int sig, struct sigcontext scp)
-{
-  check_segv(sig, &scp);
-}
-#endif
 
 #endif  /* (__i386__ || __x86_64__) && !NOCOMPILER */
 
@@ -488,33 +476,36 @@ void runtime_init(void)
 #endif
 
 #if (defined __i386__ || defined __x86_64__) && !defined NOCOMPILER
-#ifdef SA_SIGINFO
   {
     stack_t my_stack = {
       .ss_sp    = my_signal_stack,
       .ss_flags = 0,
       .ss_size  = sizeof my_signal_stack,
     };
-    bool noaltstack = sigaltstack(&my_stack, NULL) < 0;
-    if (noaltstack)
+    if (sigaltstack(&my_stack, NULL) < 0)
       {
 	perror("sigaltstack()");
+        abort();
       }
 
     struct sigaction sact = {
       .sa_sigaction = catchsegv,
-      .sa_flags     = (SA_SIGINFO | SA_RESTART | SA_NODEFER
-                       | (noaltstack ? 0 : SA_ONSTACK)),
+      .sa_flags     = SA_SIGINFO | SA_RESTART | SA_NODEFER | SA_ONSTACK
     };
     sigemptyset(&sact.sa_mask);
-    sigaction(SIGSEGV, &sact, &oldsegact);
+    if (sigaction(SIGSEGV, &sact, &oldsegact) < 0)
+      {
+        perror("sigaction()");
+        abort();
+      }
 #ifdef __MACH__
-    sigaction(SIGBUS, &sact, &oldbusact);
+    if (sigaction(SIGBUS, &sact, &oldbusact) < 0)
+      {
+        perror("sigaction()");
+        abort();
+      }
 #endif
   }
-#else
-  signal(SIGSEGV, (void (*)(int))catchsegv);
-#endif
 #endif
 
   basic_init();

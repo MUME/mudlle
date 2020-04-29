@@ -19,12 +19,12 @@
  * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
  */
 
-#include <string.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "alloc.h"
-#include "objenv.h"
 #include "mvalues.h"
+#include "objenv.h"
 
 struct env *alloc_env(ulong size)
 /* Returns: A new environment, of initial size size, initialised to NULL.

@@ -97,7 +97,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 //     modified (ie most local functions):
 //       - mutually recursive functions can be somehow "merged"
 //       - calls to these "known" functions can be much simpler
-//     note: what exactly characterises a "known" function (SML of NJ terminology) ?
+//     note: what exactly characterises a "known" function
+//     (SML of NJ terminology) ?
 
 [
   | compute_closure_uses, represent_variables, direct_recursion |
@@ -348,8 +349,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
   direct_recursion = fn (ifn)
     // Types: ifn: intermediate function
     // Effects: Detects direct recursive calls for the functions contained in
-    //   ifn: marks the variables concerned by replacing the parent variable by the
-    //   special "mc:myself" constant variable
+    //   ifn: marks the variables concerned by replacing the parent variable by
+    //   the special "mc:myself" constant variable
     [
       | detect_myself |
 
@@ -367,7 +368,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnpartial, mc:tnfull
 	      subfn = ins[mc:i_ffunction];
 
 	      // See if cdest is in subfn's variables
-	      // (We are after indirection has been added, so this test is correct)
+	      // (We are after indirection has been added, so this test is
+	      // correct)
 
 	      if (myself = lexists?(fn (cvar) cvar[mc:v_cparent] == cdest,
 				    subfn[mc:c_fclosure]))

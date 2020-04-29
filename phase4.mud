@@ -138,15 +138,15 @@ reads mc:verbose, mc:disassemble
 
 		  bdifference!(temps, survive_call);
 		  bdifference!(locals, survive_call);
-		  bforeach
-		    (fn (nlive)
-		       set_bit!(if (map[nlive][mc:v_class] == mc:v_closure ||
-				    bit_set?(spiltargs, nlive)) // already spilt
-				  spilt
-		                else
-				  notspilt,
-				nlive),
-		     survive_call);
+		  bforeach(fn (nlive) [
+                    | set |
+                    set = if (map[nlive][mc:v_class] == mc:v_closure
+                              || bit_set?(spiltargs, nlive)) // already spilt
+                      spilt
+                    else
+                      notspilt;
+                    set_bit!(set, nlive)
+                  ], survive_call);
 		]
 	      else
 		[
@@ -159,10 +159,10 @@ reads mc:verbose, mc:disassemble
 
 		  // operations that imply allocation use scratch regs
                   if (class == mc:i_closure
-                                 || (class == mc:i_compute
-                                     && (match (ins[mc:i_aop]) [
-                                       ,mc:b_vector || ,mc:b_sequence => true
-                                     ])))
+                      || (class == mc:i_compute
+                          && (match (ins[mc:i_aop]) [
+                            ,mc:b_vector || ,mc:b_sequence => true
+                          ])))
                     [
                       survives = live_in;
                       // test before making an otherwise-unnecessary copy
@@ -230,7 +230,8 @@ reads mc:verbose, mc:disassemble
           // find variable with most neighbours to spill
 
 	  | best, maxneigh, bvars2 |
-          bvars2 = bcopy(bvars); // create one copy to save some memory allocation
+          // create one copy to save some memory allocation
+          bvars2 = bcopy(bvars);
           maxneigh = -1;
 
           loop
@@ -338,9 +339,10 @@ reads mc:verbose, mc:disassemble
 
 	      // remove colors used by allocated neighbours
 	      bforeach
-		(fn (nneighbour)
-		   colors[map[nneighbour][mc:v_location][mc:v_lrnumber]] = false,
-		 bintersection(allocated, var[mc:v_neighbours]));
+		(fn (nneighbour) [
+                  colors[map[nneighbour][mc:v_location][mc:v_lrnumber]]
+                    = false
+                ], bintersection(allocated, var[mc:v_neighbours]));
 
 	      color = 0;
 	      while (!colors[color]) color = color + 1;
@@ -372,10 +374,11 @@ reads mc:verbose, mc:disassemble
 	      string_fill!(colors, true);
 
 	      // remove colors used by allocated neighbours
-	      bforeach
-		(fn (nneighbour)
-		   colors[map[nneighbour][mc:v_location][mc:v_lsoffset]] = false,
-		 bintersection(allocated, var[mc:v_neighbours]));
+	      bforeach(
+                fn (nneighbour) [
+                  colors[map[nneighbour][mc:v_location][mc:v_lsoffset]]
+                    = false
+                ], bintersection(allocated, var[mc:v_neighbours]));
 
 	      color = 0;
 	      while (!colors[color]) color = color + 1;

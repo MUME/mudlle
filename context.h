@@ -58,7 +58,6 @@ context (in that case the current value is in global variable x).
 
 #include <setjmp.h>
 
-#include "alloc.h"
 #include "error.h"
 #include "mvalues.h"
 
@@ -90,10 +89,10 @@ struct ccontext {
   ulong *frame_end_bp;
   /* Space to save callee and caller saved registers */
   struct {
-    FOR_CALLEE_SAVE(__DEF_VALUE, ;);
+    FOR_CALLEE_SAVE(__DEF_VALUE, SEP_SEMI);
   } callee;
   struct {
-    FOR_CALLER_SAVE(__DEF_VALUE, ;);
+    FOR_CALLER_SAVE(__DEF_VALUE, SEP_SEMI);
   } caller;
 };
 #undef __DEF_VALUE
@@ -160,8 +159,9 @@ enum call_class {
   call_compiled,                /* compiled closures */
   call_c,                       /* primitives */
   call_primop,                  /* prim_op; for displaying stack traces only */
-  call_string,                  /* a string description; for displaying
-                                   stack traces only*/
+  call_string_args,             /* a string description; for displaying
+                                   stack traces only; */
+  call_string_argv,             /* ... last arg is actually vector(arg) */
   call_session,                 /* a new session */
   call_invalid,                 /* invalid interpreter call */
   call_invalid_argp             /* invalid call with pointer to args */
@@ -188,7 +188,7 @@ struct call_stack_c_header {
   union {
     struct primitive *prim;         /* for call_c */
     const struct prim_op *op;       /* for call_primop */
-    const char *name;               /* for call_string */
+    const char *name;               /* for call_string_xxx */
     value value;                    /* for call_invalid{,_argv} */
   } u;
   int nargs;
@@ -318,12 +318,12 @@ extern struct session_context *session_context;
 #define muderr  (session_context->_muderr)
 
 extern ulong xcount;			/* Loop detection */
-extern uint16_t minlevel;               /* Minimum security level */
+extern seclev_t minlevel;               /* Minimum security level */
 
 extern ulong hard_mudlle_stack_limit, mudlle_stack_limit;
 
 struct session_info {
-  uint16_t minlevel;
+  seclev_t minlevel;
   /* See session_context.seclevel */
   seclev_t maxseclevel;
   muser_t muser;
@@ -331,6 +331,15 @@ struct session_info {
 };
 
 extern const struct session_info cold_session;
+
+/* 'cost' are mudlle loops; helps cause error_loop */
+static inline void expensive_operation(ulong cost)
+{
+  if (cost >= xcount)
+    xcount = 1;
+  else
+    xcount -= cost;
+}
 
 void session_start(struct session_context *newp,
                    const struct session_info *info);

@@ -322,8 +322,8 @@
    are explicitly kept (with the basic blocks, along with the rest of the
    data-flow information).
 
-   constraint templates are represented in a form designed to make their
-   entry easy. This form is different from that of the instantiated constraints,
+   constraint templates are represented in a form designed to make their entry
+   easy. This form is different from that of the instantiated constraints,
    which is designed to make evaluation efficient.
 
    The type representation for constraints is as follows:
@@ -505,7 +505,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
   | readonly_itypes, immutable_itypes |
   readonly_itypes = (itype_integer | itype_null | itype_float
                      | itype_bigint | itype_function);
-  immutable_itypes = readonly_itypes | itype_string;
+  immutable_itypes = (itype_integer | itype_null | itype_float
+                     | itype_bigint | itype_string);
 
   mc:global_call_count = make_table();
 
@@ -532,7 +533,9 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
   | itype_star |
   itype_star = itype_any + 1; // signals Kleene closure for this argument
 
-  mc:itypeset_string = fn "`n `b -> `s. Returns a description of itypeset `n. If `b is false, separate options with \"|\"; otherwise comma-separate them." (itype, simple?)
+  mc:itypeset_string = fn "`n `b -> `s. Returns a description of itypeset `n."
+    + " If `b is false, separate options with \"|\"; otherwise"
+    + " comma-separate them." (itype, simple?)
     [
       itype &= ~itype_star;
       assert(itype >= 0 && itype <= itype_any);
@@ -635,7 +638,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
       else constant . v[mc:v_number] . null
     ];
 
-  make_condition2 = fn (constant, v1, v2) // makes condition v1 /\ v2 /\ constant
+  // makes condition v1 /\ v2 /\ constant
+  make_condition2 = fn (constant, v1, v2)
     [
       | type, vars |
 
@@ -842,7 +846,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
         n
     ];
 
-  make_closure_condition = fn (list args, int ndest, {vector,string} targs, int tret)
+  make_closure_condition = fn (list args, int ndest,
+                               {vector,string} targs, int tret)
     [
       | conditions |
       if (vector?(targs)
@@ -963,8 +968,9 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 		  if (primitive_flags(prim) & OP_APPLY)
                     new = handle_apply(prim, args, types, dest, tfn)
 		  else
-		    new = lmap(fn (sig) instantiate_constraint(sig, args, dest),
-			       types)
+		    new = lmap(fn (sig) [
+                      instantiate_constraint(sig, args, dest)
+                    ], types)
 		]
               else
                 new = sequence(null, ndest, make_condition0(itype_any)) . null;
@@ -1208,7 +1214,7 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 	  // condition successful, modify new typesets
 	  // first, destination:
 	  if (c[1])
-	    new[c[1]] = new[c[1]] | evaluate_condition(c[2], typeset);
+	    new[c[1]] |= evaluate_condition(c[2], typeset);
 
 	  // then all concerned variables
 	  conditions = lreverse(c[0]); // same order as results
@@ -1217,7 +1223,7 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 	      | x |
 
 	      x = car(results);
-	      lforeach(fn (arg) new[arg] = new[arg] | x, cdar(conditions));
+	      lforeach(fn (arg) new[arg] |= x, cdar(conditions));
 	      conditions = cdr(conditions);
 	      results = cdr(results);
 	    ];
@@ -1282,54 +1288,84 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
                       | itype_table | itype_string | itype_float
                       | itype_bigint);
 
-  infer_branch = fn (il, ins)
+  infer_branch = fn (il, types, fold, change, all?)
     [
-      | bop, types, type1, type2 |
+      | ins, bop, type1, type2 |
 
+      ins = il[mc:il_ins];
       bop = ins[mc:i_bop];
-      types = ins[mc:i_btypes];
+
+      if (bop == mc:branch_always || bop == mc:branch_never)
+        exit<function> if (all?) fold(il, bop == mc:branch_always);
+
       type1 = car(types);
       type2 = if (cdr(types) != null) cadr(types) else null;
+
       if (bop == mc:branch_eq || bop == mc:branch_ne
           || bop == mc:branch_equal || bop == mc:branch_nequal)
         [
           if (!(type1 & type2))
-            mc:fold_branch(il, bop == mc:branch_ne || bop == mc:branch_nequal)
+            fold(il, bop == mc:branch_ne || bop == mc:branch_nequal)
           else if ((type1 == itype_null || type1 == itype_zero)
                    && type1 == type2)
-            mc:fold_branch(il, bop == mc:branch_eq || bop == mc:branch_equal)
+            fold(il, bop == mc:branch_eq || bop == mc:branch_equal)
           else if ((bop == mc:branch_equal || bop == mc:branch_nequal)
                    && ((type1 & itype_full_equal) == 0
                        || (type2 & itype_full_equal) == 0))
-            ins[mc:i_bop] = if (bop == mc:branch_equal)
-              mc:branch_eq
-            else
-              mc:branch_ne
+            [
+              | nop |
+              nop = if (bop == mc:branch_equal)
+                mc:branch_eq
+              else
+                mc:branch_ne;
+              change(ins, nop)
+            ]
         ]
       else if (bop == mc:branch_true || bop == mc:branch_false)
         [
           if (~type1 & itype_zero)
-            mc:fold_branch(il, bop == mc:branch_true)
+            fold(il, bop == mc:branch_true)
+          else if (type1 == itype_zero)
+            fold(il, bop == mc:branch_false)
         ]
       else if (bop == mc:branch_or || bop == mc:branch_nor)
         [
           if (~type1 & itype_zero || ~type2 & itype_zero)
-            mc:fold_branch(il, bop == mc:branch_or)
+            fold(il, bop == mc:branch_or)
         ]
       else if (bop == mc:branch_and || bop == mc:branch_nand)
         [
           if (~type1 & itype_zero && ~type2 & itype_zero)
-            mc:fold_branch(il, bop == mc:branch_and)
+            fold(il, bop == mc:branch_and)
         ]
       else if (bop == mc:branch_immutable || bop == mc:branch_mutable)
         [
           if (!(type1 & ~immutable_itypes))
-            mc:fold_branch(il, bop == mc:branch_immutable);
+            fold(il, bop == mc:branch_immutable);
         ]
       else if (bop == mc:branch_readonly || bop == mc:branch_writable)
         [
           if (!(type1 & ~readonly_itypes))
-            mc:fold_branch(il, bop == mc:branch_readonly);
+            fold(il, bop == mc:branch_readonly);
+        ]
+      else if (bop >= mc:branch_type?
+               && bop < mc:branch_ntype? + last_synthetic_type)
+        [
+          | btype, reversed |
+          if (bop >= mc:branch_ntype?)
+            [
+              btype = bop - mc:branch_ntype?;
+              reversed = true;
+            ]
+          else
+            [
+              btype = bop - mc:branch_type?;
+              reversed = false;
+            ];
+          if (type1 & mc:itypemap[btype] == 0)
+            fold(il, reversed)
+          else if (type1 & mc:itypemap_inverse[btype] == 0)
+            fold(il, !reversed)
         ]
     ];
 
@@ -1349,13 +1385,13 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
         ]
     ];
 
-  // calculate the number of arguments `sig requires (-n for (n - 1) or more)
+  // calculate the number of arguments `sig requires (~N for N or more)
   tsig_argc = fn (vector sig)
     [
       | l |
       l = vlength(sig);
       if (l > 0 && (sig[-1] & itype_star))
-        -l
+        ~(l - 1)
       else
         l
     ];
@@ -1366,7 +1402,7 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
       | n |
       n = tsig_argc(sig);
       if (n < 0)
-        argc >= -(n + 1)
+        argc >= ~n
       else
         argc == n
     ];
@@ -1483,7 +1519,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 
       if (~ftype & itype_function)
         [
-          mc:warning("call of non-function (%s)", mc:itypeset_string(ftype, true));
+          mc:warning("call of non-function (%s)",
+                     mc:itypeset_string(ftype, true));
           exit<function> null;
         ];
 
@@ -1537,11 +1574,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 
       | ftypes, badarg, desc, bad_nargs |
       bad_nargs = fn (expect)
-        mc:warning("bad number of arguments (%s) in call to %s %s, expected %s",
-                   nargs,
-                   desc,
-                   name(),
-                   expect);
+        mc:warning("bad number of arguments (%d) in call to %s %s,"
+                   + " expected %s", nargs, desc, name(), expect);
 
       if (primitive?(fval) || secure?(fval))
         [
@@ -1560,13 +1594,13 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
               if (!lexists?(fn (t) tsig_has_args?(t, nargs), ftypes))
                 [
                   | allowed |
-                  // list of N or -(N + 1) for N+
+                  // list of N or ~N for N+
                   allowed = lmap(tsig_argc, ftypes);
 
                   // sort according to N
                   allowed = lqsort(fn (a, b) [
-                    if (a < 0) a = -(a + 1);
-                    if (b < 0) b = -(b + 1);
+                    if (a < 0) a = ~a;
+                    if (b < 0) b = ~b;
                     a < b;
                   ], allowed);
 
@@ -1584,13 +1618,13 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
                           // merge N and N
                           set_cdr!(a, cddr(a));
                         ]
-                      else if (car(a) == -(cadr(a) + 1))
+                      else if (car(a) == ~cadr(a))
                         [
                           // merge N and N+
                           set_car!(a, cadr(a));
                           set_cdr!(a, cddr(a));
                         ]
-                      else if (car(a) + 1 == -(cadr(a) + 1))
+                      else if (car(a) + 1 == ~cadr(a))
                         [
                           // merge N and (N + 1)+ to N+
                           set_car!(a, cadr(a) + 1);
@@ -1605,7 +1639,7 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
                     if (n >= 0)
                       itoa(n)
                     else
-                      format("at least %s", -(n + 1))
+                      format("at least %d", ~n)
                   ], allowed);
                   bad_nargs(concat_comma(allowed, " or "));
                   ftypes = null
@@ -1645,7 +1679,7 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 
         if (targc < 0)
           [
-            if (-(targc + 1) > nargs)
+            if (~targc > nargs)
               exit<function> false;
           ]
         else if (targc > nargs)
@@ -1668,7 +1702,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
           ];
       ], ftypes))
         if (cdr(ftypes) == null && pair?(badarg))
-          mc:warning("bad type (%s) in argument %s of call to %s %s, expected %s",
+          mc:warning("bad type (%s) in argument %s of call to %s %s,"
+                     + " expected %s",
                      mc:itypeset_string(nth(car(badarg) + 1, atypes), true),
                      car(badarg) + 1,
                      desc,
@@ -1677,7 +1712,9 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
         else
           mc:warning("bad type%s (%s) in call to %s %s, expected %s",
                      if (nargs == 1) "" else "s",
-                     concat_comma(lmap(fn (t) mc:itypeset_string(t, false), atypes), ", "),
+                     concat_comma(lmap(fn (t) mc:itypeset_string(t, false),
+                                       atypes),
+                                  ", "),
                      desc,
                      name(),
                      concat_comma(lmap(describe_tsig, ftypes), " or "));
@@ -1685,40 +1722,46 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 
   verify_compute_types = fn (ins)
     [
-      | otypes, atypes, badarg |
+      | otypes, atypes, badarg, badotype |
       otypes = op_types[ins[mc:i_aop]];
       if (otypes == null) exit<function> null;
 
       atypes = ins[mc:i_atypes];
 
       if (!lexists?(fn (otype) [
-        | a, i |
-        a = atypes; i = 0;
+        | a, oi, ai |
+        a = atypes; ai = 1; oi = 0;
         loop
           [
             if (a == null) exit true;
             | ot |
-            ot = otype[i];
+            ot = otype[oi];
             if (ot == ?*)
-              ot = otype[--i];
+              ot = otype[--oi];
             if (car(a) & typesets[ot] == 0)
               [
-                badarg = i;
+                badarg   = ai;
+                badotype = oi;
                 exit false;
               ];
-            a = cdr(a); ++i
+            a = cdr(a); ++ai; ++oi
           ];
       ], otypes))
         [
           if (cdr(otypes) == null)
-            mc:warning("bad type (%s) in argument %s to operator %s, expected %s",
-                       mc:itypeset_string(nth(badarg + 1, atypes), true),
-                       badarg + 1,
+            mc:warning("bad type (%s) in argument %s to operator %s,"
+                       + " expected %s",
+                       mc:itypeset_string(nth(badarg, atypes), true),
+                       badarg,
                        mc:builtin_names[ins[mc:i_aop]],
-                       mc:itypeset_string(typesets[car(otypes)[badarg]], true))
+                       mc:itypeset_string(typesets[car(otypes)[badotype]],
+                                          true))
           else
-            mc:warning("bad types (%s) in arguments to operator %s, expected %s",
-                       concat_comma(lmap(fn (t) mc:itypeset_string(t, false), atypes), ", "),
+            mc:warning("bad types (%s) in arguments to operator %s,"
+                       + " expected %s",
+                       concat_comma(lmap(fn (t) mc:itypeset_string(t, false),
+                                         atypes),
+                                    ", "),
                        mc:builtin_names[ins[mc:i_aop]],
                        concat_comma(lmap(describe_tsig,
                                          typesets_from_strings(otypes)),
@@ -1819,16 +1862,18 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 	    [
 	      | type |
 
-	      nargs = nargs + 1;
+	      ++nargs;
 	      if (type = mc:constant?(v))
 		[
-		  ncstargs = ncstargs + 1;
+		  ++ncstargs;
 		  type
 		]
 	      else
 		[
-		  type = typeset[v[mc:v_number]];
-		  assert(v[mc:v_number] != 0);
+                  | vnum |
+                  vnum = v[mc:v_number];
+                  assert(vnum > 0);
+		  type = typeset[vnum];
                   if (type && (type & (type - 1)) == 0)
                     // only one bit set; fully inferred
 		    ++nfull
@@ -1851,14 +1896,11 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 	    ]
 	  else if (class == mc:i_branch)
 	    [
-              | bop |
-              bop = ins[mc:i_bop];
-	      if (bop == mc:branch_true || bop == mc:branch_false
-                  || bop >= mc:branch_bitand)
-                [
-                  ins[mc:i_btypes] = lmap(vtype, ins[mc:i_bargs]);
-                  infer_branch(il, ins);
-                ]
+              ins[mc:i_btypes] = lmap(vtype, ins[mc:i_bargs]);
+              infer_branch(il, ins[mc:i_btypes],
+                           mc:fold_branch,
+                           fn (ins, op) ins[mc:i_bop] = op,
+                           false);
 	    ]
 	  else if (class == mc:i_trap)
             <skip> [
@@ -1882,7 +1924,8 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
                   [
                     nrtypes &= ~b;
                     if (ortypes != typeset_any)
-                      mc:warning("function specifies %s as return type but it is never generated",
+                      mc:warning("function specifies %s as return type but"
+                                 + " it is never generated",
                                  type_names[t]);
                   ];
 
@@ -1928,12 +1971,101 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
       if (mc:verbose >= 3)
 	[
 	  display("Type inference results:\n");
-	  dformat("%s args, of which %s constant, %s fully inferred, %s partially.\n", nargs, ncstargs, nfull, npartial);
+	  dformat("%d args, of which %d constant, %d fully inferred,"
+                  + " %d partially.\n",
+                  nargs, ncstargs, nfull, npartial);
 	];
       mc:tnargs += nargs;
       mc:tncstargs += ncstargs;
       mc:tnfull += nfull;
       mc:tnpartial += npartial;
+    ];
+
+  | change_branch_to, remove_code_edge |
+
+  remove_code_edge = fn (edge)
+    [
+      | enode |
+      enode = graph_edge_to(edge);
+      graph_remove_edge(edge);
+      if (!graph_edges_in_exists?(fn (e) graph_edge_from(e) != enode, enode))
+        [
+          if (mc:verbose >= 3)
+            [
+              dformat(
+                "UNREACHABLE BLOCK %d\n",
+                dget(graph_node_get(enode)[mc:f_ilist])[mc:il_number]);
+            ];
+          lforeach(graph_remove_edge, graph_edges_in(enode));
+          lforeach(remove_code_edge, graph_edges_out(enode));
+          // mark instructions as gone
+          dforeach(fn (il) il[mc:il_ins] = null,
+                   graph_node_get(enode)[mc:f_ilist]);
+          graph_remove_node(enode);
+        ];
+    ];
+
+  // Modify the branch target in 'edge' to point to the 'via_il' (a branch
+  // instruction). Use its branch destination if 'take?' is true; otherwise use
+  // its fall-through target.
+  change_branch_to = fn (edge, via_il, take?)
+    [
+      | dst_edge, dst_node, dst_block |
+      dst_edge = graph_edges_out_exists?(fn (e) graph_edge_get(e) ^^ take?,
+                                         via_il[mc:il_node]);
+
+      dst_node = graph_edge_to(dst_edge);
+      dst_block = graph_node_get(dst_node);
+
+      | from_block, from_il, from_ins |
+      // last instruction of from-block
+      from_block = graph_node_get(graph_edge_from(edge));
+      from_il = dget(dprev(from_block[mc:f_ilist]));
+      from_ins = from_il[mc:il_ins];
+
+      if (!graph_edge_get(edge))
+        [
+          // modify branch-taken edge
+          assert(from_ins[mc:i_class] == mc:i_branch);
+          | lab, dst_il |
+          dst_il = dget(dst_block[mc:f_ilist]);
+          lab = dst_il[mc:il_label];
+          if (!lab)
+            [
+              lab = mc:new_label();
+              mc:set_label(lab, dst_il);
+            ];
+          from_ins[mc:i_bdest] = lab;
+          graph_add_edge(graph_edge_from(edge), dst_node, false);
+        ]
+      else
+        [
+          // modify fall-through edge
+          | nblock, flow_in, live_in, branch_constraints |
+          nblock = mc:add_fallthrough_block(from_block, dst_block);
+
+          flow_in = from_block[mc:f_types][mc:flow_out];
+          branch_constraints = from_block[mc:f_types][mc:flow_kill];
+          if (branch_constraints)
+            // apply fall-through constraints
+            flow_in = apply_iconstraint(cdr(branch_constraints), flow_in);
+
+          nblock[mc:f_types] = vector(
+            null,               // gen
+            false,              // branch constraints
+            flow_in,            // flow_in
+            flow_in);           // flow_out
+
+          live_in = from_block[mc:f_live][mc:flow_out];
+          nblock[mc:f_live] = vector(
+            null,               // gen
+	    false,              // kill
+            live_in,            // flow_in
+            live_in,            // flow_out
+            from_block[mc:f_live][mc:flow_map]); // flow_map
+        ];
+
+      remove_code_edge(edge);
     ];
 
   mc:infer_types = fn (ifn)
@@ -1968,13 +2100,13 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 	   | block |
 
 	   block = graph_node_get(n);
-	   block[mc:f_types] = vector
-	     (lreverse!(mc:scan_ambiguous(generate_constraints, null,
-					  block, globals, mc:f_ambiguous_w)),
-	      // use kill slot for per-edge constraint
-	      generate_branch_constraints(block),
-	      new_typesets(ifn),
-	      new_typesets(ifn)); // no map
+	   block[mc:f_types] = vector(
+             lreverse!(mc:scan_ambiguous(generate_constraints, null,
+                                         block, globals, mc:f_ambiguous_w)),
+             // use kill slot for per-edge constraint
+             generate_branch_constraints(block),
+             new_typesets(ifn),
+             new_typesets(ifn)); // no map
 	 ], cdr(fg));
 
       // solve data-flow problem
@@ -1990,14 +2122,38 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
           entry[mc:f_types][mc:flow_in][var[mc:v_number]] = itype_vector;
         ]
       else
-        lforeach(fn (@[arg _ _]) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
-                 ifn[mc:c_fargs]);
-      lforeach(fn (arg) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
-	       ifn[mc:c_fglobals]);
-      lforeach(fn (arg) entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any,
-	       ifn[mc:c_fclosure]);
+        lforeach(fn (@[arg _ _]) [
+          entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any
+        ], ifn[mc:c_fargs]);
+      lforeach(fn (arg) [
+        entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any
+      ], ifn[mc:c_fglobals]);
+      lforeach(fn (arg) [
+        entry[mc:f_types][mc:flow_in][arg[mc:v_number]] = itype_any
+      ], ifn[mc:c_fclosure]);
 
       // iterate till solution found
+
+      | edge_flow_out_types |
+      edge_flow_out_types = fn (predecessor)
+        [
+          | pnode, ptypes, flow_out, branch_constraints |
+          pnode = graph_node_get(graph_edge_from(predecessor));
+          ptypes = pnode[mc:f_types];
+          flow_out = ptypes[mc:flow_out];
+
+          branch_constraints = ptypes[mc:flow_kill]; // slot reuse
+          if (!branch_constraints)
+            exit<function> flow_out;
+
+          | c |
+          c = if (graph_edge_get(predecessor))
+            // fallthrough, ie false edge
+            cdr(branch_constraints)
+          else // branch, ie true edge
+            car(branch_constraints);
+          apply_iconstraint(c, flow_out);
+        ];
 
       merge_block = fn (n)
 	[
@@ -2008,33 +2164,20 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 
 	  // compute in as 'union' of out's of predecessors
 	  new_in = types[mc:flow_in];
-	  graph_edges_in_apply
-	    (fn (predecessor)
-	     [
-	       | pnode, ptypes, branch_constraints, flow_out |
-
-	       pnode = graph_node_get(graph_edge_from(predecessor));
-	       ptypes = pnode[mc:f_types];
-	       flow_out = ptypes[mc:flow_out];
-	       branch_constraints = ptypes[mc:flow_kill]; // slot reuse
-	       if (branch_constraints)
-		 flow_out = apply_iconstraint
-		   (if (graph_edge_get(predecessor))
-		      // fallthrough, ie false edge
-		      cdr(branch_constraints)
-		    else // branch, ie true edge
-		      car(branch_constraints),
-		    flow_out);
-	       typeset_union!(new_in, flow_out);
-	     ], n);
+	  graph_edges_in_apply(fn (edge) [
+            typeset_union!(new_in, edge_flow_out_types(edge))
+          ], n);
 	  types[mc:flow_in] = new_in;
 
 	  // compute new out
 	  //display("APPLY\n");
 	  //show_constraints(types[mc:flow_gen]);
 	  //display("TO "); show_typesets(new_in); newline();
-	  if (types[mc:flow_gen] == null) new_out = vcopy(new_in)
-	  else new_out = lreduce(apply_iconstraint, new_in, types[mc:flow_gen]);
+	  new_out = if (types[mc:flow_gen] == null)
+            vcopy(new_in)
+	  else
+            lreduce(apply_iconstraint, new_in, types[mc:flow_gen]);
+
 	  //display("-> "); show_typesets(new_out); newline();
 	  assert(new_out != types[mc:flow_out]);
           | live_out |
@@ -2050,18 +2193,62 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
 	    ]
 	];
 
+      | short_cut_branch |
+      short_cut_branch = fn (n)
+	[
+	  | node, firstil |
+	  node = graph_node_get(n);
+          firstil = dget(node[mc:f_ilist]);
+          if (firstil[mc:il_ins][mc:i_class] != mc:i_branch)
+            exit<function> null;
+
+	  lforeach(fn (predecessor) [
+            | flow_out, btypes |
+            flow_out = edge_flow_out_types(predecessor);
+
+            btypes = firstil[mc:il_ins][mc:i_bargs];
+            if (btypes != null)
+              [
+                | vtype |
+                vtype = fn (v)
+                  match (mc:constant?(v))
+                    [
+                      ,false => [
+                        | vnum |
+                        vnum = v[mc:v_number];
+                        assert(vnum > 0);
+                        flow_out[vnum]
+                      ];
+                      x => x;
+                    ];
+                btypes = lmap(vtype, btypes);
+              ];
+
+            infer_branch(firstil, btypes, fn (il, take?) [
+              change_branch_to(predecessor, il, take?);
+              change = true;
+            ], fn (ins, nop) null, !graph_edge_get(predecessor));
+          ], graph_edges_in(n));
+	];
+
       icount = 0;
       loop
 	[
+	  ++icount;
 	  change = false;
-	  //dformat("*ITERATION %s*\n", icount + 1);
+	  //dformat("*ITERATION %s*\n", icount);
 	  graph_nodes_apply(merge_block, cdr(fg));
-	  icount = icount + 1;
-	  if (!change) exit 0;
+
+	  if (!change)
+            [
+              graph_nodes_apply(short_cut_branch, cdr(fg));
+              if (!change) exit null;
+            ];
 	];
+
       if (mc:verbose >= 3)
 	[
-	  dformat("Type inference iterations %s\n", icount);
+	  dformat("Type inference iterations %d\n", icount);
 	];
 
       extract_types(ifn);
@@ -2119,9 +2306,9 @@ writes mc:tnargs, mc:tncstargs, mc:tnfull, mc:tnpartial, mc:this_function
       i = 0;
       while (constraints != null)
 	[
-	  dformat("constraint %s\n", i);
+	  dformat("constraint %d\n", i);
 	  show_constraint(car(constraints));
-	  i = i + 1;
+	  ++i;
 	  constraints = cdr(constraints);
 	];
     ];

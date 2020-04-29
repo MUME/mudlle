@@ -274,7 +274,7 @@ const unsigned char latin1_to_lower[256] = {
    'ø',  'ù',  'ú',  'û',  'ü',  'ý',  'þ',  'ÿ'
 */
 
-int str8icmp(const char *s1, const char *s2)
+int str7icmp(const char *s1, const char *s2)
 {
   int c1, c2;
 
@@ -284,7 +284,7 @@ int str8icmp(const char *s1, const char *s2)
   return (c1 < c2) ? -1 : (c1 != c2);
 }
 
-int mem8icmp(const void *_s1, const void *_s2, size_t n)
+int mem7icmp(const void *_s1, const void *_s2, size_t n)
 {
   const char *s1 = _s1, *s2 = _s2;
   int c1, c2;
@@ -295,7 +295,7 @@ int mem8icmp(const void *_s1, const void *_s2, size_t n)
   return 0;
 }
 
-int str8nicmp(const char *s1, const char *s2, int n)
+int str7nicmp(const char *s1, const char *s2, int n)
 {
   while (n-- > 0)
     {
@@ -309,9 +309,9 @@ int str8nicmp(const char *s1, const char *s2, int n)
   return 0;
 }
 
-void *mem8ichr(const void *_s, int _c, size_t n)
+void *mem7ichr(const void *_s, int _c, size_t n)
 {
-  char c = TO_7LOWER(_c);
+  int c = TO_7LOWER(_c);
   const char *s = _s;
   while (n > 0)
     {
@@ -350,12 +350,6 @@ void str7lwr(char *str)
     }
 }
 
-char *str8cap(char *str)
-{
-  *str = TO_8UPPER(*str);
-  return str;
-}
-
 struct char_name {
   unsigned char c;
   const char *name;
@@ -365,7 +359,7 @@ struct char_name {
 #define FOR_ISO88591_CHARS(op)                                  \
   op('´', "ACUTE ACCENT"),                                      \
   op('&', "AMPERSAND"),                                         \
-  op('\'',  "APOSTROPHE"),                                      \
+  op('\'', "APOSTROPHE"),                                       \
   op('*', "ASTERISK"),                                          \
   op('¦', "BROKEN BAR"),                                        \
   op('¸', "CEDILLA"),                                           \
@@ -542,7 +536,7 @@ struct char_name {
   op('»', "RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK"),        \
   op('§', "SECTION SIGN"),                                      \
   op(';', "SEMICOLON"),                                         \
-  op('­', "SOFT HYPHEN"),                                       \
+  op(0xad, "SOFT HYPHEN"),                                      \
   op('/', "SOLIDUS"),                                           \
   op(' ', "SPACE"),                                             \
   op('¹', "SUPERSCRIPT ONE"),                                   \

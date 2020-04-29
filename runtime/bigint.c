@@ -21,9 +21,9 @@
 
 #include "../mudlle-config.h"
 
-#include <stdlib.h>
 #include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bigint.h"
@@ -31,7 +31,7 @@
 #include "mudlle-float.h"
 #include "prims.h"
 
-TYPEDOP(isbigint, "bigint?", "`x -> `b. True if `x is a bigint", 1, (value x),
+TYPEDOP(isbigint, "bigint?", "`x -> `b. True if `x is a bigint", (value x),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(x, bigint));
@@ -41,7 +41,7 @@ TYPEDOP(isbigint, "bigint?", "`x -> `b. True if `x is a bigint", 1, (value x),
 static struct alloc_list {
   struct alloc_list *next;
   void *data;
-} *alloc_root = 0;
+} *alloc_root;
 
 #define MAX_BIGINT_SIZE (MAX_MUDLLE_OBJECT_SIZE         \
                          - sizeof (struct string)       \
@@ -82,12 +82,11 @@ static void mpz_free_fn(void *data, size_t size)
 
 void free_mpz_temps(void)
 {
-  for (struct alloc_list *m = alloc_root; m; )
+  for (struct alloc_list *m = alloc_root, *next; m; m = next)
     {
-      struct alloc_list *next = m->next;
+      next = m->next;
       free(m->data);
       free(m);
-      m = next;
     }
   alloc_root = NULL;
 }
@@ -115,7 +114,7 @@ double bigint_to_double(struct bigint *bi)
   return mpz_get_d(bi->mpz);
 }
 
-TYPEDOP(itobi, 0, "`n -> `bi. Return `n as a bigint", 1, (value n),
+TYPEDOP(itobi, , "`n -> `bi. Return `n as a bigint", (value n),
         OP_LEAF | OP_NOESCAPE | OP_CONST, "n.b")
 {
   mpz_t r;
@@ -126,8 +125,8 @@ TYPEDOP(itobi, 0, "`n -> `bi. Return `n as a bigint", 1, (value n),
   return v;
 }
 
-TYPEDOP(ftobi, 0, "`f -> `bi. Truncates `f into a bigint",
-        1, (struct mudlle_float *f), OP_LEAF | OP_NOESCAPE | OP_CONST, "D.b")
+TYPEDOP(ftobi, , "`f -> `bi. Truncates `f into a bigint",
+        (struct mudlle_float *f), OP_LEAF | OP_NOESCAPE | OP_CONST, "D.b")
 {
   double d = floatval(f);
 
@@ -142,28 +141,49 @@ TYPEDOP(ftobi, 0, "`f -> `bi. Truncates `f into a bigint",
   return v;
 }
 
-TYPEDOP(bitoa, 0, "`bi -> `s. Return a string representation for `bi",
-        1, (struct bigint *m), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.s")
+#define MAX_BITOA_LEN     65535
+
+static struct string *bitoa_base(struct bigint *m, int base,
+                                 const struct prim_op *op)
 {
   m = get_bigint(m);
-  char buf[mpz_sizeinbase(m->mpz, 10) + 2];
-  mpz_get_str(buf, 10, m->mpz);
+  size_t len = mpz_sizeinbase(m->mpz, 10);
+  if (mpz_sgn(m->mpz))
+    len += 1;
+  if (len > MAX_BITOA_LEN)
+    runtime_error_message(error_bad_value,
+                          "number too large to convert to string");
 
-  return make_readonly(alloc_string(buf));
+  /* can be unrealistically expensive */
+  expensive_operation(len / 8);
+
+  char *buf = malloc(len + 1);
+  mpz_get_str(buf, 10, m->mpz);
+  struct string *s = make_readonly(alloc_string(buf));
+  free(buf);
+  free_mpz_temps();
+  return s;
 }
 
-TYPEDOP(bitoa_base, 0, "`bi `n -> `s. Return a string representation for `bi,"
-        " base `n (2 - 32)",
-        2, (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
+TYPEDOP(bitoa, , "`bi -> `s. Return a string representation for `bi.\n"
+        "Causes an error if the representation execeeds"
+        " " STRINGIFY(MAX_BITOA_LEN) NBSP "characters.",
+        (struct bigint *m), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.s")
+{
+  return bitoa_base(m, 10, THIS_OP);
+}
+
+TYPEDOP(bitoa_base, , "`bi `n -> `s. Return a string representation for `bi,"
+        " base `n (2 - 32).\n"
+        "Causes an error if the representation execeeds"
+        " " STRINGIFY(MAX_BITOA_LEN) NBSP "characters.",
+        (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
         "Bn.s")
 {
-  m = get_bigint(m);
-  int n = GETRANGE(v, 2, 32);
-
-  char buf[mpz_sizeinbase(m->mpz, n) + 2];
-  mpz_get_str(buf, n, m->mpz);
-
-  return make_readonly(alloc_string(buf));
+  int n;
+  CHECK_TYPES(m, any,
+              v, CT_RANGE(n, 2, 32));
+  return bitoa_base(m, n, THIS_OP);
 }
 
 static value atobi(struct string *s, int base)
@@ -179,17 +199,17 @@ static value atobi(struct string *s, int base)
   return result;
 }
 
-TYPEDOP(atobi, 0, "`s -> `bi. Return the number in `s as a bigint or null"
+TYPEDOP(atobi, , "`s -> `bi. Return the number in `s as a bigint or null"
         " on error.",
-        1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_CONST, "s.[bu]")
+        (struct string *s), OP_LEAF | OP_NOESCAPE | OP_CONST, "s.[bu]")
 {
   CHECK_TYPES(s, string);
   return atobi(s, 0);
 }
 
-TYPEDOP(atobi_base, 0, "`s `n -> `bi. Return the number in `s encoded in"
+TYPEDOP(atobi_base, , "`s `n -> `bi. Return the number in `s encoded in"
         " base `n (2 <= `n <= 32) as a bigint or null on error.",
-        2, (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE | OP_CONST,
+        (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE | OP_CONST,
         "sn.[bu]")
 {
   int base;
@@ -198,8 +218,8 @@ TYPEDOP(atobi_base, 0, "`s `n -> `bi. Return the number in `s encoded in"
   return atobi(s, base);
 }
 
-TYPEDOP(bitoi, 0, "`bi -> `i. Return `bi as an integer (error if overflow)",
-        1, (struct bigint *m), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.n")
+TYPEDOP(bitoi, , "`bi -> `i. Return `bi as an integer (error if overflow)",
+        (struct bigint *m), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.n")
 {
   m = get_bigint(m);
 
@@ -210,38 +230,39 @@ TYPEDOP(bitoi, 0, "`bi -> `i. Return `bi as an integer (error if overflow)",
   return makeint(mpz_get_si(m->mpz));
 }
 
-TYPEDOP(bisgn, 0, "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0, or 1"
+TYPEDOP(bisgn, , "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0, or 1"
         " if `bi > 0",
-        1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.n")
+        (struct bigint *bi), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.n")
 {
   bi = get_bigint(bi);
   return makeint(mpz_sgn(bi->mpz));
 }
 
-TYPEDOP(bitof, 0, "`bi -> `f. Return `bi as a float",
-        1, (struct bigint *m), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.d")
+TYPEDOP(bitof, , "`bi -> `f. Return `bi as a float",
+        (struct bigint *m), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.d")
 {
   double d = mpz_get_d(get_bigint(m)->mpz);
-  return makefloat(d);
+  return alloc_float(d);
 }
 
-TYPEDOP(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
-        " 0 if `bi1 == `bi2, "
-        "and > 0 if `bi1 > `bi2", 2, (struct bigint *m1, struct bigint *m2),
+TYPEDOP(bicmp, , "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
+        " 0 if `bi1 == `bi2, and > 0 if `bi1 > `bi2",
+        (struct bigint *m1, struct bigint *m2),
         OP_LEAF | OP_NOESCAPE | OP_CONST, "BB.n")
 {
   GCPRO(m1, m2);
   m1 = get_bigint(m1);
   m2 = get_bigint(m2);
+  check_bigint(m1);             /* could have been corrupted */
   UNGCPRO();
 
   int res = mpz_cmp(m1->mpz, m2->mpz);
   return makeint(res < 0 ? -1 : res ? 1 : 0);
 }
 
-TYPEDOP(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
+TYPEDOP(bishl, , "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
         " negative `n.",
-        2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
+        (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
         "Bn.b")
 {
   long n = GETINT(v);
@@ -259,8 +280,8 @@ TYPEDOP(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
   return rm;
 }
 
-TYPEDOP(bipow, 0, "`bi1 `n -> `bi2. Returns `bi1 raised to the power `n",
-        2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
+TYPEDOP(bipow, , "`bi1 `n -> `bi2. Returns `bi1 raised to the power `n",
+        (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE | OP_CONST,
         "Bn.b")
 {
   bi = get_bigint(bi);
@@ -276,8 +297,8 @@ TYPEDOP(bipow, 0, "`bi1 `n -> `bi2. Returns `bi1 raised to the power `n",
   return rm;
 }
 
-TYPEDOP(bisqrt, 0, "`bi1 -> `bi2. Returns the integer part of sqrt(`bi1)",
-        1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.b")
+TYPEDOP(bisqrt, , "`bi1 -> `bi2. Returns the integer part of sqrt(`bi1)",
+        (struct bigint *bi), OP_LEAF | OP_NOESCAPE | OP_CONST, "B.b")
 {
   bi = get_bigint(bi);
   if (mpz_sgn(bi->mpz) < 0)
@@ -292,8 +313,8 @@ TYPEDOP(bisqrt, 0, "`bi1 -> `bi2. Returns the integer part of sqrt(`bi1)",
   return bi;
 }
 
-TYPEDOP(bifac, 0, "`n -> `bi1. Returns `n!",
-        1, (value v), OP_LEAF | OP_NOESCAPE | OP_CONST, "n.b")
+TYPEDOP(bifac, , "`n -> `bi1. Returns `n!",
+        (value v), OP_LEAF | OP_NOESCAPE | OP_CONST, "n.b")
 {
   long n = GETRANGE(v, 0, LONG_MAX);
 
@@ -308,7 +329,7 @@ TYPEDOP(bifac, 0, "`n -> `bi1. Returns `n!",
 
 #define BIUNOP(name, sname, desc)                               \
 TYPEDOP(bi ## name, sname, "`bi1 -> `bi2. Returns " desc,       \
-        1, (struct bigint *bi),                                 \
+        (struct bigint *bi),                                    \
         OP_LEAF | OP_NOESCAPE | OP_CONST,                       \
         "B.b")                                                  \
 {                                                               \
@@ -325,12 +346,13 @@ TYPEDOP(bi ## name, sname, "`bi1 -> `bi2. Returns " desc,       \
 #define BIBINOP(name, sname, sym, isdiv)                        \
 TYPEDOP(bi ## name, sname,                                      \
         "`bi1 `bi2 -> `bi3. Returns `bi1 " #sym " `bi2",        \
-        2, (struct bigint *bi1, struct bigint *bi2),            \
+        (struct bigint *bi1, struct bigint *bi2),               \
         OP_LEAF | OP_NOESCAPE | OP_CONST, "BB.b")               \
 {                                                               \
   GCPRO(bi1, bi2);                                              \
   bi1 = get_bigint(bi1);                                        \
   bi2 = get_bigint(bi2);                                        \
+  check_bigint(bi1);            /* could have been corrupted */ \
   UNGCPRO();                                                    \
                                                                 \
   if (isdiv && !mpz_cmp_si(bi2->mpz, 0))                        \
@@ -351,70 +373,69 @@ void free_mpz_temps(void)
 {
 }
 
-UNIMPLEMENTED(itobi, 0, "`n -> `bi. Return `n as a bigint", 1, (value n),
+UNIMPLEMENTED(itobi, , "`n -> `bi. Return `n as a bigint", (value n),
               OP_LEAF | OP_NOESCAPE, "n.b")
 
-UNIMPLEMENTED(ftobi, 0, "`f -> `bi. Truncates `f into a bigint",
-              1, (struct mudlle_float *f), OP_LEAF | OP_NOESCAPE, "D.b")
+UNIMPLEMENTED(ftobi, , "`f -> `bi. Truncates `f into a bigint",
+              (struct mudlle_float *f), OP_LEAF | OP_NOESCAPE, "D.b")
 
-UNIMPLEMENTED(bitoa, 0, "`bi -> `s. Return a string representation for `bi",
-              1, (struct bigint *m), OP_LEAF | OP_NOESCAPE, "B.s")
+UNIMPLEMENTED(bitoa, , "`bi -> `s. Return a string representation for `bi",
+              (struct bigint *m), OP_LEAF | OP_NOESCAPE, "B.s")
 
-UNIMPLEMENTED(bitoa_base, 0, "`bi `n -> `s. Return a string representation"
+UNIMPLEMENTED(bitoa_base, , "`bi `n -> `s. Return a string representation"
               " for `bi, base `n (2 - 32)",
-              2, (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE, "Bn.s")
+              (struct bigint *m, value v), OP_LEAF | OP_NOESCAPE, "Bn.s")
 
-UNIMPLEMENTED(atobi, 0, "`s -> `bi. Return the number in `s as a bigint",
-              1, (struct string *s), OP_LEAF | OP_NOESCAPE, "s.b")
+UNIMPLEMENTED(atobi, , "`s -> `bi. Return the number in `s as a bigint",
+              (struct string *s), OP_LEAF | OP_NOESCAPE, "s.b")
 
-UNIMPLEMENTED(atobi_base, 0, "`s `n -> `bi. Return the number in `s,"
+UNIMPLEMENTED(atobi_base, , "`s `n -> `bi. Return the number in `s,"
               " encoded in base `n (2 <= `n <= 32), as a bigint",
-              2, (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE,
+              (struct string *s, value mbase), OP_LEAF | OP_NOESCAPE,
               "sn.b")
 
-UNIMPLEMENTED(bitoi, 0, "`bi -> `i. Return `bi as an integer (error if"
+UNIMPLEMENTED(bitoi, , "`bi -> `i. Return `bi as an integer (error if"
               " overflow)",
-              1, (struct bigint *m), OP_LEAF | OP_NOESCAPE, "B.n")
+              (struct bigint *m), OP_LEAF | OP_NOESCAPE, "B.n")
 
-UNIMPLEMENTED(bisgn, 0, "`bi -> `n. Return -1 if `bi < 0, 0 if `bi == 0, or 1"
+UNIMPLEMENTED(bisgn, , "`bi -> `n. Return -1 if `bi < 0,  if `bi == 0, or 1"
               " if `bi > 0",
-              1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE, "B.n")
+              (struct bigint *bi), OP_LEAF | OP_NOESCAPE, "B.n")
 
-UNIMPLEMENTED(bitof, 0, "`bi -> `f. Return `bi as a float",
-              1, (struct bigint *m), OP_LEAF | OP_NOESCAPE, "B.d")
+UNIMPLEMENTED(bitof, , "`bi -> `f. Return `bi as a float",
+              (struct bigint *m), OP_LEAF | OP_NOESCAPE, "B.d")
 
-UNIMPLEMENTED(bicmp, 0, "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
-              " 0 if `bi1 == `bi2, "
-              "and > 0 if `bi1 > `bi2",
-              2, (struct bigint *m1, struct bigint *m2),
+UNIMPLEMENTED(bicmp, , "`bi1 `bi2 -> `n. Returns < 0 if `bi1 < `bi2,"
+              " 0 if `bi1 == `bi2, and > 0 if `bi1 > `bi2",
+              (struct bigint *m1, struct bigint *m2),
               OP_LEAF | OP_NOESCAPE, "BB.n")
 
-UNIMPLEMENTED(bishl, 0, "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
+UNIMPLEMENTED(bishl, , "`bi1 `n -> `bi2. Returns `bi1 << `n. Shifts right for"
               " negative `n. The latter rounds towards zero.",
-              2, (struct bigint *bi, value v),
+              (struct bigint *bi, value v),
               OP_LEAF | OP_NOESCAPE | OP_CONST,
               "Bn.b")
 
-UNIMPLEMENTED(bipow, 0, "`bi1 `n -> `bi2. Returns `bi1 raised to the power `n",
-              2, (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE,
+UNIMPLEMENTED(bipow, , "`bi1 `n -> `bi2. Returns `bi1 raised to the power `n",
+              (struct bigint *bi, value v), OP_LEAF | OP_NOESCAPE,
               "Bn.b")
 
-UNIMPLEMENTED(bisqrt, 0, "`bi1 -> `bi2. Returns the integer part of"
+UNIMPLEMENTED(bisqrt, , "`bi1 -> `bi2. Returns the integer part of"
               " sqrt(`bi1)",
-              1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE, "B.b")
+              (struct bigint *bi), OP_LEAF | OP_NOESCAPE, "B.b")
 
-UNIMPLEMENTED(bifac, 0, "`n -> `bi1. Returns `n!",
-              1, (value v), OP_LEAF | OP_NOESCAPE, "n.b")
+UNIMPLEMENTED(bifac, , "`n -> `bi1. Returns `n!",
+              (value v), OP_LEAF | OP_NOESCAPE, "n.b")
 
 #define BIUNOP(name, sname, desc)                               \
 UNIMPLEMENTED(bi ## name, sname, "`bi1 -> `bi2. Returns " desc, \
-              1, (struct bigint *bi), OP_LEAF | OP_NOESCAPE,    \
+              (struct bigint *bi), OP_LEAF | OP_NOESCAPE,    \
               "B.b")
 
 #define BIBINOP(name, sname, sym, isdiv)                        \
 UNIMPLEMENTED(bi ## name, sname,                                \
               "`bi1 `bi2 -> `bi3. Returns `bi1 " #sym " `bi2",  \
-              2, (struct bigint *bi1, struct bigint *bi2),      \
+              (struct bigint *bi1, struct bigint *bi2),      \
               OP_LEAF | OP_NOESCAPE, "BB.b")
 
 #endif /* ! USE_GMP */

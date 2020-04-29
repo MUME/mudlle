@@ -125,7 +125,8 @@ mc:v_static = 7;
 mc:no_loc = '(-1 . -1);
 
 [
-  | globals, kglobals, dglobals, vindex, make_global, string_cache |
+  | globals, kglobals, dglobals, vindex, make_global,
+    string_cache, float_cache |
 
   vindex = 0;
 
@@ -135,6 +136,7 @@ mc:no_loc = '(-1 . -1);
       dglobals = make_table();
       kglobals = make_table();
       string_cache = make_ctable();
+      float_cache = make_ctable();
     ];
   mc:reset_var_cache();
 
@@ -170,11 +172,21 @@ mc:no_loc = '(-1 . -1);
 
   mc:var_make_constant = fn "x -> var. Returns a new constant variable with value x" (x)
     [
+      | cache, cachekey |
+      cache = string_cache;
+      cachekey = x;
       assert(readonly?(x));
-      if (string?(x))
+
+      if (float?(x))
+        [
+          cachekey = format("%a", x);
+          cache = float_cache;
+        ];
+
+      if (string?(cachekey))
         [
           | sym, v |
-          sym = table_symbol_ref(string_cache, x, null);
+          sym = table_symbol_ref(cache, cachekey, null);
           v = symbol_get(sym);
           if (!vector?(v))
             [
@@ -183,6 +195,7 @@ mc:no_loc = '(-1 . -1);
             ];
           exit<function> v;
         ];
+
       vector(mc:v_constant, "", x, ++vindex, false, null, false);
     ];
 

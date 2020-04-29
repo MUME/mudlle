@@ -39,12 +39,7 @@ static inline double floatval(value v)
   return d;
 }
 
-static inline value makefloat(double d)
-{
-  return (value)alloc_mudlle_float(d);
-}
-
-#define DEF_FLOAT(var) system_define(#var, makefloat(var))
+#define DEF_FLOAT(var) system_define(#var, alloc_float(var))
 
 #ifdef USE_GMP
 #define FLOAT_TYPESET (TSET(integer) | TSET(bigint) | TSET(float))

@@ -112,16 +112,11 @@ static struct string_oport *get_string_port(struct oport *p)
 
 static ulong port_length(struct string_oport *p)
 {
-  struct string_oport_block *current = p->first;
-  ulong size;
-
-  size = 0;
-  while (current->next)
-    {
-      size += STRING_BLOCK_SIZE;
-      current = current->next;
-    }
-  return size + intval(p->pos);
+  struct string_oport_block *block = p->first;
+  ulong size = intval(p->pos);
+  while ((block = block->next))
+    size += STRING_BLOCK_SIZE;
+  return size;
 }
 
 static struct string_oport_block *new_string_block(void)
@@ -283,6 +278,7 @@ static void string_stat(struct oport *oport, struct oport_stat *buf)
 }
 
 static const struct oport_methods string_port_methods = {
+  .name   = "string",
   .close  = string_close,
   .putnc  = string_putnc,
   .write  = string_write,
@@ -450,6 +446,7 @@ static void line_port_stat(struct oport *_p, struct oport_stat *buf)
 }
 
 static const struct oport_methods line_port_methods = {
+  .name   = "line",
   .close  = line_port_close,
   .putnc  = line_port_putnc,
   .write  = line_port_write,
@@ -568,6 +565,7 @@ static void sink_stat(struct oport *_p, struct oport_stat *buf)
 }
 
 static const struct oport_methods sink_port_methods = {
+  .name   = "sink",
   .close  = sink_close,
   .putnc  = sink_putnc,
   .write  = sink_write,
@@ -584,6 +582,7 @@ struct oport *make_sink_oport(void)
 }
 
 static const struct oport_methods file_port_methods = {
+  .name   = "file",
   .close  = file_close,
   .putnc  = file_putnc,
   .write  = file_write,
@@ -696,7 +695,7 @@ bool port_for_blocks(struct oport *_p,
         }
       current = current->next;
     }
-  f(data, current->data, pos);
+  result = f(data, current->data, pos);
  done:
   UNGCPRO();
   return result;
@@ -726,7 +725,7 @@ void port_append(struct oport *p1, struct oport *_p2)
 
 static const char basechars[16] = "0123456789abcdef";
 
-static char *simple_uinttostr(struct intstr *str, unsigned base, unsigned u)
+char *ulongtostr(struct intstr *str, unsigned base, unsigned long u)
 {
   char *pos = str->s + sizeof str->s;
   *--pos = '\0';
@@ -739,13 +738,12 @@ static char *simple_uinttostr(struct intstr *str, unsigned base, unsigned u)
   return pos;
 }
 
-static char *simple_inttostr(struct intstr *str, unsigned base, int i)
+char *longtostr(struct intstr *str, unsigned base, long l)
 {
-  assert(i != INT_MIN);
-  bool minus = i < 0;
-  if (minus)
-    i = -i;
-  char *pos = simple_uinttostr(str, base, i);
+  bool minus = l < 0;
+  /* handle LONG_MIN */
+  unsigned long ul = minus ? -(l + 1) + 1ULL : l;
+  char *pos = ulongtostr(str, base, ul);
   if (minus)
     *--pos = '-';
   return pos;
@@ -759,20 +757,9 @@ static char *internal_inttostr(struct intstr *str, unsigned base,
   *--pos = '\0';
 
   int i = wide ? 3 : -1;
-  bool minus = false;
-  if (is_signed && (long long)n < 0)
-    {
-      minus = true;
-      if ((long long)n <= -16)
-	{
-	  /* this is to take care of LLONG_MIN */
-          lldiv_t q = lldiv((long long)n, base);
-	  *--pos = basechars[-q.rem];
-	  n = q.quot;
-	  --i;
-	}
-      n = -(long long)n;
-    }
+  bool minus = is_signed && (long long)n < 0;
+  if (minus)
+    n = -((long long)n + 1) + 1ULL; /* handle LLONG_MIN */
 
   do
     {
@@ -797,18 +784,6 @@ static char *internal_inttostr(struct intstr *str, unsigned base,
    Effects: Prints the ASCII representation of n in base base to str.
    Returns: A pointer to the start of the result.
 */
-char *longtostr(struct intstr *str, unsigned base, long n)
-{
-  if (sizeof (long) == sizeof (int) && n != LONG_MIN)
-    return simple_inttostr(str, base, n);
-  return internal_inttostr(str, base, n, true, false);
-}
-char *ulongtostr(struct intstr *str, unsigned base, ulong n)
-{
-  if (sizeof (long) == sizeof (int))
-    return simple_uinttostr(str, base, n);
-  return internal_inttostr(str, base, n, false, false);
-}
 char *ulongtostr_wide(struct intstr *str, ulong n)
 {
   return internal_inttostr(str, 10, n, false, true);
@@ -883,7 +858,7 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
             {
               prec = va_arg(args, int);
               if (prec < 0)
-                prec = 0;
+                prec = -1;
               ++fmt;
             }
           else
@@ -953,34 +928,27 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
             space = plus = false;
 
             unsigned long long ull;
-            unsigned u;
+            unsigned long ul;
             switch (isize)
               {
-              case sz_char:
-                u = (unsigned char)va_arg(args, unsigned);
-                break;
+              case sz_char:  ul = (unsigned char)va_arg(args, unsigned); break;
               case sz_short:
-                u = (unsigned short)va_arg(args, unsigned);
+                ul = (unsigned short)va_arg(args, unsigned);
                 break;
-              case sz_int: u = va_arg(args, unsigned); break;
-              case sz_long:
-                if (sizeof (long) > sizeof (int))
-                  {
-                    ull = va_arg(args, unsigned long);
-                    goto generic_uint;
-                  }
-                u = va_arg(args, unsigned);
-                break;
+              case sz_int:   ul = va_arg(args, unsigned); break;
+              case sz_long:  ul = va_arg(args, unsigned long); break;
               case sz_llong:
-                ull = va_arg(args, unsigned long long);
-                goto generic_uint;
+                ul = ull = va_arg(args, unsigned long long);
+                if (ul != ull || widefmt)
+                  goto generic_uint;
+                break;
               }
             if (widefmt)
               {
-                ull = u;
+                ull = ul;
                 goto generic_uint;
               }
-            add = simple_uinttostr(&ibuf, base, u);
+            add = ulongtostr(&ibuf, base, ul);
             goto add_int;
           generic_uint:
             add = internal_inttostr(&ibuf, base, ull, false, widefmt);
@@ -990,30 +958,25 @@ void vpprintf(struct oport *p, const char *fmt, va_list args)
 	case 'd':
           {
             long long ll;
-            int i;
+            long l;
             switch (isize)
               {
-              case sz_char:  i = (signed char)va_arg(args, int); break;
-              case sz_short: i = (signed short)va_arg(args, int); break;
-              case sz_int:   i = va_arg(args, int); break;
-              case sz_long:
-                if (sizeof (long) > sizeof (int))
-                  {
-                    ll = va_arg(args, long);
-                    goto generic_int;
-                  }
-                i = va_arg(args, long);
-                break;
+              case sz_char:  l = (signed char)va_arg(args, int); break;
+              case sz_short: l = (signed short)va_arg(args, int); break;
+              case sz_int:   l = va_arg(args, int); break;
+              case sz_long:  l = va_arg(args, long); break;
               case sz_llong:
-                ll = va_arg(args, long long);
-                goto generic_int;
+                l = ll = va_arg(args, long long);
+                if (l != ll || widefmt)
+                  goto generic_int;
+                break;
               }
-            if (widefmt || i == INT_MIN)
+            if (widefmt)
               {
-                ll = i;
+                ll = l;
                 goto generic_int;
               }
-            add = simple_inttostr(&ibuf, 10, i);
+            add = longtostr(&ibuf, 10, l);
             goto add_int;
 
           generic_int:
@@ -1203,6 +1166,7 @@ static void mudout_stat(struct oport *p, struct oport_stat *buf)
 }
 
 static const struct oport_methods mudout_port_methods = {
+  .name   = "stdout",
   .close  = mudout_close,
   .putnc  = mudout_putnc,
   .write  = mudout_write,
@@ -1275,6 +1239,7 @@ static void capped_stat(struct oport *p, struct oport_stat *buf)
 }
 
 static const struct oport_methods capped_port_methods = {
+  .name   = "capped",
   .close  = capped_close,
   .putnc  = capped_putnc,
   .write  = capped_write,

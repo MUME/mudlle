@@ -13,8 +13,8 @@
 #include "dwarf.h"
 #include "elf.h"
 #include "error.h"
-#include "strbuf.h"
 #include "mvalues.h"
+#include "strbuf.h"
 #include "types.h"
 #include "utils.h"
 
@@ -67,17 +67,17 @@ static void emit_u8(struct strbuf *sb, uint8_t u)
   sb_addmem(sb, &u, sizeof u);
 }
 
-static void emit_u16(struct strbuf *sb, uint16_t u)
+static void UNUSED emit_u16(struct strbuf *sb, uint16_t u)
 {
   sb_addmem(sb, &u, sizeof u);
 }
 
-static void emit_u32(struct strbuf *sb, uint32_t u)
+static void UNUSED emit_u32(struct strbuf *sb, uint32_t u)
 {
   sb_addmem(sb, &u, sizeof u);
 }
 
-static void emit_uintptr(struct strbuf *sb, uintptr_t u)
+static void UNUSED emit_uintptr(struct strbuf *sb, uintptr_t u)
 {
   sb_addmem(sb, &u, sizeof u);
 }
@@ -99,7 +99,7 @@ static uint64_t read_leb_u(const uint8_t **pos)
 static int64_t read_leb_s(const uint8_t **pos)
 {
   int64_t r = 0;
-  int bit = 0;
+  unsigned bit = 0;
   for (;;)
     {
       uint8_t n = *(*pos)++;
@@ -108,7 +108,7 @@ static int64_t read_leb_s(const uint8_t **pos)
       if (~n & 0x80)
         {
           if (n & 0x40)
-            r |= (int64_t)-1 << bit;
+            r |= ~UINT64_C(0) << bit;
           return r;
         }
     }
@@ -142,7 +142,7 @@ static void emit_leb_u(struct strbuf *sb, uint64_t u)
   while (u);
 }
 
-static unsigned leb_u_len(uint64_t u)
+static unsigned UNUSED leb_u_len(uint64_t u)
 {
   unsigned len = 0;
   do
@@ -154,7 +154,7 @@ static unsigned leb_u_len(uint64_t u)
   return len;
 }
 
-static unsigned leb_s_len(int64_t i)
+static unsigned UNUSED leb_s_len(int64_t i)
 {
   unsigned len = 0;
   for (;;)
@@ -201,6 +201,7 @@ enum {
   DW_advance_loc4 = 4
 };
 
+#ifndef NOCOMPILER
 static void emit_cfi_advance(struct strbuf *sb, uint64_t u)
 {
   if (u < (1 << 6))
@@ -269,7 +270,7 @@ static void emit_dwarf_cfi_fde(struct strbuf *sb, struct mcode *mcode,
   emit_leb_u(sb, DWARF_REG_FP);
 
   /* pad and update size */
-  sb_addnc(sb, 0, -sb_len(sb) & (sizeof (uint32_t) - 1));
+  sb_addnc(sb, 0, PADDING(sb_len(sb), sizeof (uint32_t)));
   uint32_t size = sb_len(sb) - start - sizeof size;
   memcpy(sb_mutable_str(sb) + start, &size, sizeof size);
 }
@@ -411,6 +412,8 @@ static void emit_symtab(struct strbuf *sbsymtab, struct strtab_data *strtab,
 }
 #endif  /* EMIT_SYMTAB */
 
+#endif  /* ! NOCOMPILER */
+
 enum {
   DW_LNS_copy               = 0x01,
   DW_LNS_advance_pc         = 0x02,
@@ -451,6 +454,7 @@ struct lni_header {
   uint8_t opcode_base;
   uint8_t std_opcode_lens[LNI_OPCODE_BASE - 1];
 } __attribute__((__packed__));
+CASSERT_SIZEOF(struct lni_header, 14 + LNI_OPCODE_BASE);
 
 static const struct lni_header lni_header = {
   .version         = 3,
@@ -467,6 +471,7 @@ static const struct lni_header lni_header = {
   }
 };
 
+#ifndef NOCOMPILER
 static struct strbuf build_lni(struct ary *ary)
 {
   struct strbuf sblni = sb_initmem(&lni_header, sizeof lni_header);
@@ -945,6 +950,18 @@ void reset_dwarf_mcodes(unsigned gen)
   dwarf_entries[gen].count = 0;
   dwarf_entries[gen].nodes = NULL;
 }
+
+#else  /* NOCOMPILER */
+
+void reset_dwarf_mcodes(unsigned gen)
+{
+}
+
+void register_dwarf_mcodes(unsigned gen, struct ary *a)
+{
+}
+
+#endif  /* NOCOMPILER */
 
 uint32_t dwarf_lookup_line_number(struct code *code, uint32_t addr)
 {

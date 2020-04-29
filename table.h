@@ -44,11 +44,19 @@ static inline bool is_ctable(struct table *t)
 
 struct symbol *table_lookup_len(struct table *table, const char *name,
                                 size_t len);
-struct symbol *table_mlookup(struct table *table, struct string *name);
 static inline struct symbol *table_lookup(struct table *table,
                                           const char *name)
 {
   return table_lookup_len(table, name, strlen(name));
+}
+
+struct symbol *table_mlookup_substring(struct table *table,
+                                       struct string *name,
+                                       long idx, long len);
+static inline struct symbol *table_mlookup(struct table *table,
+                                           struct string *name)
+{
+  return table_mlookup_substring(table, name, 0, string_len(name));
 }
 
 /* Effects: Looks for name in the symbol table table (case insensitive).
@@ -121,21 +129,8 @@ struct table *table_shallow_copy(struct table *table);
 
 void rehash_table(struct table *table);
 
-ulong symbol_hash_len(const char *name, size_t len, ulong size);
-ulong case_symbol_hash_len(const char *name, size_t len, ulong size);
-
 #define DEF_TABLE_SIZE 8	/* Convenient initial size */
 
-static inline int table_good_size(int entries)
-{
-  entries = (entries * 4 + 2) / 3;
-  /* find next higher power of two */
-  entries |= entries >> 1;
-  entries |= entries >> 2;
-  entries |= entries >> 4;
-  entries |= entries >> 8;
-  entries |= entries >> 16;
-  return ++entries;
-}
+int table_good_size(int entries);
 
 #endif /* TABLE_H */

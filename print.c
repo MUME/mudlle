@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "alloc.h"
+#include "charset.h"
 #include "code.h"
 #include "context.h"
 #include "dwarf.h"
@@ -39,6 +40,7 @@
 #include "table.h"
 #include "utils.h"
 
+#include "runtime/bigint.h"
 #include "runtime/mudlle-string.h"
 
 
@@ -88,13 +90,9 @@ void sb_write_string(struct strbuf *sb, const char *str, size_t len)
       switch (c)
         {
         case '\\': case '"': sb_addc(sb, c); break;
-        case '\a': sb_addc(sb, 'a'); break;
-        case '\b': sb_addc(sb, 'b'); break;
-        case '\f': sb_addc(sb, 'f'); break;
-        case '\n': sb_addc(sb, 'n'); break;
-        case '\r': sb_addc(sb, 'r'); break;
-        case '\t': sb_addc(sb, 't'); break;
-        case '\v': sb_addc(sb, 'v'); break;
+#define _E(escchr, chr) case escchr: sb_addc(sb, chr); break
+          FOR_CHAR_ESCAPES(_E, SEP_SEMI);
+#undef _E
         default: sb_printf(sb, "%03o", c); break;
         }
     }
@@ -148,13 +146,9 @@ static bool output_string(struct print_config *config, struct string *print,
       switch (c)
         {
         case '\\': case '"': pputc(c, config->f); break;
-        case '\a': pputc('a', config->f); break;
-        case '\b': pputc('b', config->f); break;
-        case '\f': pputc('f', config->f); break;
-        case '\n': pputc('n', config->f); break;
-        case '\r': pputc('r', config->f); break;
-        case '\t': pputc('t', config->f); break;
-        case '\v': pputc('v', config->f); break;
+#define _E(escchr, chr) case escchr: pputc(chr, config->f); break
+          FOR_CHAR_ESCAPES(_E, SEP_SEMI);
+#undef _E
         default: pprintf(config->f, "%03o", c); break;
         }
 
@@ -211,7 +205,7 @@ static int write_instruction(struct oport *f, union instruction *i,
   static const char *const brname[] = { "", "(loop)", "(nz)", "(z)" };
   static const char *const builtin_names[] = {
     "eq", "neq", "gt", "lt", "le", "ge", "ref", "set",
-    "add", "sub", "bitand", "bitor", "not" };
+    "add", "addint", "sub", "bitand", "bitor", "not" };
   CASSERT_VLEN(builtin_names, op_builtin_not - op_builtin_eq + 1);
 
 #define insinstr()  (*i++)
@@ -378,7 +372,7 @@ static bool write_code(struct print_config *config, value v)
 static bool write_primitive(struct print_config *config, value v)
 {
   struct primitive *prim = v;
-  pputs(prim->op->name, config->f);
+  pswrite(config->f, prim->op->name);
   pputs("()", config->f);
   return true;
 }
@@ -605,19 +599,9 @@ static bool write_reference(struct print_config *config, value v)
           pputc(')', config->f);
           break;
         }
-      if (TYPE(r1, vector))
-        {
-          struct vector *fns = (struct vector *)r1;
-          assert(vector_len(fns) == 3);
-          struct string *desc = fns->data[0];
-          assert(TYPE(desc, string));
-          pputs("<", config->f);
-          pswrite(config->f, desc);
-          pputc('>', config->f);
-          break;
-        }
       print_value(config, r0);
       pputc('[', config->f);
+      r1 = rec->data[1];        /* there might have been a GC */
       if (!print_value(config, r1))
         {
           result = false;
@@ -637,6 +621,13 @@ static bool write_character(struct print_config *config, value v)
 
 static bool write_object(struct print_config *config, value v)
 {
+  return true;
+}
+
+static bool write_oport(struct print_config *config, value v)
+{
+  struct oport *op = v;
+  pprintf(config->f, "{%s oport}", oport_name(op));
   return true;
 }
 
@@ -695,12 +686,36 @@ static bool write_bigint(struct print_config *config, value v)
 #ifdef USE_GMP
   struct bigint *bi = v;
   check_bigint(bi);
-  int size = mpz_sizeinbase(bi->mpz, 10);
-  char buf[size + 2];
-  mpz_get_str(buf, 10, bi->mpz);
+  size_t size = mpz_sizeinbase(bi->mpz, 10);
+  if (config->maxlen == SIZE_MAX && size > MAX_PRINT_STRLEN)
+    {
+      pputs("{bigint}", config->f);
+      return true;
+    }
+
+  /* if number is much larger than the number of characters to print,
+     divide by a power of 10 to make printing cheaper */
+  bool do_quotient = (config->maxlen < SIZE_MAX - 128
+                      && size > config->maxlen + 128);
+  mpz_t mquotient;
+  if (do_quotient)
+    {
+      mpz_init_set_ui(mquotient, 10);
+      /* 3 for luck */
+      mpz_pow_ui(mquotient, mquotient, size - config->maxlen - 3);
+      mpz_div(mquotient, bi->mpz, mquotient);
+      size = mpz_sizeinbase(mquotient, 10);
+    }
+
+  char *buf = malloc(size + 2); /* space for sign and nul */
+  mpz_get_str(buf, 10, do_quotient ? mquotient : bi->mpz);
+  if (do_quotient)
+    mpz_clear(mquotient);
   if (config->level != prt_display)
     pputs("#b", config->f);
   pputs(buf, config->f);
+  free_mpz_temps();
+  free(buf);
 #else
   pputs("{bigint-unsupported}", config->f);
 #endif
@@ -750,20 +765,17 @@ static bool print_value(struct print_config *config, value v)
       [type_symbol]   = true,
       [type_table]    = true,
       [type_gone]     = true,
-      [type_oport]    = true,
       [type_mcode]    = true,
     },
     [prt_write] = {
       [type_code]     = true,
       [type_internal] = true,
       [type_gone]     = true,
-      [type_oport]    = true,
       [type_mcode]    = true,
     },
     [prt_examine] = {
       [type_internal] = true,
       [type_gone]     = true,
-      [type_oport]    = true,
       [type_mcode]    = true,
     }
   };
@@ -828,7 +840,7 @@ static bool print_value(struct print_config *config, value v)
     [type_internal]  = NULL,    /* always hidden */
     [type_null]      = NULL,    /* handled above */
     [type_object]    = write_object,
-    [type_oport]     = NULL,    /* always hidden */
+    [type_oport]     = write_oport,
     [type_pair]      = write_list,
     [type_primitive] = write_primitive,
     [type_private]   = write_private,
@@ -990,13 +1002,6 @@ bool print_constant(struct oport *f, value v, size_t maxlen,
 
 void describe_fn(struct strbuf *sb, value v)
 {
-  struct oport *op;
-  {
-    GCPRO(v);
-    op = make_strbuf_oport(sb);
-    UNGCPRO();
-  }
-
   if (!pointerp(v))
     goto no_fn;
 
@@ -1008,7 +1013,8 @@ void describe_fn(struct strbuf *sb, value v)
     case type_varargs:
       {
         struct primitive *prim = v;
-        pprintf(op, "%s() [%s]", prim->op->name, mudlle_type_names[o->type]);
+        sb_printf(sb, "%s() [%s]", prim->op->name->str,
+                  mudlle_type_names[o->type]);
         return;
       }
     case type_closure:
@@ -1016,25 +1022,21 @@ void describe_fn(struct strbuf *sb, value v)
         struct closure *cl = v;
         struct code *code = cl->code;
         struct string *name = code->varname;
-        struct string *filename = code->filename;
-        long lineno = code->lineno;
-
-        GCPRO(op, filename);
-        if (name)
-          pswrite(op, name);
-        else
-          pputs("<fn>", op);
-        pputs("() [", op);
-        pswrite(op, filename);
-        pprintf(op, ":%ld]", lineno);
-        UNGCPRO();
+        sb_printf(sb, "%s() [%s:%d]",
+                  name ? name->str : "<fn>",
+                  code->filename->str,
+                  code->lineno);
         return;
       }
     default:
       break;
     }
 
- no_fn:
+ no_fn: ;
+
+  GCPRO(v);
+  struct oport *op = make_strbuf_oport(sb);
+  UNGCPRO();
   output_value(op, prt_display, v);
 }
 

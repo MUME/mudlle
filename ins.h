@@ -113,8 +113,6 @@ void peephole(struct fncode *fn);
 struct icode *generate_fncode(struct fncode *fn,
                               struct string *help,
                               struct string *varname,
-                              struct string *afilename,
-                              struct string *anicename,
                               const struct loc *loc,
                               struct obj *arguments,
                               unsigned return_typeset,

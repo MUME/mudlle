@@ -21,8 +21,8 @@
 
 #include "mudlle-config.h"
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "alloc.h"
 #include "calloc.h"
@@ -159,9 +159,9 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
       if (mstatus < module_loaded)
 	{
 	  if (mstatus == module_loading)
-	    log_error(&mods->loc, "loop in requires of %s", mods->var);
+	    compile_error(&mods->loc, "loop in requires of %s", mods->var);
 	  else
-	    log_error(&mods->loc, "failed to load %s", mods->var);
+	    compile_error(&mods->loc, "failed to load %s", mods->var);
           goto early_errout;
 	}
       lmodules = new_mlist(heap, mods, mstatus, lmodules);
@@ -186,19 +186,19 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
       enum vstatus ostatus = module_vstatus(n, &omod);
 
       if (ostatus == var_system_write)
-        log_error(&defines->loc,
+        compile_error(&defines->loc,
                   "cannot define %s: cannot be written from mudlle",
                   defines->var);
       else if ((ostatus == var_write && seclev < SECLEVEL_GLOBALS)
                || ostatus == var_system_write)
-	log_error(&defines->loc,
+        compile_error(&defines->loc,
                   "cannot define %s: exists and is writable", defines->var);
       else if (!module_vset(n, var_module, this_module))
-        log_error(&defines->loc,
+        compile_error(&defines->loc,
                   "cannot define %s: belongs to module %s", defines->var,
                   omod->str);
       else if (ostatus == var_write)
- 	compile_warning(&defines->loc, "%s was writable", defines->var);
+        compile_warning(&defines->loc, "%s was writable", defines->var);
 
       definable = new_glist(heap, n, &defines->loc, definable);
     }
@@ -208,7 +208,7 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
       ulong n = global_lookup(writes->var);
 
       if (in_glist(n, definable, false))
-        log_error(&writes->loc, "cannot write and define %s", writes->var);
+        compile_error(&writes->loc, "cannot write and define %s", writes->var);
 
       if (!module_vset(n, var_write, NULL))
 	{
@@ -217,7 +217,7 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
 	  switch (vs)
 	    {
 	    case var_system_write:
-	      log_error(&writes->loc,
+	      compile_error(&writes->loc,
                         "cannot write %s from mudlle", writes->var);
 	      break;
 	    case var_system_mutable:
@@ -226,7 +226,7 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
               break;
 	    case var_module:
 	      assert(TYPE(belongs, string));
-	      log_error(&writes->loc,
+	      compile_error(&writes->loc,
                         "cannot write %s: belongs to module %s", writes->var,
 			belongs->str);
 	      break;
@@ -245,7 +245,7 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
       ulong n = global_lookup(reads->var);
 
       if (in_glist(n, definable, false))
-        log_error(&reads->loc, "cannot read and define %s", reads->var);
+        compile_error(&reads->loc, "cannot read and define %s", reads->var);
 
       readable = new_glist(heap, n, &reads->loc, readable);
     }
@@ -257,11 +257,11 @@ bool mstart(struct alloc_block *heap, struct mfile *f, seclev_t seclev)
         continue;
 
       if (in_glist(n, definable, false))
-        log_error(&statics->loc, "cannot define static %s", statics->var);
+        compile_error(&statics->loc, "cannot define static %s", statics->var);
       if (in_glist(n, writable, false))
-        log_error(&statics->loc, "cannot write static %s", statics->var);
+        compile_error(&statics->loc, "cannot write static %s", statics->var);
       if (in_glist(n, readable, false))
-        log_error(&statics->loc, "cannot read static %s", statics->var);
+        compile_error(&statics->loc, "cannot read static %s", statics->var);
     }
 
   if (erred)
@@ -311,10 +311,10 @@ void mrecall(const struct loc *loc, ulong n, const char *name,
             }
         }
       else if (!all_readable && imported(mod->str, 1) == module_unloaded)
-        log_error(loc, "read of global %s (module %s)", name, mod->str);
+        compile_error(loc, "read of global %s (module %s)", name, mod->str);
     }
   else if (!all_readable)
-    log_error(loc, "read of global %s", name);
+    compile_error(loc, "read of global %s", name);
 
    ins2(op_recall_global, n, fn);
 }
@@ -393,10 +393,10 @@ void mexecute(const struct loc *loc, ulong n, const char *name, int count,
             }
         }
       else if (!all_readable && imported(mod->str, 1) == module_unloaded)
-        log_error(loc, "read of global %s (module %s)", name, mod->str);
+        compile_error(loc, "read of global %s (module %s)", name, mod->str);
     }
   else if (!all_readable)
-    log_error(loc,"read of global %s", name);
+    compile_error(loc,"read of global %s", name);
 
  skip_checks:
   if (count == 1)
@@ -425,7 +425,7 @@ bool mwritable(const struct loc *loc, ulong n, const char *name)
     }
   if (GMUTABLE(n))
     return true;
-  log_error(loc, "write of global %s", name);
+  compile_error(loc, "write of global %s", name);
   return false;
 }
 
@@ -449,7 +449,7 @@ void massign(const struct loc *loc, ulong n, const char *name,
 	ins2(op_define, n, fn);
       }
     else
-      log_error(loc, "write of global %s (module %s)", name, mod->str);
+      compile_error(loc, "write of global %s (module %s)", name, mod->str);
   else if (mwritable(loc, n, name))
     ins2(op_assign_global, n, fn);
 }
@@ -460,15 +460,14 @@ void mwarn_module(seclev_t seclev, struct block *b)
 
   for (struct mlist *ml = imported_modules; ml; ml = ml->next)
     if (!ml->used)
-      warning_loc(b->filename, b->nicename, &ml->var->loc,
+      compile_warning(&ml->var->loc,
                   "symbols from required module %s were never used",
                   ml->var->var);
 
   for (struct glist *gl = readable; gl; gl = gl->next)
     {
       if (!gl->used)
-        warning_loc(b->filename, b->nicename, &gl->loc,
-                    "readable global %s was never read",
+        compile_warning(&gl->loc, "readable global %s was never read",
                     GNAME(gl->n)->str);
       struct string *belongs;
       if (module_vstatus(gl->n, &belongs) == var_module)
@@ -481,8 +480,7 @@ void mwarn_module(seclev_t seclev, struct block *b)
               sb_add_seclevel(&sblev, mlev);
               sb_addstr(&sblev, ")");
             }
-          warning_loc(b->filename, b->nicename, &gl->loc,
-                      "reads global variable %s defined in %s%s",
+          compile_warning(&gl->loc, "reads global variable %s defined in %s%s",
                       GNAME(gl->n)->str, belongs->str, sb_str(&sblev));
           sb_free(&sblev);
         }
@@ -490,13 +488,12 @@ void mwarn_module(seclev_t seclev, struct block *b)
 
   for (struct glist *gl = writable; gl; gl = gl->next)
     if (!gl->used)
-      warning_loc(b->filename, b->nicename, &gl->loc,
-                  "writable global %s was never written",
+      compile_warning(&gl->loc, "writable global %s was never written",
                   GNAME(gl->n)->str);
 
   for (struct glist *gl = definable; gl; gl = gl->next)
     if (!gl->used)
-      warning_loc(b->filename, b->nicename, &gl->loc,
+      compile_warning(&gl->loc,
                   "definable variable %s was never defined",
                   GNAME(gl->n)->str);
 }

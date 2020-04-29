@@ -387,32 +387,38 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
   x64:gassemble = fn (code)
     [
       // Generate error calls
-      lforeach
-	(fn (err)
-	 [
-           | errno, label, args, loc |
-           @[errno loc args label] = err;
-           mc:set_loc(loc);
-	   x64:label(code, label);
-           if (errno == -error_wrong_parameters)
-             call_builtin(code, "bearly_error_wrong_parameters")
-           else if (args == null)
-             [
-               assert(errno >= 0);
-               call_builtin(code, enames[errno]);
-             ]
-           else if (errno == error_bad_type)
-             [
-               | type, var |
-               @(type . var) = args;
-               move(code, x64:lvar, var, x64:lreg, reg_arg0);
-               move(code, x64:limm, type, x64:lreg, reg_arg1);
-               call_builtin(code, "btype_error");
-             ]
-           else
-             fail();
-	 ],
-	 code[2]);
+      lforeach(fn (err) [
+        | errno, label, label2, args, loc |
+        @[errno loc label args label2] = err;
+        mc:set_loc(loc);
+        x64:label(code, label);
+        if (args == null)
+          [
+            | bname |
+            bname = if (errno == -error_wrong_parameters)
+              "bearly_error_wrong_parameters"
+            else
+              [
+                assert(errno >= 0);
+                enames[errno]
+              ];
+            exit<function> x64:call(code, x64:lindirect, bname, true);
+          ];
+
+        assert(errno == error_bad_type);
+        | type, var |
+        @(type . var) = args;
+        move(code, x64:lvar, var, x64:lreg, reg_arg0);
+        if (type == null)
+          x64:jmp(code, label2)
+        else
+          [
+            if (label2)
+              x64:label(code, label2);
+            move(code, x64:limm, type, x64:lreg, reg_arg1);
+            exit<function> x64:call(code, x64:lindirect, "btype_error", true);
+          ]
+      ], code[2]);
       x64:assemble(code);
     ];
 
@@ -584,6 +590,24 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
           x64:label(code, l);
         ];
 
+      if (x64:code_call_count_offset != null)
+        [
+          | l, ofs |
+          ofs = x64:code_call_count_offset - x64:mcode_code_offset;
+          l = x64:new_label(code);
+          x64:add32(code, x64:limm, 1,
+                    x64:lidx, x64:reg_rip . (fn (mode) [
+                      l = x64:skip_label_alias(l);
+                      match! (mode)
+                        [
+                          0 => 4;  // size
+                          1 => ofs - l[x64:l_ins][x64:il_offset][0]; // value
+                          2 => format("%d-&%d", ofs, l[x64:l_number]); // str
+                        ]
+                    ]));
+          x64:label(code, l);
+        ];
+
       // Save callee-saved registers
       fmisc = ifn[mc:c_fmisc];
       lforeach(fn (r) [
@@ -621,10 +645,11 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 	      if (arg[mc:v_indirect])
 		[
 		  call_builtin(code, "balloc_variable");
-		  move(code, loc, locarg, x64:lidx,
-                       reg_arg1 . x64:object_offset);
+		  safemove(code, loc, locarg, x64:lidx,
+                           reg_result . x64:object_offset,
+                           regs_allscratch);
 		  loc = x64:lreg;
-		  locarg = reg_arg1;
+		  locarg = reg_result;
 		];
 
 	      // & copy to correct location
@@ -670,8 +695,10 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 						ifn[mc:c_fargs]))
 	    [
 	      call_builtin(code, "balloc_variable");
-	      move(code, x64:limm, 0, x64:lidx, reg_arg1 . x64:object_offset);
-	      move(code, x64:lreg, reg_arg1, x64:lvar, local);
+	      move(code, x64:limm, 0,
+                   x64:lidx, reg_result . x64:object_offset);
+	      safemove(code, x64:lreg, reg_result, x64:lvar, local,
+                       regs_allscratch);
 	      assert_message(!in_scratch?(local),
                              "oops - local var unspilt to scratch");
 	    ];
@@ -917,7 +944,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 	]
       else if (op == mc:branch_equal || op == mc:branch_nequal)
         [
-          call_primitive(code, kequal?, equal?, null, 2, args);
+          call_primitive(code, kequal?, equal?, 2, args);
           x64:cmp(code, x64:limm, mfalse, x64:lreg, reg_result);
           x64:jcc(code, if (op == mc:branch_equal) x64:bne else x64:be, dest);
         ]
@@ -1023,12 +1050,12 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
   assert(vlength(builtins) == mc:builtins);
 
   commute =
-    '[0 0
-      ,false ,false ,false ,false ,false ,false
-      ,true ,true ,true ,false ,false
-      ,false ,false ,true ,false ,false
-      0 0 0 0 0 0 0 ,false 0 ,false 0
-      0 0 0 0 0 0 0 0 0 0 0 0 0 0];
+    '[0 0                                       // ||  &&
+      ,false ,false ,false ,false ,false ,false // == ... >
+      ,true ,true ,true ,false ,false           // | ... >>
+      ,false ,false ,true ,false ,false         // + ... %
+      0 0 0 0 0 0 0 ,false 0 ,false 0           // - ... =
+      0 0 0 0 0 0 0 0 0 0 0 0 0 0];             // car ... symref
   assert(vlength(commute) == mc:builtins);
 
   // Type of compute op arguments (uses type_xxx/stype_xxx sets)
@@ -1152,15 +1179,28 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
     //   d, r are variables
     if (op == mc:b_negate)
       [
-	move(code, x64:lvar, r, x64:lvar, d);
-	x64:neg(code, x64:lvar, d);
-	x64:add(code, x64:limm, 2, x64:lvar, d);
+        if ([
+          if (mc:in_reg(r))
+            !mc:in_reg(d) || mc:get_reg(r) != mc:get_reg(d)
+          else
+            mc:in_reg(d)
+        ])
+          [
+            // used for reg-A/reg-B, reg/mem, or mem/reg
+            move(code, x64:limm, 2, x64:lvar, d);
+            x64:sub(code, x64:lvar, r, x64:lvar, d);
+          ]
+        else
+          [
+            move(code, x64:lvar, r, x64:lvar, d);
+            x64:neg(code, x64:lvar, d);
+            x64:add(code, x64:limm, 2, x64:lvar, d);
+          ]
       ]
     else if (op == mc:b_bitnot)
       [
 	move(code, x64:lvar, r, x64:lvar, d);
-	x64:not(code, x64:lvar, d);
-	x64:or(code, x64:limm, 1, x64:lvar, d);
+	x64:neg(code, x64:lvar, d);
       ]
     else if (op == mc:b_not)
       [
@@ -1188,6 +1228,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 	xr = fetch1(code, r);
 	dr = reg_dest(d);
 
+        // (strsize * 2 - (objsize * 2 + 1) = slen * 2 + 1
 	move(code, x64:lidx, xr . x64:object_size, x64:lreg, dr);
 	x64:lea(code, x64:lridx, dr . 1 . dr . -(2 * x64:object_offset + 1),
                 x64:lreg, dr);
@@ -1219,9 +1260,18 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
       ]
     else fail();
 
+  // b_multiply can be inlined with power of two or 32-bit integer
+  | mulcst? |
+  mulcst? = fn (v)
+    match (mc:var_value(v))
+      [
+        n && integer?(n) => int32?(n) || (n & (n - 1)) == 0;
+      ];
+
   inline2? = fn (op, arg1, type1, arg2, type2)
     // Returns: True if op should be inlined on arg1, arg2
-    if (op == mc:b_add) !(type1 & itype_string) || !(type2 & itype_string)
+    if (op == mc:b_add)
+      !(type1 & type2 & itype_string)
     else if (op == mc:b_shift_left || op == mc:b_shift_right)
       intcst?(arg2)
     else if (op == mc:b_ref) // may inline vector_ref or string_ref
@@ -1232,7 +1282,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
          (!(type1 & itype_vector) || !(type1 & itype_string)))
       ]
     else if (op == mc:b_multiply)
-      intcst?(arg1) || intcst?(arg2)
+      mulcst?(arg1) || mulcst?(arg2)
     else
       !(op == mc:b_divide || op == mc:b_remainder || op == mc:b_cons
         || op == mc:b_pcons || op == mc:b_symbol_ref);
@@ -1270,14 +1320,16 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
     ];
 
   // return list of factors of n:
-  //   9, 8, 7, 5, 4, 3, 2, or -n for other powers of 2: (1 << n)
+  //   9, 8, 5, 4, 3, 2
+  //   or -n for other powers of 2: (1 << n),
+  //   or (n . m) for multiply by n (a power of 2) and then add m
   // or null if we should use imul
   | multiply_factorize |
   multiply_factorize = fn (n, neg?)
     [
       assert(n > 0);
 
-      | f, n2, n3, n5, n7, d |
+      | f, n2, n3, n5, pow2_delta, d |
       n2 = 0;                   // number of powers of 2
       while (!(n & 255))
         [
@@ -1302,17 +1354,21 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
           n = d;
         ];
 
-      n7 = 0;                  // number of powers of 7
-      if ((d = n / 7) * 7 == n)
+      if (n >= 7 && (pow2_delta = vexists?(fn (add) [
+        | p2 |
+        p2 = n - add;
+        p2 >= 8 && (p2 & (p2 - 1)) == 0
+      ], '[ 1 -1 2 3 4 5 8 9 -2 -3 -4 -5 -8 -9])))
         [
-          ++n7;
-          n = d;
+          pow2_delta = ((n - pow2_delta) . pow2_delta);
+          n = 1
         ];
 
       if (n != 1)
-        // other prime factors than 2, 3, 5, and 7
+        // other prime factors than 2, 3, 5, and (2^n + m)
         exit<function> null;
-      if (n5 + (n3 + 1) / 2 + (n2 > 0) + n7 > (if (neg?) 2 else 3))
+      if (n5 + (n3 + 1) / 2 + (n2 > 0) + (pow2_delta != null)
+          > (if (neg?) 2 else 3))
         // too expensive, use imul
         exit<function> null;
 
@@ -1330,6 +1386,12 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
           f = (1 << n2) . f;
           n2 = 0;
         ];
+      // multiply by 2^n +/- m (m != +/- 1)
+      if (pow2_delta != null && abs(cdr(pow2_delta)) != 1)
+        [
+          f = pow2_delta . f;
+          pow2_delta = null;
+        ];
       if (n2 > 0)
         [
           // try to shift (shl) or multiply by 2 (add) in the middle;
@@ -1341,9 +1403,9 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
           else
             f = e . f;
         ];
-      // multiply by 7 first, as it may save a move
-      while (--n7 >= 0)
-        f = 7 . f;
+      // multiply by 2^n +/- 1 first, as it may save a move
+      if (pow2_delta != null)
+        f = pow2_delta . f;
       f
     ];
 
@@ -1354,6 +1416,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 
       | c, neg? |
       c = mc:var_value(r2);
+      assert(integer?(c));
 
       if (c >= -1 && c <= 1)
         [
@@ -1401,21 +1464,64 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
         ];
 
       | r |
-      r = fetch1(code, r1);
+      r = fetch2(code, r1);
       type_trap(code, type_integer, var_in_reg(r1, r), type1);
 
       | excess |
       excess = 1;
       while (factors != null)
         [
-          | f |
+          | f, add, addmod, addreg |
           @(f . factors) = factors;
+
+          add = 0;
+          addmod = 0;
+          if (pair?(f))
+            [
+              @(f . add) = f;
+              assert(f & (f - 1) == 0);
+              addreg = r;
+              if (r == dr || (add != 1 && add != -1))
+                [
+                  // this shouldn't happen!
+                  assert(dr != reg_scratch2 && r != reg_scratch2);
+                  addreg = reg_scratch2;
+                  if (factors == null)
+                    [
+                      addmod = -excess * (f + add);
+                      addmod += (if (neg?) -1 else 1);
+                    ];
+
+                  | absadd |
+                  absadd = add;
+                  if (add < 0)
+                    [
+                      addmod = -addmod;
+                      absadd = -add;
+                    ];
+
+                  if (absadd == 1)
+                    if (addmod == 0)
+                      move(code, x64:lreg, r, x64:lreg, addreg)
+                    else
+                      x64:lea(code, x64:lidx, r . addmod, x64:lreg, addreg)
+                  else if (absadd == 2 || absadd == 4 || absadd == 8)
+                    x64:lea(code, x64:lqidx, r . absadd . addmod,
+                            x64:lreg, addreg)
+                  else
+                    x64:lea(code, x64:lridx, r . (absadd - 1) . r . addmod,
+                            x64:lreg, addreg);
+                ];
+
+              if (f > 8)
+                f = -bits_exists(fn (n) true, f);
+            ];
 
           if (f < 0)
             [
               f = -f;
               | nexcess |
-              nexcess = excess << f;
+              nexcess = (excess << f) + excess * add;
               // make a subtraction here if it's worth it
               if (!int32?(c) && int32?(c >> f))
                 [
@@ -1434,13 +1540,11 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
           else
             [
               | mod |
-              excess *= f;
+              excess *= f + add;
               mod = 0;
-              if (factors == null)
+              if (factors == null && addmod == 0)
                 [
                   mod = (if (neg?) -1 else 1) - excess;
-                  if (!int32?(mod))
-                    mod = 0;
                   excess += mod;
                 ];
 
@@ -1449,24 +1553,39 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
               else if (f == 2 || f == 3 || f == 5 || f == 9)
                 x64:lea(code, x64:lridx, r . (f - 1) . r . mod, x64:lreg, dr)
               else if (f == 4 || f == 8)
-                x64:lea(code, x64:lqidx, r . f . mod, x64:lreg, dr)
-              else if (f == 7)
-                [
-                  | tr |
-                  tr = r;
-                  if (tr == dr)
-                    [
-                      assert(dr != reg_scratch2);
-                      // shouldn't happen!
-                      x64:mov(code, x64:lreg, tr, x64:lreg, reg_scratch2);
-                      tr = reg_scratch2;
-                    ];
-                  x64:lea(code, x64:lqidx, r . 8 . mod, x64:lreg, dr);
-                  x64:sub(code, x64:lreg, tr, x64:lreg, dr);
-                ]
+                if (add > 0)
+                  [
+                    x64:lea(code, x64:lridx, r . f . addreg . mod,
+                            x64:lreg, dr);
+                    excess += addmod;
+                    add = 0;
+                  ]
+                else
+                  x64:lea(code, x64:lqidx, r . f . mod, x64:lreg, dr)
               else
                 fail();
             ];
+
+          if (add > 0)
+            [
+              excess += addmod;
+              | mod |
+              mod = (if (neg?) -1 else 1) - excess;
+              if (factors == null && mod != 0)
+                [
+                  x64:lea(code, x64:lridx, dr . 1 . addreg . mod,
+                          x64:lreg, dr);
+                  excess += mod;
+                ]
+              else
+                x64:add(code, x64:lreg, addreg, x64:lreg, dr);
+            ]
+          else if (add < 0)
+            [
+              x64:sub(code, x64:lreg, addreg, x64:lreg, dr);
+              excess -= addmod
+            ];
+
           r = dr;
         ];
 
@@ -1555,7 +1674,28 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
     else if (op == mc:b_bitor)
       perform3(code, r1, r2, d, x64:or, x64:or)
     else if (op == mc:b_bitand)
-      perform3(code, r1, r2, d, x64:and, x64:and)
+      [
+        <normal> if (intcst?(r2))
+          [
+            | i, movop |
+            i = r2[mc:v_kvalue];
+            movop = if (i == 0x7f)
+              x64:movzxbyte
+            else if (i == 0x7fff)
+              x64:movzxword
+            else if (i == 0x7fffffff)
+              x64:movzx32
+            else
+              exit<normal> null;
+
+            | r, dr |
+            r = fetch_for_dest(code, r1, d);
+            dr = reg_dest(d);
+            movop(code, x64:lvar, r, x64:lreg, dr);
+            exit<function> move(code, x64:lreg, dr, x64:lvar, d);
+          ];
+        perform3(code, r1, r2, d, x64:and, x64:and)
+      ]
     else if (op == mc:b_bitxor)
       [
 	| cstxor, normalxor |
@@ -1748,8 +1888,9 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 
           lreduce(fn (arg, ofs) [
             assert(!in_scratch?(arg));
-            move(code, x64:lvar, arg, x64:lidx,
-                 reg_arg1 . x64:object_offset + ofs);
+            safemove(code, x64:lvar, arg, x64:lidx,
+                     reg_result . x64:object_offset + ofs,
+                     regs_allscratch);
             ofs + word_size
           ], 0, args);
 
@@ -1761,9 +1902,9 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
               else
                 MUDLLE_READONLY;
               x64:orbyte(code, x64:limm, flags, x64:lidx,
-                         reg_arg1 . x64:object_flags);
+                         reg_result . x64:object_flags);
             ];
-	  move(code, x64:lreg, reg_arg1, x64:lvar, dest);
+	  move(code, x64:lreg, reg_result, x64:lvar, dest);
 	]
       else if (arg2 == null)	// 1-argument ops
 	if (inline1?(op, arg1, type1))
@@ -1875,7 +2016,9 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
            word_size * (1 + llength(cvars)) + x64:object_offset,
 	   x64:lreg, reg_arg0);
       call_builtin(code, "balloc_closure");
-      move(code, x64:lfunction, f, x64:lidx, reg_arg1 . x64:object_offset);
+      safemove(code, x64:lfunction, f,
+               x64:lidx, reg_result . x64:object_offset,
+               regs_allscratch);
       offset = x64:object_offset + word_size;
       while (cvars != null)
 	[
@@ -1883,13 +2026,14 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
 
 	  cvar = car(cvars)[mc:v_cparent];
 	  if (cvar == cdest) // place ourselves in closure
-	    move(code, x64:lreg, reg_arg1, x64:lidx, reg_arg1 . offset)
+	    move(code, x64:lreg, reg_result, x64:lidx, reg_result . offset)
 	  else
-	    move(code, x64:lvar, cvar, x64:lidx, reg_arg1 . offset);
+	    safemove(code, x64:lvar, cvar, x64:lidx, reg_result . offset,
+                     regs_allscratch);
 	  offset += word_size;
 	  cvars = cdr(cvars);
 	];
-      move(code, x64:lreg, reg_arg1, x64:lvar, cdest);
+      move(code, x64:lreg, reg_result, x64:lvar, cdest);
     ];
 
   mgen_vref = fn (code, ins)
@@ -1999,8 +2143,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
       ], simple);
     ];
 
-  call_primitive = fn (code, called, prim, {null,vector} dest, int nargs,
-                       args)
+  call_primitive = fn (code, called, prim, int nargs, args)
     [
       move_native_args(code, nargs, args);
       | flags, call |
@@ -2030,7 +2173,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
       move(code, x64:limm, nargs, x64:lreg, reg_argcount);
       x64:add(code, x64:limm, x64:mcode_code_offset,
               x64:lreg, reg_scratch2);
-      x64:call(code, x64:lreg, reg_scratch2);
+      x64:call(code, x64:lreg, reg_scratch2, false);
     ];
 
   call = fn (code, called, nargs, callprimop, seclev?)
@@ -2230,7 +2373,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
                   call(code, called, nargs, "bcall_secure", true);
                 ]
               else
-                call_primitive(code, called, f, dest, nargs, args);
+                call_primitive(code, called, f, nargs, args);
               exit<function> move(code, x64:lreg, reg_result,
                                   x64:lvar, dest);
             ];
@@ -2552,8 +2695,8 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
       | r |
       r = reg_dest(dest);
       // must avoid xor here
-      x64:mov(code, x64:limm, 0, x64:lreg, r);
       x64:setcc(code, cc, x64:lreg, r);
+      x64:movzxbyte(code, x64:lreg, r, x64:lreg, r);
       x64:lea32(code, x64:lridx, r . 1 . r . 1, x64:lreg, r);
       move(code, x64:lreg, r, x64:lvar, dest);
     ];
@@ -2594,7 +2737,7 @@ writes mc:nops_called, mc:nops_inlined, mc:framesizes
       var_in_reg(var, fetch1(code, var));
 
   call_builtin = fn (code, string op)
-    x64:call(code, x64:lindirect, op);
+    x64:call(code, x64:lindirect, op, false);
 
   callop1 = fn (code, builtin, arg)
     // Scratch register usage: reg_scratch

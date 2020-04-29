@@ -27,6 +27,7 @@
 #include "types.h"
 
 struct constant;
+struct filename;
 struct mfile;
 
 extern struct component *component_undefined;
@@ -42,14 +43,14 @@ struct string *scache_alloc_str(const char *str);
 value make_constant(const struct constant *c);
 value make_shared_string_constant(const struct constant *c,
                                   struct table *cache);
-bool interpret(value *result, seclev_t seclev, int reload);
+bool interpret(value *result, seclev_t seclev, bool reload);
 struct closure *compile_code(struct mfile *f, seclev_t seclev);
 
 void compile_init(void);
 
 extern struct mfile *this_mfile;
 
-bool load_file(const char *fullname, const char *filename,
-               const char *nicename, seclev_t seclev, bool reload);
+bool load_file(const char *fullname, const struct filename *fname,
+               seclev_t seclev, bool reload);
 
 #endif

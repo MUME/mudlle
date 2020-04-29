@@ -26,9 +26,10 @@ defines new_graph, graph_add_node, graph_remove_node,
   graph_add_edge, graph_remove_edge, graph_nodes, graph_nodes_apply,
   graph_nodes_exists?, graph_node_graph, graph_node_get, graph_node_set!,
   graph_edges_in, graph_edges_out, graph_edges_in_apply, graph_edges_out_apply,
+  graph_edges_in_exists?, graph_edges_out_exists?,
   graph_edge_from, graph_edge_to, graph_edge_get, graph_edge_set!,
-  graph_clear_all_marks, graph_mark_node, graph_unmark_node, graph_node_marked?,
-  graph_mark_edge, graph_unmark_edge, graph_edge_marked?
+  graph_clear_all_marks, graph_mark_node, graph_unmark_node,
+  graph_node_marked?, graph_mark_edge, graph_unmark_edge, graph_edge_marked?
 [
 // A graph is a mutable data structure composed of nodes linked
 // by edges.
@@ -57,7 +58,8 @@ defines new_graph, graph_add_node, graph_remove_node,
 new_graph = fn " -> `graph. Creates a new, empty graph" ()
   vector(false, 1);
 
-graph_add_node = fn "`graph `x -> node. Adds a node to `graph with value `x" (vector g, x)
+graph_add_node = fn "`graph `x -> node. Adds a node to `graph with value `x"
+  (vector g, x)
   [
     | node |
     node = vector(false, g[0], g, null, null, x, 0);
@@ -89,7 +91,8 @@ graph_remove_node = fn "`node -> . Removes `node from its graph" (vector node)
       ]
   ];
 
-graph_add_edge = fn "`node1 `node2 `x -> `edge. Adds new edge from `node1 to `node2, with data `x" (vector n1, vector n2, x)
+graph_add_edge = fn "`node1 `node2 `x -> `edge. Adds new edge from `node1 to"
+  + " `node2, with data `x" (vector n1, vector n2, x)
   [
     | edge |
     edge = vector(n1, n2, x, 0);
@@ -122,11 +125,13 @@ graph_nodes = fn "graph -> `l. Returns list of nodes of `graph" (vector g)
     l
   ];
 
-graph_nodes_apply = fn "`f `graph -> . Applies `f(`node) to the of nodes of `graph" (function f, vector g)
+graph_nodes_apply = fn "`f `graph -> . Applies `f(`node) to the of nodes of"
+  + " `graph" (function f, vector g)
   for (| dl | dl = g[0]; dl; dl = dl[1])
     f(dl);
 
-graph_nodes_exists? = fn "`f `graph -> `x. Returns the first node in `graph for which `f(`node) is true, or false" (function f, vector g)
+graph_nodes_exists? = fn "`f `graph -> `x. Returns the first node in `graph"
+  + " for which `f(`node) is true, or false" (function f, vector g)
   [
     for (| dl | dl = g[0]; dl; dl = dl[1])
       if (f(dl))
@@ -134,22 +139,34 @@ graph_nodes_exists? = fn "`f `graph -> `x. Returns the first node in `graph for 
     false
   ];
 
-graph_node_graph = fn "`node -> `graph. Returns `node's `graph" (vector n) n[2];
+graph_node_graph = fn "`node -> `graph. Returns `node's `graph" (vector n)
+  n[2];
 graph_node_get = fn "`node -> `x. Returns `node's data" (vector n) n[5];
 graph_node_set! = fn "`node `x -> . Sets `node's data" (vector n, x) n[5] = x;
 
 
-graph_edges_in = fn "`node -> `l. Returns all ingoing edges of `node" (vector n)
+graph_edges_in = fn "`node -> `l. Returns all ingoing edges of `node"
+  (vector n)
   lcopy(n[3]);
 
-graph_edges_out = fn "`node -> `l. Returns all outgoing edges of `node" (vector n)
+graph_edges_out = fn "`node -> `l. Returns all outgoing edges of `node"
+  (vector n)
   lcopy(n[4]);
 
-graph_edges_in_apply = fn "`f `node -> `l. Applies `f to all ingoing edges of `node" (function f, vector n)
+graph_edges_in_apply = fn "`f `node -> `l. Applies `f to all ingoing edges of"
+  + " `node" (function f, vector n)
   lforeach(f, n[3]);
 
-graph_edges_out_apply = fn "`f `node -> `l. Applies `f to all outgoing edges of `node" (function f, vector n)
+graph_edges_out_apply = fn "`f `node -> `l. Applies `f to all outgoing edges"
+  + " of `node" (function f, vector n)
   lforeach(f, n[4]);
+
+graph_edges_in_exists? = fn "`f `node-> `edge. Returns the first ingoing edge"
+  + " for which `f(`edge) is true, or false" (function f, vector n)
+  lexists?(f, n[3]);
+graph_edges_out_exists? = fn "`f `node-> `edge. Returns the first outgoing"
+  + " edge for which `f(`edge) is true, or false" (function f, vector n)
+  lexists?(f, n[4]);
 
 graph_edge_from = fn "`edge -> `node. Returns node `edge is from" (vector e)
   e[0];
@@ -162,8 +179,9 @@ graph_edge_set! = fn "`edge `x -> . Sets `edge's data to `x" (vector e, x)
 // Marks
 // -----
 
-graph_clear_all_marks = fn "`graph -> . Clears all marks on edges and nodes" (vector g)
-  g[1] = g[1] + 1;
+graph_clear_all_marks = fn "`graph -> . Clears all marks on edges and nodes"
+  (vector g)
+  ++g[1];
 
 graph_mark_node = fn "`node -> . Marks `node" (vector n) n[6] = n[2][1];
 graph_unmark_node = fn "`node -> . Unmarks `node" (vector n) n[6] = 0;

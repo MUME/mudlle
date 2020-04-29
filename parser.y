@@ -43,11 +43,21 @@
 #pragma clang diagnostic ignored "-Wmissing-variable-declarations"
 #endif
 
+/* needed to copy the fname field */
+#define YYLLOC_DEFAULT(cur, rhs, n) do {                        \
+    (cur) = YYRHSLOC(rhs, n);                                   \
+    if (n > 1)                                                  \
+      {                                                         \
+        (cur).first_line   = YYRHSLOC(rhs, 1).first_line;       \
+        (cur).first_column = YYRHSLOC(rhs, 1).first_column;     \
+      }                                                         \
+  } while (0)
+
 %}
 
 %union {
   struct str_and_len string;
-  char *symbol;
+  const char *symbol;
   long integer;
   enum builtin_op operator;
   double mudlle_float;
@@ -76,6 +86,8 @@
   struct {
     bool space_suffix;
   } tcomma;
+  bool force_match;
+  enum arith_mode arith_mode;
 }
 
 %locations
@@ -125,6 +137,7 @@
 %token KW_IF          "if"
 %token LOOP           "loop"
 %token MATCH          "match"
+%token FORCE_MATCH    "match!"
 %token LOOP_EXIT      "exit"
 %token WHILE          "while"
 
@@ -145,6 +158,7 @@
 %token GLOBAL_SYMBOL  ":"
 %token SYMBOL         "variable name"
 
+%token ARITH          "#arith"
 
 %expect 1                       /* if-else */
 
@@ -177,6 +191,7 @@
 %type <mudlle_float> FLOAT
 %type <bigint> BIGINT
 %type <integer> table_class
+%type <force_match> match_type
 %type <tconstant> constant unary_constant simple_constant force_constant
 %type <tconstant> constant_expr constant_expr_tail special_float_constant
 %type <tconstant> opt_constant_tail table_entry string_constant
@@ -197,6 +212,7 @@
 %type <bop> ASSIGN_BIT_XOR ASSIGN_BIT_AND ASSIGN_BIT_OR ASSIGN_SC_AND
 %type <bop> ASSIGN_XOR ASSIGN_SC_OR ASSIGN_SHR ASSIGN_SHL
 %type <tcomma> COMMA
+%type <arith_mode> save_arith_mode
 
 %{
 
@@ -205,6 +221,20 @@
 /* here to catch accidental increase of the size; it's not really harmful to
    change the size */
 CASSERT_SIZEOF( YYSTYPE, sizeof (struct str_and_len));
+
+#define BINOP(dst, op, loc, e0, e1) do {        \
+  dst = make_binary(b_ ## op, &loc, e0, e1);    \
+  if (dst == NULL)                              \
+    YYABORT;                                    \
+} while (0)
+
+#define UNOP(dst, op, loc, e) do {              \
+  dst = make_unary(b_ ## op, &loc, e);          \
+  if (dst == NULL)                              \
+    YYABORT;                                    \
+} while (0)
+
+static enum arith_mode cur_arith_mode;
 
 static struct mfile *parsed_code;
 static struct constant *parsed_constant;
@@ -222,6 +252,31 @@ static void yyerror(const char *s)
 {
   if (!erred)
     compile_error(lexer_location(), "%s", s);
+}
+
+static bool lookup_arith_mode(enum arith_mode *dst, const char *src,
+                              const YYLTYPE *loc)
+{
+  static struct {
+    const char *name;
+    enum arith_mode mode;
+  } modes[] = {
+    { "bigint",  arith_bigint },
+    { "default", arith_default },
+    { "float",   arith_float },
+    { "integer", arith_integer },
+  };
+
+  size_t slen = strlen(src);
+  for (int i = 0; i < VLENGTH(modes); ++i)
+    if (strncmp(modes[i].name, src, slen) == 0)
+      {
+        *dst = modes[i].mode;
+        return true;
+      }
+
+  compile_error(LLOC_LOC(*loc), "unknown arithmetic mode");
+  return false;
 }
 
 static void check_constant_expr(const YYLTYPE *loc)
@@ -290,7 +345,7 @@ static struct component *make_binary(unsigned int op,
                                      struct component *arg1,
                                      struct component *arg2)
 {
-  if (op == b_add)
+  if (op == b_add && cur_arith_mode == arith_default)
     {
       /* check if this is a collapsible string addition */
       if (is_string_add(arg1))
@@ -307,14 +362,15 @@ static struct component *make_binary(unsigned int op,
         arg2 = perform_string_add(arg2);
     }
 
-  return new_binop_component(parser_memory, LLOC_LOC(*loc), op, arg1, arg2);
+  return new_binop_component(parser_memory, LLOC_LOC(*loc), cur_arith_mode,
+                             op, arg1, arg2);
 }
 
-static bool check_int_range(long l, const YYLTYPE *loc)
+static bool check_int_range(long l, const struct loc *loc)
 {
   if (l == -MIN_TAGGED_INT)
     {
-      compile_error(LLOC_LOC(*loc), "integer constant out of range");
+      compile_error(loc, "integer constant out of range");
       return false;
     }
   return true;
@@ -322,12 +378,9 @@ static bool check_int_range(long l, const YYLTYPE *loc)
 
 static bool check_comp_int_range(struct component *c)
 {
-  if (c->vclass == c_constant && c->u.cst->vclass == cst_int
-      && c->u.cst->u.integer == -MIN_TAGGED_INT)
-    {
-      compile_error(&c->loc, "integer constant out of range");
-      return false;
-    }
+  if (c->vclass == c_constant && c->u.cst->vclass == cst_int)
+    return check_int_range(c->u.cst->u.integer, &c->loc);
+
   return true;
 }
 
@@ -335,7 +388,7 @@ static struct component *make_unary(enum builtin_op op,
                                     const YYLTYPE *loc,
                                     struct component *arg)
 {
-  if (arg->vclass == c_constant)
+  if (arg->vclass == c_constant && cur_arith_mode == arith_default)
     switch (arg->u.cst->vclass)
       {
       case cst_int:
@@ -364,13 +417,16 @@ static struct component *make_unary(enum builtin_op op,
       default:
         break;
       }
-  return new_unop_component(parser_memory, LLOC_LOC(*loc), op, arg);
+  return new_unop_component(parser_memory, LLOC_LOC(*loc), cur_arith_mode,
+                            op, arg);
 }
 
 int yyparse(void);
 
 static bool do_parse(struct alloc_block *heap)
 {
+  cur_arith_mode = arith_default;
+
   parsed_code = NULL;
   parsed_constant = NULL;
   parser_memory = heap;
@@ -443,10 +499,9 @@ file:
 
 simple:
   opt_local_vars expr_list {
-    const struct loc loc = *LLOC_LOC(@1);
+    const struct loc loc = *LLOC_LOC($1 ? @1 : @2);
     $$ = new_file(parser_memory, f_plain, NULL, NULL, NULL, NULL, NULL, NULL,
-                  new_codeblock(parser_memory, $1, $2, lexer_filename,
-                                lexer_nicename, &loc),
+                  new_codeblock(parser_memory, $1, $2, &loc),
                   &loc);
   } ;
 
@@ -491,8 +546,7 @@ expr_list:
   simple_expr_list ';' opt_implicit_code_block {
     struct clist *cl = $1;
     if ($3 != NULL) {
-      struct component *comp = new_block_component(
-        parser_memory, LLOC_LOC(@3), $3);
+      struct component *comp = new_block_component(parser_memory, $3);
       cl = new_clist(parser_memory, comp, cl);
     }
     $$ = reverse_clist(cl);
@@ -504,8 +558,7 @@ expr_list:
 opt_implicit_code_block:
   /* empty */ { $$ = NULL; } |
   local_vars expr_list {
-      $$ = new_codeblock(parser_memory, $1, $2, lexer_filename,
-                         lexer_nicename, LLOC_LOC(@1));
+      $$ = new_codeblock(parser_memory, $1, $2, LLOC_LOC(@1));
   } ;
 
 simple_expr_list:
@@ -558,7 +611,8 @@ if:
       $$ = new_ternop_component(parser_memory, LLOC_LOC(@1),
                                 b_ifelse, $3, $5, $6);
     else
-      $$ = new_binop_component(parser_memory, LLOC_LOC(@1), b_if, $3, $5);
+      $$ = new_binop_component(parser_memory, LLOC_LOC(@1), arith_default,
+                               b_if, $3, $5);
   } ;
 
 opt_else:
@@ -567,24 +621,30 @@ opt_else:
 
 while:
   WHILE '(' expr ')' expr {
-    $$ = new_binop_component(parser_memory, LLOC_LOC(@1), b_while, $3, $5);
+    $$ = new_binop_component(parser_memory, LLOC_LOC(@1), arith_default,
+                             b_while, $3, $5);
   } ;
 
 loop:
   LOOP expr {
-    $$ = new_unop_component(parser_memory, LLOC_LOC(@1), b_loop, $2);
+    $$ = new_unop_component(parser_memory, LLOC_LOC(@1), arith_default,
+                            b_loop, $2);
   } ;
 
 for:
   FOR '(' opt_local_vars opt_expr ';' opt_expr ';' opt_expr ')' expr {
     $$ = new_for_component(parser_memory, $3, $4, $6, $8, $10,
-                           lexer_filename, LLOC_LOC(@1));
+                           LLOC_LOC(@1));
   } ;
 
 match:
-  MATCH '(' expr ')' '[' match_list opt_semi ']' {
-    $$ = new_match_component(parser_memory, $3, $6);
+  match_type '(' expr ')' '[' match_list opt_semi ']' {
+    $$ = new_match_component(parser_memory, $1, $3, $6, LLOC_LOC(@1));
   } ;
+
+match_type:
+  MATCH { $$ = false; } |
+  FORCE_MATCH { $$ = true; } ;
 
 match_list:
   match_node { $$ = new_match_list(parser_memory, $1, NULL); } |
@@ -592,8 +652,7 @@ match_list:
 
 match_node:
   pattern_or PATTERN_MATCH expr {
-    $$ = new_match_node(parser_memory, $1, $3, lexer_filename,
-                        LLOC_LOC(@1));
+    $$ = new_match_node(parser_memory, $1, $3, LLOC_LOC(@1));
   } ;
 
 pattern_or:
@@ -647,8 +706,7 @@ f1:
 
 f2:
   expr {
-    $$ = new_fn(parser_memory, $1, LLOC_LOC(@1),
-                lexer_filename, lexer_nicename);
+    $$ = new_fn(parser_memory, $1, LLOC_LOC(@1));
   } ;
 
 help:
@@ -698,8 +756,8 @@ type:
 
 assign_expr:
   unary_expr op_assign expr {
-    $$ = new_assign_modify_expr(parser_memory, $1, $2, $3, false, true,
-                                LLOC_LOC(@2));
+    $$ = new_assign_modify_expr(parser_memory, cur_arith_mode, $2, $1, $3,
+                                false, true, LLOC_LOC(@2));
     if ($$ == NULL)
       YYABORT;
   } |
@@ -726,37 +784,34 @@ op_assign:
   ASSIGN_SHL ;
 
 e1:
-  e1 '.' e1 { $$ = make_binary(b_cons, &@2, $1, $3); } |
-
-  e1 XOR e1 { $$ = make_binary(b_xor, &@2, $1, $3); } |
-  e1 SC_OR e1 { $$ = make_binary(b_sc_or, &@2, $1, $3); } |
+  e1 '.' e1   { BINOP($$, cons,  @2, $1, $3); } |
+  e1 XOR e1   { BINOP($$, xor,   @2, $1, $3); } |
+  e1 SC_OR e1 { BINOP($$, sc_or, @2, $1, $3); } |
   sc_and_expr ;
 
 sc_and_expr:
   sc_and_expr SC_AND e2 {
-    $$ = make_binary(b_sc_and, &@2, $1, $3);
+    BINOP($$, sc_and, @2, $1, $3);
   } |
   e2 ;
 
 e2:
-  e2 EQ e2 { $$ = make_binary(b_eq, &@2, $1, $3); } |
-  e2 NE e2 { $$ = make_binary(b_ne, &@2, $1, $3); } |
-  e2 LT e2 { $$ = make_binary(b_lt, &@2, $1, $3); } |
-  e2 LE e2 { $$ = make_binary(b_le, &@2, $1, $3); } |
-  e2 GT e2 { $$ = make_binary(b_gt, &@2, $1, $3); } |
-  e2 GE e2 { $$ = make_binary(b_ge, &@2, $1, $3); } |
-  e2 '^' e2 { $$ = make_binary(b_bitxor, &@2, $1, $3); } |
-  e2 '|' e2 { $$ = make_binary(b_bitor, &@2, $1, $3); } |
-  e2 '&' e2 { $$ = make_binary(b_bitand, &@2, $1, $3); } |
-  e2 SHIFT_LEFT e2 { $$ = make_binary(b_shift_left, &@2, $1, $3); } |
-  e2 SHIFT_RIGHT e2 {
-    $$ = make_binary(b_shift_right, &@2, $1, $3);
-  } |
-  e2 '+' e2 { $$ = make_binary(b_add, &@2, $1, $3); } |
-  e2 '-' e2 { $$ = make_binary(b_subtract, &@2, $1, $3); } |
-  e2 '*' e2 { $$ = make_binary(b_multiply, &@2, $1, $3); } |
-  e2 '/' e2 { $$ = make_binary(b_divide, &@2, $1, $3); } |
-  e2 '%' e2 { $$ = make_binary(b_remainder, &@2, $1, $3); } |
+  e2 EQ e2          { BINOP($$, eq,          @2, $1, $3); } |
+  e2 NE e2          { BINOP($$, ne,          @2, $1, $3); } |
+  e2 LT e2          { BINOP($$, lt,          @2, $1, $3); } |
+  e2 LE e2          { BINOP($$, le,          @2, $1, $3); } |
+  e2 GT e2          { BINOP($$, gt,          @2, $1, $3); } |
+  e2 GE e2          { BINOP($$, ge,          @2, $1, $3); } |
+  e2 '^' e2         { BINOP($$, bitxor,      @2, $1, $3); } |
+  e2 '|' e2         { BINOP($$, bitor,       @2, $1, $3); } |
+  e2 '&' e2         { BINOP($$, bitand,      @2, $1, $3); } |
+  e2 SHIFT_LEFT e2  { BINOP($$, shift_left,  @2, $1, $3); } |
+  e2 SHIFT_RIGHT e2 { BINOP($$, shift_right, @2, $1, $3); } |
+  e2 '+' e2         { BINOP($$, add,         @2, $1, $3); } |
+  e2 '-' e2         { BINOP($$, subtract,    @2, $1, $3); } |
+  e2 '*' e2         { BINOP($$, multiply,    @2, $1, $3); } |
+  e2 '/' e2         { BINOP($$, divide,      @2, $1, $3); } |
+  e2 '%' e2         { BINOP($$, remainder,   @2, $1, $3); } |
   unary_expr ;
 
 unary_expr:
@@ -768,9 +823,9 @@ unary_expr:
 
 /* may return out-of-range integer; cf. unary_expr */
 e3:
-  '-' e3 { $$ = make_unary(b_negate, &@1, $2); } |
-  '!' unary_expr { $$ = make_unary(b_not, &@1, $2); } |
-  '~' unary_expr { $$ = make_unary(b_bitnot, &@1, $2); } |
+  '-' e3         { UNOP($$, negate, @1, $2); } |
+  '!' unary_expr { UNOP($$, not,    @1, $2); } |
+  '~' unary_expr { UNOP($$, bitnot, @1, $2); } |
   '&' unary_expr {
     $$ = new_reference(parser_memory, LLOC_LOC(@1), $2);
     if ($$ == NULL)
@@ -778,7 +833,7 @@ e3:
   } |
   '*' unary_expr { $$ = new_dereference(parser_memory, LLOC_LOC(@1), $2); } |
   incrementer unary_expr {
-    $$ = new_assign_modify_expr(parser_memory, $2, $1,
+    $$ = new_assign_modify_expr(parser_memory, cur_arith_mode, $1, $2,
                                 new_int_component(parser_memory, 1),
                                 false, false, LLOC_LOC(@1));
     if ($$ == NULL)
@@ -810,10 +865,11 @@ e4:
                                new_clist(parser_memory, $1, $3));
   } |
   e4_safe '[' expr ']' {
-    $$ = new_binop_component(parser_memory, LLOC_LOC(@2), b_ref, $1, $3);
+    $$ = new_binop_component(parser_memory, LLOC_LOC(@2), arith_default,
+                             b_ref, $1, $3);
   } |
   e4_safe incrementer {
-    $$ = new_assign_modify_expr(parser_memory, $1, $2,
+    $$ = new_assign_modify_expr(parser_memory, cur_arith_mode, $2, $1,
                                 new_int_component(parser_memory, 1),
                                 true, false, LLOC_LOC(@2));
     if ($$ == NULL)
@@ -836,8 +892,9 @@ primary_expr:
   QUOTE constant {
     $$ = new_const_component(parser_memory, LLOC_LOC(@1), $2);
   } |
-  code_block {
-    $$ = new_block_component(parser_memory, LLOC_LOC(@1), $1);
+  save_arith_mode opt_arith_mode code_block {
+    cur_arith_mode = $1;
+    $$ = new_block_component(parser_memory, $3);
   } |
   '(' expr ')' { $$ = $2; } ;
 
@@ -855,12 +912,12 @@ unary_constant:
     $$ = new_int_constant(parser_memory, l);
   } |
   '~' INTEGER {
-    if (!check_int_range($2, &@2))
+    if (!check_int_range($2, LLOC_LOC(@2)))
       YYABORT;
     $$ = new_int_constant(parser_memory, ~$2);
   } |
   '!' INTEGER {
-    if (!check_int_range($2, &@2))
+    if (!check_int_range($2, LLOC_LOC(@2)))
       YYABORT;
     $$ = new_int_constant(parser_memory, !$2);
   } |
@@ -922,7 +979,7 @@ constant:
   '(' constant_list opt_constant_tail ')' {
     $$ = new_list_constant(parser_memory, new_cstlist(parser_memory, $3, $2));
   } |
-  '(' ')' { $$ = new_list_constant(parser_memory, NULL); } |
+  '(' ')' { $$ = constant_null; } |
   LT table_entry GT { $$ = $2; } |
   constant_expr ;
 
@@ -1051,7 +1108,9 @@ pattern_list:
     pl->next = new_pattern_list(parser_memory, $2, NULL);
     $$ = new_list_pattern(parser_memory, $3, LLOC_LOC(@1));
   } |
-  '(' ')' { $$ = new_list_pattern(parser_memory, NULL, LLOC_LOC(@1)); } ;
+  '(' ')' {
+    $$ = new_pattern_constant(parser_memory, constant_null, LLOC_LOC(@1));
+  } ;
 
 pattern_list_tail:
   pattern_sequence pattern_cdr {
@@ -1082,9 +1141,18 @@ variable_name:
 
 code_block:
   '[' opt_local_vars expr_list ']' {
-    $$ = new_codeblock(parser_memory, $2, $3, lexer_filename,
-                       lexer_nicename, LLOC_LOC(@1));
+    $$ = new_codeblock(parser_memory, $2, $3, LLOC_LOC(@1));
   } ;
+
+save_arith_mode:
+  /* empty */ { $$ = cur_arith_mode; } ;
+
+opt_arith_mode:
+  ARITH '(' SYMBOL ')' {
+    if (!lookup_arith_mode(&cur_arith_mode, $3, &@3))
+      YYABORT;
+  } |
+  /* empty */;
 
 opt_local_vars:
   /* empty */ { $$ = NULL; } |

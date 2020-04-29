@@ -22,6 +22,7 @@
 #include "../mudlle-config.h"
 
 #include <errno.h>
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdlib.h>
@@ -30,6 +31,8 @@
 #include "check-types.h"
 #include "mudlle-float.h"
 #include "prims.h"
+
+#include "../random.h"
 
 #if defined HAVE_LPKIT_LPKIT_H
 #  include <lpkit/lpkit.h>
@@ -100,43 +103,44 @@ static void floatval_op2(double *d1, double *d2, value v1, value v2,
   primitive_bad_typeset_error(ev, FLOATVAL_TYPESET, op, 2, v1, v2);
 }
 
-#define FUNOP(name, doc)                                        \
-TYPEDOP(f ## name, 0,                                           \
-        "`f1 -> `f2. Returns " doc ".", 1,                      \
-        (value f), OP_LEAF | OP_NOESCAPE | OP_CONST, "D.d")     \
-{                                                               \
-  return makefloat(name(floatval_op(f, THIS_OP)));              \
+#define FUNOP(name, doc)                                \
+TYPEDOP(f ## name, ,                                    \
+        "`f1 -> `f2. Returns " doc ".", (value f),      \
+        OP_LEAF | OP_NOESCAPE | OP_CONST | OP_TRIVIAL,  \
+        "D.d")                                          \
+{                                                       \
+  return alloc_float(name(floatval_op(f, THIS_OP)));    \
 }
 
 #define FUNFUNC(name, doc) FUNOP(name, #name "(`f1), " doc)
 
-#define FBINFUNC(name, fname, doc)                              \
-TYPEDOP(f ## name, 0,                                           \
-        "`f1 `f2 -> `f3. Returns " doc ".", 2,                  \
-        (value f1, value f2),                                   \
-        OP_LEAF | OP_NOESCAPE | OP_CONST,                       \
-        "DD.d")                                                 \
-{                                                               \
-  double d1, d2;                                                \
-  floatval_op2(&d1, &d2, f1, f2, THIS_OP);                      \
-  return makefloat(fname(d1, d2));                              \
-}                                                               \
+#define FBINFUNC(name, fname, doc)                      \
+TYPEDOP(f ## name, ,                                    \
+        "`f1 `f2 -> `f3. Returns " doc ".",             \
+        (value f1, value f2),                           \
+        OP_LEAF | OP_NOESCAPE | OP_CONST | OP_TRIVIAL,  \
+        "DD.d")                                         \
+{                                                       \
+  double d1, d2;                                        \
+  floatval_op2(&d1, &d2, f1, f2, THIS_OP);              \
+  return alloc_float(fname(d1, d2));                    \
+}
 
-#define FBINOP(name, op)                                        \
-TYPEDOP(f ## name, 0,                                           \
-        "`f1 `f2 -> `f3. Returns `f1 " #op " `f2", 2,           \
-        (value f1, value f2),                                   \
-        OP_LEAF | OP_NOESCAPE | OP_CONST,                       \
-        "DD.d")                                                 \
-{                                                               \
-  double d1, d2;                                                \
-  floatval_op2(&d1, &d2, f1, f2, THIS_OP);                      \
-  return makefloat(d1 op d2);                                   \
+#define FBINOP(name, op)                                \
+TYPEDOP(f ## name, ,                                    \
+        "`f1 `f2 -> `f3. Returns `f1 " #op " `f2",      \
+        (value f1, value f2),                           \
+        OP_LEAF | OP_NOESCAPE | OP_CONST | OP_TRIVIAL,  \
+        "DD.d")                                         \
+{                                                       \
+  double d1, d2;                                        \
+  floatval_op2(&d1, &d2, f1, f2, THIS_OP);              \
+  return alloc_float(d1 op d2);                         \
 }
 
 TYPEDOP(isfloatp, "float?", "`x -> `b. Returns true if `x is a float",
-        1, (value x),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
+        (value x),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "x.n")
 {
   return makebool(TYPE(x, float));
 }
@@ -144,30 +148,31 @@ TYPEDOP(isfloatp, "float?", "`x -> `b. Returns true if `x is a float",
 TYPEDOP(isffinitep, "ffinite?",
         "`f -> `b. Returns true if `f is neither infinite nor"
 	" Not a Number (NaN).",
-        1, (value x), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
+        (value x),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "D.n")
 {
   return makebool(isfinite(floatval_op(x, THIS_OP)));
 }
 
 TYPEDOP(isfnanp, "fnan?",
-        "`f -> `b. Returns true if `f is Not a Number (NaN).", 1, (value x),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
+        "`f -> `b. Returns true if `f is Not a Number (NaN).", (value x),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "D.n")
 {
   return makebool(isnan(floatval_op(x, THIS_OP)));
 }
 
 TYPEDOP(isfinfp, "finf?", "`f -> `n. Returns -1 if `f is negative infinity,"
         " 1 for positive infinity, or 0 otherwise.",
-        1, (value x),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
+        (value x),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "D.n")
 {
   return makeint(isinf(floatval_op(x, THIS_OP)));
 }
 
-TYPEDOP(fabs, 0, "`f1 -> `f2. Returns |`f1|, the absolute value of `f1.", 1,
-        (value f), OP_LEAF | OP_NOESCAPE, "D.d")
+TYPEDOP(fabs, , "`f1 -> `f2. Returns |`f1|, the absolute value of `f1.",
+        (value f), OP_LEAF | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "D.d")
 {
-  return makefloat(fabs(floatval_op(f, THIS_OP)));
+  return alloc_float(fabs(floatval_op(f, THIS_OP)));
 }
 
 static inline double neg(double d)
@@ -177,16 +182,18 @@ static inline double neg(double d)
 
 FUNOP(neg, "-`f1")
 
-TYPEDOP(frandom, 0, "-> `f. Returns a random value in [0, 1)", 0,
+TYPEDOP(frandom, , "-> `f. Returns a random value in [0, 1)",
         (void), OP_LEAF | OP_NOESCAPE, ".d")
 {
-  return makefloat(drand48());
+  return alloc_float(drandom());
 }
 
-TYPEDOP(fsign, 0, "`f -> `n. Returns -1 for negative `f (including negative"
+TYPEDOP(fsign, , "`f -> `n. Returns -1 for negative `f (including negative"
         " zero), 1 for strictly positive, 0 for positive zero."
         " Causes an error if `f is Not a Number (NaN).",
-        1, (value f), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
+        (value f),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL,
+        "D.n")
 {
   double d = floatval_op(f, THIS_OP);
   if (isnan(d))
@@ -195,11 +202,11 @@ TYPEDOP(fsign, 0, "`f -> `n. Returns -1 for negative `f (including negative"
   return makeint(signbit(d) ? -1 : d > 0 ? 1 : 0);
 }
 
-TYPEDOP(ftoi, 0, "`f -> `n. Returns `f as an integer by discarding the"
+TYPEDOP(ftoi, , "`f -> `n. Returns `f as an integer by discarding the"
         " fractional part (truncating the value toward zero).\n"
         "Causes an error if `f is out of range or Not a Number (NaN).",
-        1, (value f),
-        OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "D.n")
+        (value f),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "D.n")
 {
   double d = floatval_op(f, THIS_OP);
 
@@ -210,31 +217,33 @@ TYPEDOP(ftoi, 0, "`f -> `n. Returns `f as an integer by discarding the"
 }
 
 
-TYPEDOP(itof, 0, "`n -> `f. Returns the integer `n as a float", 1, (value n),
-        OP_LEAF | OP_NOESCAPE, "n.d")
+TYPEDOP(itof, , "`n -> `f. Returns the integer `n as a float", (value n),
+        OP_LEAF | OP_NOESCAPE | OP_CONST | OP_TRIVIAL, "n.d")
 {
   long l;
   CHECK_TYPES(n, CT_INT(l));
-  return makefloat(l);
+  return alloc_float(l);
 }
 
-TYPEDOP(atof, 0, "`s -> `f. Converts string to float."
+TYPEDOP(atof, , "`s -> `f. Converts string to float."
         " Returns `s if conversion failed",
-        1, (struct string *s),
-        OP_LEAF | OP_NOESCAPE, "s.[ds]")
+        (struct string *s),
+        OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST | OP_TRIVIAL,
+        "s.[ds]")
 {
   CHECK_TYPES(s, string);
 
   double d;
   if (!mudlle_strtofloat(s->str, string_len(s), &d))
     return s;
-  return makefloat(d);
+  return alloc_float(d);
 }
 
-TYPEDOP(fcmp, 0, "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
+TYPEDOP(fcmp, , "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
         " 1 if `f1 > `f2. Causes an error if either `f1 or `f2 is"
         " Not a Number (NaN).",
-        2, (value f1, value f2), OP_LEAF | OP_NOALLOC | OP_NOESCAPE,
+        (value f1, value f2),
+        OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST | OP_TRIVIAL,
         "DD.n")
 {
   double d1, d2;
@@ -248,10 +257,7 @@ TYPEDOP(fcmp, 0, "`f1 `f2 -> `n. Returns -1 if `f1 < `f2, 0 if `f1 = `f2,"
   return makeint(isgreater(d1, d2));
 }
 
-static const typing lp_solve_tset = {
-  "vv.[vn]", "vvn.[vn]", "vvnv.[vn]", "vvnvv.[vn]", "vvnvvv.[vn]", NULL
-};
-FULLOP(lp_solve, 0,
+VAROP(lp_solve, ,
        "`v1[f]:objective `v2[v[f]]:constraints [`n1:minmax `v3[f]:lower_bound"
        " `v4[f]:upper_bound `v5[b]:integer?] -> `v[f]|`n.\nMaximize objective"
        " function `v1, given constraints `v2 and optional lower-upper bounds"
@@ -262,8 +268,8 @@ FULLOP(lp_solve, 0,
        "If `n1 <= 0, minimize objective function instead of maximizing.\n"
        "The function returns the optimal vector or a numerical error code"
        " (see `LP_xxx constants).",
-       NVARARGS, (struct vector *args, ulong nargs), 0, 0,
-       OP_LEAF | OP_NOESCAPE, lp_solve_tset, static)
+       OP_LEAF | OP_NOESCAPE,
+       ("vv.[vn]", "vvn.[vn]", "vvnv.[vn]", "vvnvv.[vn]", "vvnvvv.[vn]"))
 {
   const int MAX_VARIABLES = 100;
   const int MAX_CONSTRAINTS = 100;
@@ -406,7 +412,7 @@ FULLOP(lp_solve, 0,
   struct vector *r = alloc_vector(variables);
   GCPRO(r);
   for (int j = 0; j < variables; ++j)
-    r->data[j] = makefloat((double)lp->best_solution[lp->rows + j + 1]);
+    SET_VECTOR(r, j, alloc_float(lp->best_solution[lp->rows + j + 1]));
   delete_lp(lp);
   UNGCPRO();
   return r;
@@ -445,7 +451,7 @@ FBINOP(div, /)
 
 static void sys_def_float(struct string *name, double d)
 {
-  system_string_define(name, alloc_mudlle_float(d));
+  system_string_define(name, alloc_float(d));
 }
 
 #define DEFCONST(name) do {                                     \
@@ -507,7 +513,11 @@ void float_init(void)
   DEFCONST(M_SQRT1_2);
   DEFCONST(M_LOG2E);
   DEFCONST(M_LOG10E);
-  DEFCONST(HUGE_VAL);
+  {
+    const double MAX_FLOAT = DBL_MAX;
+    DEFCONST(MAX_FLOAT);
+  }
+  DEFCONST(INFINITY);
 
   /* lp_solve return codes.
    * Not all of these are currently in use, but let's reserve the names... */

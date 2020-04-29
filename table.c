@@ -26,112 +26,52 @@
 #include "alloc.h"
 #include "charset.h"
 #include "error.h"
+#include "hash.h"
 #include "mvalues.h"
 #include "table.h"
+#include "utils.h"
 
 struct table_methods {
   struct table *(*alloc)(ulong size);
-  ulong (*hash)(const char *name, size_t len, ulong size);
-  ulong (*hash_str)(const char *name, size_t len);
+  ulong (*hash)(const char *name, size_t len, int bits);
   int (*compare)(const void *a, const void *b, size_t n);
   value (*make_used)(long n);
   int used_delta;
 };
 
-static const struct table_methods table_methods, case_table_methods;
+static const struct table_methods table_methods, ctable_methods;
 
 static value table_makeint(long n)
 {
   return makeint(n);
 }
 
-static value case_table_makeint(long n)
+static value ctable_makeint(long n)
 {
   return makeint(~n);
 }
 
-#define FNV_PRIME (sizeof (long) == 4           \
-                   ? 0x01000193L                \
-                   : 0x00000100000001b3L)
-#define FNV_OFFSET (sizeof (long) == 4          \
-                    ? 0x811c9dc5L               \
-                    : 0xcbf29ce484222325L)
-
-CASSERT(sizeof (long) == 4 || sizeof (long) == 8);
-
-static ulong table_hash_str(const char *name, size_t len)
+int table_good_size(int entries)
 {
-  ulong code = FNV_OFFSET;
-  while (len--)
-    {
-      unsigned char c = *name++;
-      code ^= TO_7LOWER(c);
-      code *= FNV_PRIME;
-    }
-  return code;
-}
-
-static ulong case_table_hash_str(const char *name, size_t len)
-{
-  ulong code = FNV_OFFSET;
-  while (len--)
-    {
-      unsigned char c = *name++;
-      code ^= c;
-      code *= FNV_PRIME;
-    }
-  return code;
-}
-
-/* FNV-1a hash from
-   http://tools.ietf.org/html/draft-eastlake-fnv-03 */
-static ulong internal_hash(const char *name, size_t len, ulong size,
-                           ulong (*hash_str)(const char *, size_t len))
-{
-  ulong code = hash_str(name, len);
-  assert(size && (size & (size - 1)) == 0);
-  ulong mask = size - 1;
-  int bits = 0;
-  while (size > UINT_MAX)
-    {
-      const size_t uintbits = CHAR_BIT * sizeof (unsigned int);
-      size >>= uintbits - 1; /* two shifts to avoid too-long-shift warning */
-      size >>= 1;
-      bits += uintbits;
-    }
-  bits += ffs(size) - 1;
-  code ^= code >> bits;
-  code &= mask;
-  return code;
-}
-
-/* case- and accentuation-insensitive */
-ulong symbol_hash_len(const char *name, size_t len, ulong size)
-{
-  return internal_hash(name, len, size, table_methods.hash_str);
-}
-
-/* case- and accentuation-sensitive */
-ulong case_symbol_hash_len(const char *name, size_t len, ulong size)
-{
-  return internal_hash(name, len, size, case_table_methods.hash_str);
+  assert(entries < (INT_MAX - 2) / 4);
+  entries = (entries * 4 + 2) / 3;
+  /* next power of two */
+  return P(CHAR_BIT * sizeof (int) - clz(entries));
 }
 
 static const struct table_methods table_methods = {
   .alloc      = alloc_table,
-  .hash       = symbol_hash_len,
-  .hash_str   = table_hash_str,
-  .compare    = mem8icmp,
+  .hash       = symbol_7inhash,
+  .compare    = mem7icmp,
   .make_used  = table_makeint,
   .used_delta = 1
 };
 
-static const struct table_methods case_table_methods = {
+static const struct table_methods ctable_methods = {
   .alloc      = alloc_ctable,
-  .hash       = case_symbol_hash_len,
-  .hash_str   = case_table_hash_str,
+  .hash       = symbol_nhash,
   .compare    = memcmp,
-  .make_used  = case_table_makeint,
+  .make_used  = ctable_makeint,
   .used_delta = -1
 };
 
@@ -157,13 +97,13 @@ struct table *alloc_ctable(ulong size)
 */
 {
   struct table *t = alloc_table(size);
-  t->used = case_table_methods.make_used(0);
+  t->used = ctable_methods.make_used(0);
   return t;
 }
 
 static const struct table_methods *get_methods(struct table *t)
 {
-  return is_ctable(t) ? &case_table_methods : &table_methods;
+  return is_ctable(t) ? &ctable_methods : &table_methods;
 }
 
 static ulong add_position;
@@ -174,7 +114,11 @@ static long table_find(struct table *table, const char *name, size_t nlength)
   const struct table_methods *methods = get_methods(table);
 
   ulong size = vector_len(table->buckets);
-  ulong hashcode = methods->hash(name, nlength, size);
+  int size_bits = ffs(size) - 1;
+  assert(size <= UINT_MAX);
+  assert(P(size_bits) == size);
+
+  ulong hashcode = methods->hash(name, nlength, size_bits);
   long scan = hashcode;
   struct symbol **bucket = (struct symbol **)&table->buckets->data[scan];
   for (;;)
@@ -210,9 +154,11 @@ struct symbol *table_lookup_len(struct table *table, const char *name,
   return table->buckets->data[pos];
 }
 
-struct symbol *table_mlookup(struct table *table, struct string *name)
+struct symbol *table_mlookup_substring(struct table *table,
+                                       struct string *name,
+                                       long idx, long len)
 {
-  return table_lookup_len(table, name->str, string_len(name));
+  return table_lookup_len(table, name->str + idx, len);
 }
 
 struct symbol *table_remove(struct table *table, const char *name)
@@ -233,7 +179,11 @@ struct symbol *table_remove_len(struct table *table, const char *name,
 
   struct symbol *result = table->buckets->data[scan];
   struct symbol **bucket = (struct symbol **)&table->buckets->data[scan];
+
   long size = vector_len(table->buckets);
+  int size_bits = ffs(size) - 1;
+  assert(P(size_bits) == size);
+
   *bucket = NULL;
 
   const struct table_methods *methods = get_methods(table);
@@ -251,7 +201,7 @@ struct symbol *table_remove_len(struct table *table, const char *name,
       if (sym == NULL)
         break;
       ulong newpos = methods->hash(sym->name->str, string_len(sym->name),
-                                   size);
+                                   size_bits);
 
       *bucket = NULL;
       struct symbol **newbuck
@@ -320,16 +270,14 @@ enum runtime_error safe_table_mset(struct table *table, struct string *s,
     {
       if (table_entries(table) >= MAX_TABLE_ENTRIES)
         return error_bad_value; /* table is full */
-      value x2 = *x;
-      GCPRO(table, x2);
+      GCPRO(table, *x);
       if (!obj_readonlyp(&s->o))
 	{
 	  /* make a copy of index string or it may get modified */
 	  s = make_readonly(mudlle_string_copy(s));
 	}
-      table_add_fast(table, s, x2);
+      table_add_fast(table, s, *x);
       UNGCPRO();
-      *x = x2;
     }
   return error_none;
 }

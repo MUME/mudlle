@@ -27,27 +27,27 @@ writes mc:this_function
 
 // Takes a parse tree as returned by mudlle_parse, and makes the following
 // changes:
-//   a) all variable names are replaced by a vector. Two uses of the same variable
-//      in the same function will refer to the same vector.
-
+//   a) all variable names are replaced by a vector. Two uses of the
+//      same variable in the same function will refer to the same vector.
+//
 //      There are 4 kinds of variable:
 //        global: a global variable
 //        global_constant: a constant global variable
 //        local: local to a block or a parameter
 //        closure: non-local variables (but not global) used in a function
-
+//
 //   b) The header of a function is changed to include:
 //      all its local variables (parameters, locals)
 //      the variables of its parent which will form its closure
 //      the variable in which the function is stored (debugging)
 //      the types of its arguments (instead of being in the argument list)
-
+//
 //   c) All block constructs are removed
 //      as a result, all components become lists of components
 //      explicit initialisation to null is added for all variables
-
+//
 //   d) a statement labeled "function" is added around every function
-
+//
 //   e) the module header and all global variable references are checked
 //      errors:
 //        the required modules must be present (successfully loaded)
@@ -187,13 +187,12 @@ writes mc:this_function
         table_foreach(fn (sym) [
           | var, err |
           var = car(symbol_get(sym));
-          err = match (var[mc:mv_used])
+          err = match! (var[mc:mv_used])
             [
               0 => "unused";
               ,mc:muse_read => "never written";
               ,mc:muse_write => "never read";
               ,(mc:muse_read | mc:muse_write) => exit<function> null;
-              _ => fail();
             ];
           mc:set_loc(var[mc:mv_loc]);
           mc:warning("local variable %s is %s", var[mc:mv_name], err);
@@ -459,11 +458,10 @@ writes mc:this_function
   imported? = fn (mod)
     // Returns: status of mod if it is in required_modules, false otherwise
     // Modifies: required_modules
-    match (required_modules[mod])
+    match! (required_modules[mod])
       [
         [m _ _] => m;
         () => false;
-        _ => fail()
       ];
 
   import = fn (vector v, string mod)
@@ -691,12 +689,12 @@ writes mc:this_function
 		      c[mc:c_ffilename],
 		      c[mc:c_fnicename],
                       mc:itypeset_from_typeset(c[mc:c_freturn_typeset]),
-                      false,	// noescape
 		      false,	// var name
 		      null, null, null, null, null, null, // var lists
-		      null,
-		      0,
-		      null))
+                      false,                              // noescape
+                      null,                               // phase4: misc
+                      0,                                  // phase4: nvars
+                      null))                              // phase4: allvars
 	]
       else if (class == mc:c_execute)
 	[
@@ -790,10 +788,7 @@ writes mc:this_function
 				false,          // vararg?
 				null,           // value
 				fname,          // filename
-				nname,          // nicename
-                                itype_any,      // return itype
-				false,		// noescape
-				top_var));      // variable name
+				nname));        // nicename
       components = resolve_block(m[mc:m_statics], list(m[mc:m_body]), true);
       env_leave_function();
       warn_bad_module_variables(seclev);
@@ -810,11 +805,11 @@ writes mc:this_function
 	       fname,                           // filename
 	       nname,                           // nicename
 	       itype_any,                       // return itypeset
-	       false,				// noescape
 	       top_var,                         // variable name
 	       null, null, null, null, null, null, // var lists
+	       false,				// noescape
 	       null,                            // misc
-	       0,                               // # fnvars
-	       null)                            // # allvars
+	       0,                               // nvars
+	       null)                            // allvars
     ];
 ];

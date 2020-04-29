@@ -123,7 +123,7 @@ void sb_add_base64(struct strbuf *sb, const void *data, size_t len, bool pad)
 
   const unsigned char *chars = data;
   enum { s0, s1, s2 } state = s0;
-  unsigned char prev;
+  unsigned char prev = 0;
   while (len > 0)
     {
       unsigned char c, this = *chars++;
@@ -218,6 +218,7 @@ static void strbuf_port_stat(struct oport *p, struct oport_stat *buf)
 }
 
 static const struct oport_methods strbuf_port_methods = {
+  .name   = "strbuf",
   .close  = strbuf_port_close,
   .putnc  = strbuf_port_putnc,
   .write  = strbuf_port_write,

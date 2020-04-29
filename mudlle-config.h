@@ -39,8 +39,8 @@
 #  error "Unsupported architecture"
 #endif
 
-#ifdef __linux__
-#  define HAVE_ALLOCA_H 1
+#ifdef __x86_64__
+#  define HAVE___UINT128_T 1
 #endif
 
 #ifdef __MACH__
@@ -64,8 +64,8 @@
 #define LEGACY_SECLEVEL  1   /* Maxseclevel is used if seclevel < LEGACY */
 #define MAX_SECLEVEL     1   /* Maximum valid seclevel */
 
-#define MUDLLE_INTERRUPT
-#define PRINT_CODE
+#define MUDLLE_INTERRUPT 1
+#define PRINT_CODE       1
 
 #ifndef __has_extension
 #  define __has_extension(x) 0
@@ -95,5 +95,13 @@
 #endif
 
 #  define MAX_LOOP_COUNT MAX_TAGGED_INT
+
+/* set to generate call count profiling information */
+#undef PROFILE_CALL_COUNT
+
+#undef MAX
+#define MAX(...) _Static_assert(0, "there is no MAX()")
+#undef MIN
+#define MIN(...) _Static_assert(0, "there is no MIN()")
 
 #endif  /* MUDLLE_CONFIG_H */

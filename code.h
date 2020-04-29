@@ -104,6 +104,7 @@ enum operator {
   op_builtin_ref,
   op_builtin_set,
   op_builtin_add,
+  op_builtin_addint,
   op_builtin_sub,
   op_builtin_bitand,
   op_builtin_bitor,
@@ -116,9 +117,9 @@ enum operator {
   op_typecheck,			/* typecheck i: op_typecheck + i
 				   arg1 is stack offset */
 
-#define DEF_TYPECHECK_OP(arg, name)				\
+#define DEF_TYPECHECK_OP(name, arg)				\
   op_typecheck_ ## name = op_typecheck + type_ ## name,
-#define DEF_STYPECHECK_OP(arg, name)				\
+#define DEF_STYPECHECK_OP(name, arg)				\
   op_typecheck_ ## name = op_typecheck + stype_ ## name,
 
   FOR_PLAIN_TYPES(DEF_TYPECHECK_OP,)

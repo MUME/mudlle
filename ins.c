@@ -29,6 +29,7 @@
 #include "builtins.h"
 #include "calloc.h"
 #include "code.h"
+#include "compile.h"
 #include "dwarf.h"
 #include "ins.h"
 #include "lexer.h"
@@ -207,7 +208,8 @@ void ins0(enum operator op, struct fncode *fn)
     case op_discard: case op_builtin_eq: case op_builtin_neq:
     case op_builtin_le: case op_builtin_lt: case op_builtin_ge:
     case op_builtin_gt: case op_builtin_ref: case op_builtin_add:
-    case op_builtin_sub: case op_builtin_bitand: case op_builtin_bitor:
+    case op_builtin_addint: case op_builtin_sub: case op_builtin_bitand:
+    case op_builtin_bitor:
       adjust_depth(-1, fn);
       break;
     case op_builtin_set:
@@ -476,8 +478,6 @@ static struct string *build_lineno_data(struct ilist *ins)
 struct icode *generate_fncode(struct fncode *fn,
                               struct string *help,
                               struct string *varname,
-                              struct string *afilename,
-                              struct string *anicename,
                               const struct loc *loc,
                               struct obj *arguments,
                               unsigned return_typeset,
@@ -504,7 +504,12 @@ struct icode *generate_fncode(struct fncode *fn,
     assert(TYPE(arguments, vector));
   assert(immutablep(arguments));
 
-  GCPRO(help, varname, afilename, anicename, arguments, lineno_data);
+  struct string *mfilename = NULL, *mnicename = NULL;
+  GCPRO(help, varname, mfilename, mnicename, arguments, lineno_data);
+
+  mfilename = scache_alloc_str(loc->fname->path);
+  mnicename = scache_alloc_str(loc->fname->nice);
+
   lineno_data = build_lineno_data(fn->instructions);
 
   /* Warning: Portability */
@@ -527,8 +532,8 @@ struct icode *generate_fncode(struct fncode *fn,
 #endif
       },
       .varname        = varname,
-      .filename       = afilename,
-      .nicename       = anicename,
+      .filename       = mfilename,
+      .nicename       = mnicename,
       .help           = help,
       .arguments.obj  = arguments,
       .linenos        = lineno_data,
@@ -544,7 +549,6 @@ struct icode *generate_fncode(struct fncode *fn,
     .nb_constants      = fn->cstindex,
     .nb_locals         = 0,     /* initialized later */
     .stkdepth          = fn->max_depth,
-    .call_count        = 0,
     .instruction_count = 0,
   };
 
@@ -576,26 +580,25 @@ struct icode *generate_fncode(struct fncode *fn,
 
 #ifndef NOCOMPILER
 #ifdef __i386__
-  /* movl interpreter_invoke,%ecx */
-  gencode->magic_dispatch[0] = 0xb9;
-  ulong invoke_addr = (ulong)interpreter_invoke;
-  memcpy(gencode->magic_dispatch + 1, &invoke_addr, sizeof invoke_addr);
-  /* jmp *%ecx */
-  gencode->magic_dispatch[5] = 0xff;
-  gencode->magic_dispatch[6] = 0xe1;
-  /* nop */
-  gencode->magic_dispatch[7] = 0x90;
+  static const struct magic_dispatch magic_dispatch = {
+    .movl_ecx = 0xb9,
+    .invoke   = interpreter_invoke,
+    .jmp_ecx  = { 0xff, 0xe1 },
+    .nop1     = NOP1,
+  };
+  CASSERT_SIZEOF(magic_dispatch, 1 + 4 + 2 + 1);
 #elif defined __x86_64__
-  static struct magic_dispatch magic_dispatch = {
+  static const struct magic_dispatch magic_dispatch = {
     .movq_r11 = { 0x49, 0xbb },
     .invoke   = interpreter_invoke,
-    .jmpq_r11 = { 0x41, 0xff, 0xe3 }
+    .jmpq_r11 = { 0x41, 0xff, 0xe3 },
+    .nop3     = NOP3,
   };
-  CASSERT_EXPR(sizeof magic_dispatch == 2 + 8 + 3);
-  gencode->magic_dispatch = magic_dispatch;
+  CASSERT_SIZEOF(magic_dispatch, 2 + 8 + 3 + 3);
 #else
   #error Unsupported architecture
 #endif
+  gencode->magic_dispatch = magic_dispatch;
 #endif
 
 #ifdef GCSTATS

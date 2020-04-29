@@ -40,16 +40,16 @@ defines x86:l_ins, x86:l_alias, x86:l_number, x86:il_label, x86:il_ins,
   x86:op_sub, x86:op_cmp, x86:op_cmpbyte, x86:op_or, x86:op_xor, x86:op_and,
   x86:op_andbyte, x86:op_test, x86:op_inc, x86:op_dec, x86:op_neg, x86:op_not,
   x86:op_bt, x86:op_bts, x86:op_btr, x86:op_btc, x86:op_shl, x86:op_shr,
-  x86:op_setcc, x86:op_movzxbyte, x86:op_xchg, x86:op_imul, x86:op_movbyte,
-  x86:op_orbyte,
+  x86:op_setcc, x86:op_cmovcc, x86:op_movzxbyte, x86:op_xchg, x86:op_imul,
+  x86:op_movbyte, x86:op_orbyte, x86:op_movzxword,
   x86:ops, x86:new_code,
   x86:set_instruction, x86:get_instructions, x86:rem_instruction,
   x86:copy_instruction, x86:mudlleint, x86:doubleint, x86:push, x86:pop,
   x86:call, x86:ret, x86:jmp, x86:jcc, x86:lea, x86:mov, x86:add, x86:sub,
   x86:cmp, x86:cmpbyte, x86:or, x86:xor, x86:and, x86:andbyte, x86:test,
   x86:inc, x86:dec, x86:neg, x86:not, x86:bt, x86:btr, x86:bts, x86:btc,
-  x86:shl, x86:shr, x86:setcc, x86:movzxbyte, x86:xchg, x86:imul, x86:movbyte,
-  x86:orbyte,
+  x86:shl, x86:shr, x86:setcc, x86:cmovcc, x86:movzxbyte, x86:movzxword,
+  x86:xchg, x86:imul, x86:movbyte, x86:orbyte,
   x86:new_label,
   x86:label, x86:set_label, x86:skip_label_alias, x86:ins_list, x86:print_ins,
   x86:resolve, x86:trap,
@@ -213,18 +213,20 @@ x86:op_shl = 25;
 x86:op_shr = 26;
 x86:op_sar = 33;
 x86:op_setcc = 27;
+x86:op_cmovcc = 41;
 x86:op_movzxbyte = 28;
+x86:op_movzxword = 42;
 x86:op_movbyte = 39;
 x86:op_xchg = 29;
 x86:op_op16 = 34; // generate the operand size prefix
 
 x86:op_imul = 38;
 
-x86:ops = 41;
+x86:ops = 43;
 
 [
-  | ins_index, label_index, rnames32, rnames8, cnames, mode, eastr, slabel,
-    opname, add_ins, generic_op0, generic_op1, generic_op2 |
+  | ins_index, label_index, rnames32, rnames16, rnames8, cnames, mode,
+    eastr, slabel, opname, add_ins, generic_op0, generic_op1, generic_op2 |
 
 
   x86:new_code = fn ()
@@ -360,8 +362,8 @@ x86:ops = 41;
   x86:leave = generic_op0(x86:op_leave);
 
   x86:call = generic_op1(x86:op_call);
-  x86:callrel = fn (fcode, builtin)
-    add_ins(fcode, vector(x86:op_callrel, builtin, null));
+  x86:callrel = fn (fcode, builtin, noreturn?)
+    add_ins(fcode, vector(x86:op_callrel, builtin, noreturn?));
   x86:callrel_prim = fn (fcode, prim)
     add_ins(fcode, vector(x86:op_callrel_prim, prim, null));
   x86:ret = generic_op0(x86:op_ret);
@@ -376,17 +378,38 @@ x86:ops = 41;
 
   x86:imul = generic_op2(x86:op_imul); // dest must be lidx
 
-  x86:add = generic_op2(x86:op_add);
-  x86:adc = generic_op2(x86:op_adc);
-  x86:sub = generic_op2(x86:op_sub);
-  x86:cmp = generic_op2(x86:op_cmp);
-  x86:cmpbyte = generic_op2(x86:op_cmpbyte);
-  x86:or = generic_op2(x86:op_or);
-  x86:orbyte = generic_op2(x86:op_orbyte);
-  x86:xor = generic_op2(x86:op_xor);
-  x86:and = generic_op2(x86:op_and);
+  [
+    | addsub |
+    addsub = fn (posop, negop)
+      fn (fcode, m1, a1, m2, a2)
+        [
+          | arg1, op |
+          arg1 = x86:resolve(m1, a1);
+          // convert add/sub $128,r/m to sub/add $-128,r/m
+          op = match (arg1)
+            [
+              (,x86:limm . (128 || (64 . 0))) => [
+                set_cdr!(arg1, -128);
+                negop
+              ];
+              _ => posop
+            ];
+          add_ins(fcode, vector(op, arg1, x86:resolve(m2, a2)))
+        ];
+
+    x86:add = addsub(x86:op_add, x86:op_sub);
+    x86:sub = addsub(x86:op_sub, x86:op_add);
+  ];
+
+  x86:adc     = generic_op2(x86:op_adc);
+  x86:and     = generic_op2(x86:op_and);
   x86:andbyte = generic_op2(x86:op_andbyte);
-  x86:test = generic_op2(x86:op_test);
+  x86:cmp     = generic_op2(x86:op_cmp);
+  x86:cmpbyte = generic_op2(x86:op_cmpbyte);
+  x86:or      = generic_op2(x86:op_or);
+  x86:orbyte  = generic_op2(x86:op_orbyte);
+  x86:test    = generic_op2(x86:op_test);
+  x86:xor     = generic_op2(x86:op_xor);
 
   x86:inc = generic_op1(x86:op_inc);
   x86:dec = generic_op1(x86:op_dec);
@@ -403,8 +426,15 @@ x86:ops = 41;
   x86:sar = generic_op2(x86:op_sar); // many restrictions on arg1
   x86:setcc = fn (fcode, cc, m1, a1)
     add_ins(fcode, vector(x86:op_setcc, cc, x86:resolve(m1, a1)));
+  x86:cmovcc = fn (fcode, cc, m1, a1, m2, a2)
+    [
+      assert(m2 == x86:lreg);
+      add_ins(fcode, vector(x86:op_cmovcc, x86:resolve(m1, a1),
+                            x86:resolve(x86:lidx, a2 . cc)));
+    ];
 
   x86:movzxbyte = generic_op2(x86:op_movzxbyte); // dest must be register
+  x86:movzxword = generic_op2(x86:op_movzxword); // dest must be register
   x86:xchg = generic_op2(x86:op_xchg); // dest must be register
   x86:op16 = generic_op0(x86:op_op16);
 
@@ -454,19 +484,50 @@ be generated in x86code" (fcode, label)
     [
       | l |
 
+      // fcode[2] is a list of [ errno loc label args label2 ]
+      //   errno    an error_xxx
+      //   loc      trap code location
+      //   label    jump label for this error trampoline
+      // where args and label2 are null except for error_bad_type:
+      //   args     cons(typeset, var)
+      //   label2   if typeset is null, this is the label to jump to after
+      //            moving var to arg0; if typeset is not null, the "tail"
+      //            label for moving typeset to arg1 and jumping to the
+      //            berror_xxx trampoline
+
       <found> [
         for ( | tl | tl = fcode[2]; tl != null; tl = cdr(tl))
           match (car(tl))
             [
-              [ ,n ,(mc:get_loc()) ,args label ] => [
-                l = label;
-                exit<found> null;
+              [ ,n ,(mc:get_loc()) label oargs label2 ] => [
+                if (equal?(args, oargs))
+                  [
+                    l = label;
+                    exit<found> null;
+                  ];
+
+                assert(n == error_bad_type);
+                | otype, type, var |
+                @(otype . _) = oargs;
+                @(type . var) = args;
+                if (equal?(type, otype))
+                  [
+                    | l2 |
+                    l = x86:new_label(fcode);
+                    if (label2)
+                      l2 = label2
+                    else
+                      car(tl)[4] = l2 = x86:new_label(fcode);
+                    fcode[2] = vector(n, mc:get_loc(), l, null . var, l2)
+                      . fcode[2];
+                    exit<found> null
+                  ];
               ]
             ];
 
         // new trap
         l = x86:new_label(fcode);
-        fcode[2] = vector(n, mc:get_loc(), args, l) . fcode[2];
+        fcode[2] = vector(n, mc:get_loc(), l, args, false) . fcode[2];
       ];
 
       if (cc == x86:balways)
@@ -510,14 +571,14 @@ be generated in x86code" (fcode, label)
 	     "bt" "bts" "btr" "btc"
 	     "shl" "shr" "setcc" "movzx8" "xchg"
 	     "jmp32" "jcc32" "callrel" "sar" "op16" "leave" "adc"
-             "callrelprim" "imul" "mov8" "or8"];
+             "callrelprim" "imul" "mov8" "or8" "cmovcc" "movzx16"];
   assert(vlength(opname) == x86:ops);
 
   cnames = '["o" "no" "b" "ae" "e" "ne" "be" "a"
 	     "s" "ns" "p" "np" "l" "ge" "le" "g"];
 
   rnames32 = '["eax" "ecx" "edx" "ebx" "esp" "ebp" "esi" "edi"];
-  //rnames16 = '["ax" "cx" "dx" "bx" "sp" "bp" "si" "di"];
+  rnames16 = '["ax" "cx" "dx" "bx" "sp" "bp" "si" "di"];
   rnames8 = '["al" "cl" "dl" "bl" "ah" "ch" "dh" "bh"];
 
   mode = '[0 0 0 0 0 "cst" "fn" "gbl" "gcst" "prim" "sym"];
@@ -536,9 +597,14 @@ be generated in x86code" (fcode, label)
 	rnames[a]
       else if (m == x86:lidx)
         [
-          | r, disp |
+          | r, disp, ostr |
+          ostr = "";
           @(r . disp) = a;
-          format("%s[%s]", itoea(disp), rnames32[r])
+          disp = if (function?(disp))
+            disp(true)
+          else
+            itoea(disp);
+          format("%s[%s%s]", disp, rnames32[r], ostr)
         ]
       else if (m == x86:lridx)
         [
@@ -565,20 +631,18 @@ be generated in x86code" (fcode, label)
       else if (m == x86:lclosure)
 	format("closure[%s]", mc:fname(a))
       else if (m == x86:lseclev)
-        match (a) [
+        match! (a) [
           ,x86:sl_c => "seclev";
           ,x86:sl_mudlle => "seclev*2+1";
           ,x86:sl_maxlev => "maxseclev*2+1";
-          _ => fail()
         ]
       else if (m == x86:lcst)
 	format("%s[%w]", mode[m], a)
       else if (m == x86:lglobal)
-        match (a) [
+        match! (a) [
           (name . ,x86:gl_c) => format("gidx[%s]", name);
           (name . ,x86:gl_mudlle) => format("gidx[%s]*2+1", name);
           name && string?(name) => format("%s[%s]", mode[m], name);
-          _ => fail();
         ]
       else
         format("%s[%s]", mode[m], a);
@@ -607,8 +671,18 @@ be generated in x86code" (fcode, label)
 	dformat("callrel %s", a1)
       else if (op == x86:op_setcc)
 	dformat("set%s %s", cnames[a1], eastr(a2, rnames8))
+      else if (op == x86:op_cmovcc)
+        [
+          | r2, cc |
+          @(,x86:lidx . (r2 . cc)) = a2;
+          dformat("cmov%s %s,%s", cnames[cc], eastr(a1, rnames32),
+                  rnames32[r2])
+        ]
       else if (op == x86:op_movbyte || op == x86:op_movzxbyte)
 	dformat("%s %s,%s", opname[op], eastr(a1, rnames8),
+                eastr(a2, rnames32))
+      else if (op == x86:op_movzxword)
+	dformat("%s %s,%s", opname[op], eastr(a1, rnames16),
                 eastr(a2, rnames32))
       else if (a1 == null)
 	dformat("%s", opname[op])

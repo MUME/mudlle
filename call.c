@@ -41,28 +41,27 @@
 value invoke0(struct closure *c) { return NULL; }
 #define DEF_INVOKE(N) \
 value invoke ## N(struct closure *c, PRIMARGS ## N) { return NULL; }
-DOPRIMARGS(DEF_INVOKE)
+DOPRIMARGS(DEF_INVOKE, SEP_EMPTY)
 
 value invoke1plus(struct closure *c, value arg, struct vector *args)
 { return NULL; }
 
-value invoke(struct closure *c, struct vector *args) { return NULL; }
+value invokev(struct closure *c, struct vector *args) { return NULL; }
 #endif  /* NOCOMPILER */
 
-bool minlevel_violator(value c)
+bool minlevel_violator(value c, seclev_t minlev)
 {
   struct obj *o = c;
+  enum mudlle_type t = o->type;
+  struct code *code;
+  if (t == type_closure)
+    code = ((struct closure *)o)->code;
+  else if (t == type_code || t == type_mcode)
+    code = (struct code *)o;
+  else
+    return false;
 
-  switch (o->type)
-    {
-    case type_closure:
-      return minlevel_violator(((struct closure *)o)->code);
-    case type_code:
-    case type_mcode:
-      return ((struct code *)o)->seclevel < minlevel;
-    default:
-      return false;
-    }
+  return code->seclevel < minlev;
 }
 
 bool callablep(value c, int nargs)
@@ -157,8 +156,8 @@ void callable(value c, int nargs)
     runtime_error(error);
 }
 
-/* if not NULL, is name of primitive forbidding calls */
-const char *forbid_mudlle_calls;
+/* if not NULL, the primitive forbidding calls */
+const struct prim_op *forbid_mudlle_calls;
 
 void fail_allow_mudlle_call(void)
 {
@@ -188,14 +187,12 @@ value call0(value c)
     case type_secure: case type_primitive:
       {
         struct primitive *prim = c;
-        ++prim->call_count;
         return prim->op->op();
       }
 
     case type_varargs:
       {
         struct primitive *prim = c;
-        ++prim->call_count;
         vararg_op_fn op = prim->op->op;
 	struct vector *args = UNSAFE_ALLOCATE_RECORD(vector, 0);
 	return op(args, 0);
@@ -207,7 +204,7 @@ value call0(value c)
 }
 
 #define __STACK_PUSH(N) stack_push(__PRIMNAME(N))
-#define __VSET(N) args->data[N - 1] = __PRIMNAME(N)
+#define __VSET(N) args->data[DEC(N)] = __PRIMNAME(N)
 
 #define CALL_N(N)                                                       \
 value call ## N(value c, PRIMARGS ## N)                                 \
@@ -237,14 +234,12 @@ value call ## N(value c, PRIMARGS ## N)                                 \
     case type_secure: case type_primitive:                              \
       {                                                                 \
         struct primitive *prim = c;                                     \
-        ++prim->call_count;                                             \
         return prim->op->op(PRIMARGNAMES ## N);                         \
       }                                                                 \
                                                                         \
     case type_varargs:                                                  \
       {                                                                 \
         struct primitive *prim = c;                                     \
-        ++prim->call_count;                                             \
         vararg_op_fn op = prim->op->op;                                 \
         GCPRO(PRIMARGNAMES ## N);                                       \
         struct vector *args = UNSAFE_ALLOCATE_RECORD(vector, N);        \
@@ -258,10 +253,10 @@ value call ## N(value c, PRIMARGS ## N)                                 \
   abort();                                                              \
 }
 
-DOPRIMARGS(CALL_N)
+DOPRIMARGS(CALL_N, SEP_EMPTY)
 
 #define __VECT1ARG(N) (N == 1 ? arg : args->data[N - 2])
-#define __V1CALLOP(N) case N: return op(CONCATCOMMA(N, __VECT1ARG));
+#define __V1CALLOP(N) case N: return op(CONCATCOMMA(N, __VECT1ARG))
 
 value call1plus(value c, value arg, struct vector *args)
 /* Effects: Calls c with argument arg
@@ -298,11 +293,10 @@ value call1plus(value c, value arg, struct vector *args)
     case type_secure: case type_primitive:
       {
         struct primitive *prim = c;
-        ++prim->call_count;
         value (*op)() = prim->op->op;
         switch (nargs)
           {
-            DOPRIMARGS(__V1CALLOP)
+            DOPRIMARGS(__V1CALLOP, SEP_SEMI);
           }
         abort();
       }
@@ -310,7 +304,6 @@ value call1plus(value c, value arg, struct vector *args)
     case type_varargs:
       {
 	struct primitive *prim = c;
-        ++prim->call_count;
         vararg_op_fn op = prim->op->op;
 
         GCPRO(arg, args);
@@ -328,10 +321,10 @@ value call1plus(value c, value arg, struct vector *args)
   abort();
 }
 
-#define __VECTARG(N) (args->data[N - 1])
-#define __VCALLOP(N) case N: return op(CONCATCOMMA(N, __VECTARG));
+#define __VECTARG(N) (args->data[DEC(N)])
+#define __VCALLOP(N) case N: return op(CONCATCOMMA(N, __VECTARG))
 
-value call(value c, struct vector *args)
+value callv(value c, struct vector *args)
 /* Effects: Calls c with arguments args
    Returns: c's result
    Requires: callable(c, vector_len(args)) does not fail.
@@ -350,7 +343,7 @@ value call(value c, struct vector *args)
 	struct closure *cl = c;
 
 	if (cl->code->o.type == type_mcode)
-	  return invoke(cl, args);
+	  return invokev(cl, args);
 
         GCPRO(cl, args);
         stack_reserve(nargs);
@@ -365,18 +358,16 @@ value call(value c, struct vector *args)
     case type_secure: case type_primitive:
       {
         struct primitive *prim = c;
-        ++prim->call_count;
         value (*op)() = prim->op->op;
         switch (nargs)
           {
-            DOPRIMARGS(__VCALLOP)
+            DOPRIMARGS(__VCALLOP, SEP_SEMI);
           }
         abort();
       }
     case type_varargs:
       {
         struct primitive *prim = c;
-        ++prim->call_count;
         vararg_op_fn op = prim->op->op;
         return op(args, nargs);
       }
@@ -386,98 +377,81 @@ value call(value c, struct vector *args)
   abort();
 }
 
-#define __VARG(N) __PRIMARG(N) = me.args[N - 1] = va_arg(va, value)
-#define __INVOKE(N)                             \
- case N:                                        \
- {                                              \
-   CONCATSEMI(N, __VARG);                       \
-   result = invoke ## N(cl, PRIMARGNAMES ## N); \
-   goto done;                                   \
- }
-#define __CALLOP(N)                             \
- case N:                                        \
- {                                              \
-   CONCATSEMI(N, __VARG);                       \
-   result = op(PRIMARGNAMES ## N);              \
-   goto done;                                   \
- }
+struct call_va_info {
+  value c, result;
+  int nargs;
+  va_list va;
+  const char *name;
+};
 
-static value callv(value c, int nargs, va_list va, const char *name)
-/* Effects: Calls c with argc arguments in va
-   Returns: c's result
-   Requires: callable(c, argc) does not fail.
-*/
+static void docall_va(void *_info)
 {
+  struct call_va_info *info = _info;
+  assert(info->nargs > 0);
+
   struct {
     struct call_stack_c_header c;
     value args[MAX_PRIMITIVE_ARGS];
   } me;
 
-  if (name)
+  if (info->name)
     {
       me.c = (struct call_stack_c_header){
 	.s = {
 	  .next = call_stack,
-	  .type = call_string,
+	  .type = call_string_args,
 	},
-	.u.name = name,
-	.nargs = nargs
+	.u.name = info->name,
+	.nargs = info->nargs
       };
       call_stack = &me.c.s;
     }
 
-  value result;
-  if (nargs > MAX_PRIMITIVE_ARGS)
-    goto call_vector;
-
-  check_allow_mudlle_call();
-
-  switch (((struct obj *)c)->type)
+  if (info->nargs > MAX_PRIMITIVE_ARGS)
     {
-    case type_closure:
-      {
-	struct closure *cl = c;
+      GCPRO(info->c);
+      me.c.nargs = 0;		/* in case there's GC */
+      struct vector *argv = make_vector(info->nargs, info->va);
+      me.c.s.type = call_string_argv;
+      me.c.nargs = 1;
+      UNGCPRO();
+      me.args[0] = argv;
 
-	if (cl->code->o.type != type_mcode)
-          goto call_vector;
-        switch (nargs)
-          {
-            DOPRIMARGS(__INVOKE)
-          }
-        abort();
-      }
-
-    case type_secure: case type_primitive:
-      {
-        struct primitive *prim = c;
-        ++prim->call_count;
-        value (*op)() = prim->op->op;
-        switch (nargs)
-          {
-            DOPRIMARGS(__CALLOP)
-          }
-        abort();
-      }
-    case type_varargs:
-      goto call_vector;
-
-    default:
-      abort();
+      callable(info->c, info->nargs);
+      info->result = callv(info->c, argv);
+      goto done;
     }
 
- call_vector: ;
-  GCPRO(c);
-  me.c.nargs = 0;		/* in case there's GC */
-  struct vector *argv = make_vector(nargs, va);
-  UNGCPRO();
-  me.c.nargs = 1;
-  me.args[0] = argv;
-  result = call(c, argv);
+#define __ARG(N) me.args[DEC(N)]
+#define __SETARG(N) do {                        \
+    __ARG(N) = va_arg(info->va, value);         \
+    if (info->nargs == N)                       \
+      goto done_args;                           \
+  } while (0)
+
+  DOPRIMARGS(__SETARG, SEP_SEMI);
+
+#undef __SETARG
+
+  abort();
+
+ done_args:
+  callable(info->c, info->nargs);
+
+  switch (info->nargs)
+    {
+#define __CALLN(N)                                                      \
+      case N:                                                           \
+        info->result = call ## N(info->c, CONCATCOMMA(N, __ARG));       \
+        goto done
+      DOPRIMARGS(__CALLN, SEP_SEMI);
+#undef __CALLN
+#undef __ARG
+    }
 
  done:
-  if (name)
+  if (info->name)
     call_stack = me.c.s.next;
-  return result;
 }
 
 /* Calls with error trapping */
@@ -543,13 +517,14 @@ struct call_info {
   struct vector *args;
 };
 
-static void docall(void *x)
+static void docallv(void *x)
 {
   struct call_info *info = x;
-  info->result = call(info->c, info->args);
+  callable(info->c, vector_len(info->args));
+  info->result = callv(info->c, info->args);
 }
 
-static void docall_named(void *x)
+static void docallv_named(void *x)
 {
   struct call_info *info = x;
   struct {
@@ -559,7 +534,7 @@ static void docall_named(void *x)
     .c = {
       .s = {
 	.next = call_stack,
-	.type = call_string
+	.type = call_string_argv
       },
       .u.name = info->name,
       .nargs = 1
@@ -567,76 +542,65 @@ static void docall_named(void *x)
     .args = { info->args }
   };
   call_stack = &me.c.s;
-  docall(x);
+  docallv(x);
   call_stack = me.c.s.next;
 }
 
-value mcatch_call(const char *name, value c, struct vector *arguments)
+value mcatch_callv(const char *name, value c, struct vector *arguments)
 {
   struct call_info info = {
     .c = c, .args = arguments, .name = name
   };
-  if (mcatch(name == NULL ? docall : docall_named, &info, call_trace_mode()))
+  if (mcatch(name == NULL ? docallv : docallv_named, &info, call_trace_mode()))
     return info.result;
   return NULL;
 }
 
-struct callv_info {
-  value c, result;
-  int argc;
-  va_list va;
-  const char *name;
-};
-
-static void docallv0(void *_info)
+static void docall_va0(void *_info)
 {
-  struct callv_info *info = _info;
+  struct call_va_info *info = _info;
+  callable(info->c, 0);
   info->result = call0(info->c);
 }
 
-static void docallv0_named(void *_info)
+static void docall_va0_named(void *_info)
 {
-  struct callv_info *info = _info;
+  struct call_va_info *info = _info;
   struct call_stack_c_header me = {
     .s = {
       .next = call_stack,
-      .type = call_string,
+      .type = call_string_args,
     },
     .u.name = info->name,
     .nargs  = 0
   };
   call_stack = &me.s;
-  docallv0(_info);
+  docall_va0(_info);
   call_stack = me.s.next;
 }
 
-value mcatch_call0(const char *name, value c)
+value internal_mcatch_call0(const char *name, value c)
 {
-  struct callv_info info = {
-    .c = c,
-    .argc = 0,
-    .name = name
+  struct call_va_info info = {
+    .c     = c,
+    .nargs = 0,
+    .name  = name
   };
-  bool ok = mcatch(name == NULL ? docallv0 : docallv0_named, &info,
-                   call_trace_mode());
-  return ok ? info.result : NULL;
+  if (mcatch(name == NULL ? docall_va0 : docall_va0_named, &info,
+             call_trace_mode()))
+      return info.result;
+  return NULL;
 }
 
-static void docallv(void *_info)
+value internal_mcatch_call(int argc, const char *name, value c, ...)
 {
-  struct callv_info *info = _info;
-  info->result = callv(info->c, info->argc, info->va, info->name);
-}
-
-value mcatchv(const char *name, value c, int argc, ...)
-{
-  struct callv_info info = {
-    .c = c,
-    .argc = argc,
-    .name = name
+  struct call_va_info info = {
+    .c     = c,
+    .nargs = argc,
+    .name  = name
   };
-  va_start(info.va, argc);
-  bool ok = mcatch(docallv, &info, call_trace_mode());
+  va_start(info.va, c);
+  bool ok = mcatch(docall_va, &info, call_trace_mode());
   va_end(info.va);
   return ok ? info.result : NULL;
 }
@@ -651,6 +615,7 @@ struct call1plus_info {
 static void docall1plus(void *x)
 {
   struct call1plus_info *info = x;
+  callable(info->c, 1 + vector_len(info->args));
   info->result = call1plus(info->c, info->arg, info->args);
 }
 
@@ -664,7 +629,7 @@ static void docall1plus_named(void *x)
     .c = {
       .s = {
         .next = call_stack,
-        .type = call_string
+        .type = call_string_argv
       },
       .u.name = info->name,
       .nargs = 2,
@@ -683,6 +648,7 @@ value mcatch_call1plus(const char *name, value c, value arg,
     .c = c, .arg = arg, .args = arguments, .name = name
   };
   if (mcatch(name == NULL ? docall1plus : docall1plus_named, &info,
-             call_trace_mode())) return info.result;
-  else return NULL;
+             call_trace_mode()))
+    return info.result;
+  return NULL;
 }

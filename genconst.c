@@ -45,11 +45,11 @@ int main(int argc, char **argv)
   PR(cc_frame_end_bp,      offsetof(struct ccontext, frame_end_bp));
 #define __PR_CALLER(n, reg)                                     \
   PR(cc_caller_ ## reg, offsetof(struct ccontext, caller.reg))
-  FOR_CALLER_SAVE(__PR_CALLER, ;);
+  FOR_CALLER_SAVE(__PR_CALLER, SEP_SEMI);
 #undef __PR_CALLER
 #define __PR_CALLEE(n, reg)                                     \
   PR(cc_callee_ ## reg, offsetof(struct ccontext, callee.reg))
-  FOR_CALLEE_SAVE(__PR_CALLEE, ;);
+  FOR_CALLEE_SAVE(__PR_CALLEE, SEP_SEMI);
 #undef __PR_CALLEE
   PR(cc_SIZE,              sizeof (struct ccontext));
 #endif

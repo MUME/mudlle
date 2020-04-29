@@ -72,6 +72,8 @@ ARCHFLAG := -m64
 endif
 endif
 
+INDENT=indent
+
 ARCHDEP:=.mudlle-arch
 
 OLD_ARCH:=$(shell [ -f $(ARCHDEP) ] && cat $(ARCHDEP))
@@ -85,12 +87,14 @@ endif
 $(ARCHDEP):
 	@echo "$(ARCH)" > $@
 
+OBJDEP:=$(ARCHDEP) mudlle-macro-n.h
+
 
 SRC := alloc.c assoc.c call.c calloc.c charset.c compile.c context.c	\
-	dwarf.c elf.c env.c error.c global.c ins.c interpret.c lexer.c	\
-	mcompile.c module.c mudlle-main.c mudlle.c objenv.c		\
-	parser.tab.c ports.c print.c stack.c strbuf.c table.c tree.c	\
-	types.c utils.c
+	dwarf.c elf.c env.c error.c global.c hash.c ins.c interpret.c	\
+	lexer.c mcompile.c module.c mudlle-main.c mudlle.c objenv.c	\
+	parser.tab.c ports.c print.c random.c stack.c strbuf.c		\
+	table.c tree.c types.c utils.c
 
 OBJS := $(BUILTINS) $(SRC:%.c=%.o)
 
@@ -160,21 +164,17 @@ mudlle: $(OBJS)
 	@echo "Link $@"
 	$(Q)$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
-profiler: profiler.o
-	@echo "Link $@"
-	$(Q)$(CC) $(LDFLAGS) -o $@ $<
-
 .PHONY: clean depclean
 depclean:
 	rm -f .depend
 
 clean:
 	rm -f *.o *.obj lexer.c tokens.h parser.tab.c parser.tab.h	\
-		.depend genconst genconstdefs.h mudlle parser.output	\
-		x86consts.h x64consts.h
+		.depend genconst genconstdefs.h mudlle mudlle-macro-n.h	\
+		parser.output x86consts.h x64consts.h
 
 ifeq (,$(USE_CPP_STEP))
-%.o: %.c $(ARCHDEP)
+%.o: %.c $(OBJDEP)
 	@echo "Compile $<"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 else
@@ -183,9 +183,9 @@ else
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 
 .PRECIOUS: %-mpp.c
-%-mpp.c: %.c $(ARCHDEP)
+%-mpp.c: %.c $(OBJDEP)
 	@echo "Create $@"
-	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | indent > $@
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -E $< | grep -v '^#' | $(INDENT) > $@
 endif
 
 .depend parser.tab.o lexer.o $(NO_UNUSED_MACROS): \
@@ -201,7 +201,7 @@ lexer.c: lexer.l
 	@echo "Bison $<"
 	$(Q)bison -dtv $<
 
-$(BUILTINS): $(BUILTINS:%.o=%.S) $(BUILTINDEPS) $(ARCHDEP)
+$(BUILTINS): $(BUILTINS:%.o=%.S) $(BUILTINDEPS) $(OBJDEP)
 	@echo "Compile $<"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
@@ -221,12 +221,16 @@ genconstdefs.h: runtime/consts.pl $(CONSTH) Makefile
 	@echo "Create $@"
 	$(Q)LC_ALL=C $(PERL) $< -d -o $@ -- $(CONSTH)
 
+mudlle-macro-n.h: make-macro-n.pl
+	@echo "Create $@"
+	$(Q)LC_ALL=C $(PERL) $< > $@
+
 .PHONY: dep depend
 dep depend: .depend
 	$(Q)$(MAKE) -C runtime -f Makefile depend
 
 .depend: $(SRC) genconst.c genconstdefs.h $(BUILTINS:%.o=%.S) $(BUILTINDEPS) \
-		$(ARCHDEP)
+		$(OBJDEP)
 	@echo "Create $@"
 	$(Q)$(MAKEDEPEND) $(CPPFLAGS) $(CFLAGS)		\
 		$(filter-out %.h $(ARCHDEP),$^)		\

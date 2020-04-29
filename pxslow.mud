@@ -29,7 +29,7 @@ trap_error(fn() [
 
   // optional two arguments N and M lets the user pick the N'th out of
   // M subsets of files to compile
-  match (argv)
+  match! (argv)
     [
       [_ s ss] => [
         slice = atoi(s);
@@ -37,7 +37,6 @@ trap_error(fn() [
         assert(slice >= 0 && slice < slices);
       ];
       [_] => null;
-      _ => fail();
     ];
 
   mc:verbose = 0;

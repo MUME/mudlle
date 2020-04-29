@@ -33,7 +33,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
     peephole,
     rex_op, rex_w, rex_b, rex_x, rex_r, reg8_rex, reg_hi, rax?,
     imm_jmp8, imm_jmp32,
-    word_size, prefix_op16 |
+    word_size |
 
   word_size = 8;
 
@@ -44,8 +44,6 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
   rex_b  = 1;
 
   reg_hi = 8;                   // high bit of register number
-
-  prefix_op16 = 0x66;
 
   mc:jccjmp_count = mc:labeled_jmp = 0;
 
@@ -128,14 +126,25 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
         ins[x64:i_arg1] = x64:skip_label_alias(ins[x64:i_arg1]);
     ], ilist);
 
+  | cmovcc_src? |
+  // safe as cmovcc source: reg or memory that must not trigger segv
+  cmovcc_src? = fn (arg)
+    match (arg)
+      [
+        ((,x64:lreg || ,x64:lindirect) . _) => true;
+        (,x64:lidx . ((,x64:reg_rsp || ,x64:reg_rbp) . _)) => true;
+      ];
+
   peephole = fn (ilist)
     // Types: ilist: list of x64 instructions
     // Requires: ilist != null, no aliased labels
     // Returns: list of x64 instructions
-    // Effects: Performs peephole optimisation - currently replaces
-    //   jcc x/jmp y/x: with jncc y/x:
+    // Effects: Performs peephole optimisation - replaces
+    //   jcc x/jmp y/x: with jncc y/x
+    //   jcc 0f; mov x,%reg; 0: with cmovcc x,%reg
     [
-      | iscan, jcc, jmp, aliased_label |
+
+      | iscan, jcc, jmp, noreturn, aliased_label |
 
       aliased_label = false;
       iscan = ilist;
@@ -164,16 +173,18 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	      ++mc:labeled_jmp;
 	    ];
 
-          if (jmp != null && !ilabel)
+          if (!ilabel && (jmp != null || noreturn != null))
             [
+              dremove!(iscan, ilist);
+              iscan = if (noreturn != null) noreturn else jmp;
               if (mc:verbose >= 3)
                 [
-                  display("UNREACHABLE after jmp: ");
+                  display("UNREACHABLE after ");
+                  x64:print_ins(dget(iscan)[x64:il_ins]);
+                  display(" : ");
                   x64:print_ins(ins);
                   newline();
                 ];
-              dremove!(iscan, ilist);
-              iscan = jmp;
             ]
           else if (jmp != null && ilabel == dget(jmp)[x64:il_ins][x64:i_arg1])
             [
@@ -202,8 +213,47 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 	      // jmp must be unlabeled, but mc:labeled_jmp optimisation
 	      // deals with that.
 	      if (op == x64:op_jmp)
-		jmp = iscan // to jcc/jmp state
-	      else
+		jmp = iscan     // to jcc/jmp state
+	      else if (op == x64:op_mov
+                       && !ilabel
+                       && car(ins[x64:i_arg2]) == x64:lreg
+                       && dget(dnext(iscan))[x64:il_label] == jcc[x64:i_arg1]
+                       && cmovcc_src?(ins[x64:i_arg1]))
+                [
+                  // jcc 0f; mov reg/mem,%reg; 0:
+                  if (mc:verbose >= 3)
+                    [
+                      display("REPLACE jcc over mov with cmovcc: ");
+                      x64:print_ins(jcc);
+                      display("; ");
+                      x64:print_ins(ins);
+                    ];
+
+                  [
+                    | previ |
+                    previ = dprev(iscan);
+                    dremove!(iscan, ilist);
+                    iscan = previ;
+                  ];
+
+                  jcc[x64:i_op] = x64:op_cmovcc;
+                  jcc[x64:i_arg1] = ins[x64:i_arg1];
+                  jcc[x64:i_arg2] = cons(
+                    x64:lidx,
+                    cons(
+                      cdr(ins[x64:i_arg2]),
+                      jcc[x64:i_arg2] ^ 1)); // inverse cc
+
+                  if (mc:verbose >= 3)
+                    [
+                      display(" -> ");
+                      x64:print_ins(jcc);
+                      newline();
+                    ];
+
+                  jcc = null;
+                ]
+              else
 		jcc = null; // back to nojcc
 	    ]
 	  else // jcc/jmp state
@@ -218,13 +268,18 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 		      newline();
 		    ];
 		  jcc[x64:i_arg1] = dget(jmp)[x64:il_ins][x64:i_arg1];
-		  jcc[x64:i_arg2] = jcc[x64:i_arg2] ^ 1; // reverse sense.
+		  jcc[x64:i_arg2] ^= 1; // reverse sense.
 		  // remove jmp
 		  dremove!(jmp, ilist);
 		];
 
               jmp = jcc = null; // back to nojcc
 	    ];
+
+          noreturn = null;
+          if (op == x64:op_ret
+              || (op == x64:op_call && ins[x64:i_arg2]))
+            noreturn = iscan;
 
 	  iscan = dnext(iscan);
 	  if (iscan == ilist) exit 0;
@@ -299,7 +354,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
         | ofs, size, ops, line |
         @[ofs size ops] = il[x64:il_offset];
         line = mc:loc_line(il[x64:il_loc]);
-        if (line != last_line)
+        if (line > 0 && line != last_line)
           [
             linenos = (ofs . line) . linenos;
             last_line = line;
@@ -327,7 +382,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
         0xbad; // something that is false for int8? !
     ];
   immval32 = fn (arg)
-    match (cdr(arg))
+    match! (cdr(arg))
       [
         i && integer?(i) => [
           assert(int32?(i));
@@ -337,7 +392,6 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
           assert(int31?(i));
           i * 2 + e
         ];
-        _ => fail()
       ];
   immediate_low32 = fn (arg)
     (match (cdr(arg))
@@ -443,23 +497,39 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       sib_scale_1 = 0x00;
 
       scale_ss = fn (scale)
-        match (scale)
+        match! (scale)
           [
             1 => sib_scale_1;
             2 => sib_scale_2;
             4 => sib_scale_4;
             8 => sib_scale_8;
-            _ => fail()
           ];
 
-      match (car(a2))
+      match! (car(a2))
         [
           ,x64:lreg => iop_rex_modrm(op, rex, 0xc0, reg1, regval(a2));
           ,x64:lidx => [
             | r, disp, opx, val, mod |
             @(r . disp) = cdr(a2);
 
-            if (int8?(disp))
+            if (r == x64:reg_rip)
+              [
+                val = if (function?(disp))
+                  disp
+                else
+                  [
+                    assert(int32?(disp));
+                    op_int32(disp);
+                  ];
+                exit<function> vector(iop_rex_modrm(op, rex, 0, reg1, 5), val);
+              ];
+
+	    if (disp == 0 && (r & 7) != 5)
+	      [
+		// must use index with %rbp and %r13
+		mod = 0;
+	      ]
+	    else if (int8?(disp))
               [
                 val = op_int8(disp);
                 mod = 0x40;
@@ -476,13 +546,13 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                 // must use sib for %rsp and %r12
                 iop_rex_modrm_sib(op, rex, mod | 4, reg1, sib_scale_1, 4, r);
               ]
-            else if (disp == 0 && (r & 7) != 5)
-              // must use index with %rbp and %r13
-              exit<function> iop_rex_modrm(op, rex, 0, reg1, r)
-            else
+	    else
               iop_rex_modrm(op, rex, mod, reg1, r);
 
-            vector(opx, val);
+            if (val != null)
+	      vector(opx, val)
+	    else
+	      opx
           ];
           ,x64:lqidx => [
             | ridx, scale, disp |
@@ -496,10 +566,29 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
             | ridx, scale, rbase, disp |
             @(ridx scale rbase . disp) = cdr(a2);
             scale = scale_ss(scale);
-            assert(rbase != x64:reg_rbp); // needs special handling
-            vector(iop_rex_modrm_sib(0x8d, rex, 0x84, reg1,
-                                     scale, ridx, rbase),
-                   op_int32(disp))
+            assert(ridx != x64:reg_rsp); // cannot be encoded
+	    | mod, val |
+	    if (disp == 0 && (ridx & 7) != 5)
+	      [
+		// must use displacement with %rbp and %r13
+		mod = 0x04;
+	      ]
+	    else if (int8?(disp))
+	      [
+		mod = 0x44;
+		val = op_int8(disp);
+	      ]
+	    else
+	      [
+		mod = 0x84;
+		val = op_int32(disp);
+	      ];
+	    | opx |
+	    opx = iop_rex_modrm_sib(0x8d, rex, mod, reg1, scale, ridx, rbase);
+	    if (val != null)
+	      vector(opx, val)
+	    else
+	      opx
           ];
           ,x64:lglobal => [
             vector(iop_rex_modrm(op, rex, 0x80, reg1, x64:reg_globals), a2)
@@ -509,7 +598,6 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
               a2 = x64:lindirect . a2;
             vector(iop_rex_modrm(op, rex, 0, reg1, 5), a2)
           ];
-          _ => fail()
         ]
     ];
   iops[x64:op_push] = fn (a1, a2)
@@ -542,6 +630,18 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       iop_rex_reg_modrm(0xb60f, reg8_rex(a1), regval(a2), a1);
     ];
 
+  iops[x64:op_movzxword] = fn (a1, a2)
+    [
+      assert(register?(a2));
+      iop_rex_reg_modrm(0xb70f, 0, regval(a2), a1);
+    ];
+
+  iops[x64:op_movzx32] = fn (a1, a2)
+    [
+      assert(register?(a2));
+      iop_rex_reg_modrm(0x89, 0, regval(a1), a2);
+    ];
+
   iops[x64:op_mov] = fn (a1, a2)
     match (car(a1))
       [
@@ -558,11 +658,6 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
             assert(register?(a2));
             vector(iop_rex_reg(0xb8, rex_op | rex_w, regval(a2)), a1)
           ];
-        ,x64:lseclev && cdr(a1) == x64:sl_c => [
-          // 16-bit immediate mov
-          assert(register?(a2));
-          vector(op_int8(prefix_op16), iop_rex_reg(0xb8, 0, regval(a2)), a1)
-        ];
         ,x64:limm || ,x64:lseclev || ,x64:lglobal_index => [
           // 32-bit immediate mov
           if (register?(a2)
@@ -585,29 +680,38 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
       ];
 
   | iop_math, iop_unary_math, iop_math_byte |
-  iop_math = fn (modrm_reg) fn (a1, a2)
+  iop_math = fn (modrm_reg, dflt_rex) fn (a1, a2)
     match (car(a1))
       [
         ,x64:limm => [
-          | imm |
+          | imm, rex |
           imm = immval32(a1);
+
+          rex = dflt_rex;
+
+          // special-case and $imm,%rXd
+          if (modrm_reg == 4 && register?(a2) && uint32?(imm))
+            rex = 0;
+
           if (int8?(imm))
-            vector(iop_rex_reg_modrm(0x83, rex_op | rex_w, modrm_reg, a2),
-                   op_int8(imm))
+            vector(iop_rex_reg_modrm(0x83, rex, modrm_reg, a2), op_int8(imm))
+          else if (imm == 128 && (modrm_reg == 0 || modrm_reg == 5))
+            // convert add/sub $128,r/m to sub/add $-128,r/m
+            vector(iop_rex_reg_modrm(0x83, rex, modrm_reg ^ 5, a2),
+                   op_int8(-imm))
           else
             [
               imm = op_int32(imm);
               if (rax?(a2))
-                vector(iop_rex(0x05 + (modrm_reg << 3), rex_op | rex_w), imm)
+                vector(iop_rex(0x05 + (modrm_reg << 3), rex), imm)
               else
-                vector(iop_rex_reg_modrm(0x81, rex_op | rex_w, modrm_reg, a2),
-                       imm)
+                vector(iop_rex_reg_modrm(0x81, rex, modrm_reg, a2), imm)
             ]
         ];
         ,x64:lreg => [
-          | rex, r1 |
+          | r1, rex |
           r1 = regval(a1);
-          rex = rex_op | rex_w;
+          rex = dflt_rex;
           // special-case xor %rX,%rX to xor %rXd,%rXd
           if (modrm_reg == 6)
             match (a2)
@@ -618,17 +722,17 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
         ];
         _ => [
           assert(register?(a2));
-          iop_rex_reg_modrm(0x03 + (modrm_reg << 3), rex_op | rex_w,
-                            regval(a2), a1)
+          iop_rex_reg_modrm(0x03 + (modrm_reg << 3), dflt_rex, regval(a2), a1)
         ];
       ];
 
-  iops[x64:op_add] = iop_math(0);
-  iops[x64:op_and] = iop_math(4);
-  iops[x64:op_cmp] = iop_math(7);
-  iops[x64:op_or]  = iop_math(1);
-  iops[x64:op_sub] = iop_math(5);
-  iops[x64:op_xor] = iop_math(6);
+  iops[x64:op_add]   = iop_math(0, rex_op | rex_w);
+  iops[x64:op_add32] = iop_math(0, 0);
+  iops[x64:op_and]   = iop_math(4, rex_op | rex_w);
+  iops[x64:op_cmp]   = iop_math(7, rex_op | rex_w);
+  iops[x64:op_or]    = iop_math(1, rex_op | rex_w);
+  iops[x64:op_sub]   = iop_math(5, rex_op | rex_w);
+  iops[x64:op_xor]   = iop_math(6, rex_op | rex_w);
 
   iop_math_byte = fn (modrm_reg) fn (a1, a2)
     [
@@ -664,14 +768,20 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
     [
       | imm, r2 |
       @(,x64:lidx . (r2 . imm)) = a2;
-      assert(int32?(imm));
-      vector(iop_rex_reg_modrm(0x69, rex_op | rex_w, r2, a1),
-             op_int32(imm))
+      if (int8?(imm))
+        vector(iop_rex_reg_modrm(0x6b, rex_op | rex_w, r2, a1),
+               op_int8(imm))
+      else
+        [
+          assert(int32?(imm));
+          vector(iop_rex_reg_modrm(0x69, rex_op | rex_w, r2, a1),
+                 op_int32(imm))
+        ]
     ];
 
   iops[x64:op_xchg] = fn (a1, a2)
     [
-      if (car(a2) != x64:lreg)
+      if (car(a2) != x64:lreg || register?(a1) && rax?(a2))
         [
           | tmp |
           tmp = a1;
@@ -741,6 +851,12 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
 
   iops[x64:op_setcc] = fn (a1, a2)
     iop_rex_reg_modrm(0x900f | (a1 << 8), reg8_rex(a2), 0, a2);
+  iops[x64:op_cmovcc] = fn (a1, a2)
+    [
+      | r2, cc |
+      @(,x64:lidx . (r2 . cc)) = a2;
+      iop_rex_reg_modrm(0x400f | (cc << 8), rex_op | rex_w, r2, a1);
+    ];
 
   iops[x64:op_jmp] = fn (a1, a2)
     vector(iop_op(0xeb), imm_jmp8);
@@ -781,10 +897,11 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
         1
       else if (val == imm_jmp32)
         4
+      else if (function?(val))
+        val(0)
       else
         match (car(val))
           [
-            ,x64:lseclev && cdr(val) == x64:sl_c => 2;
             ,x64:lindirect || ,x64:lglobal_index || ,x64:lglobal
               || ,x64:lseclev || ,x64:limm => 4;
             ,x64:lspecial || ,x64:lclosure
@@ -827,6 +944,12 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                 assert(nbytes >= 0 && nbytes <= 4);
                 nbytes
               ];
+              f && function?(f) => [
+                v = f(1);
+                nbytes = f(0);
+                assert(nbytes >= 0 && nbytes <= 4);
+                nbytes
+              ];
               x && x == imm_jmp8 => [
                 | dest |
                 dest = il[x64:il_ins][x64:i_arg1];
@@ -840,7 +963,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                 4
               ];
               (vop . varg) => [
-                match (vop) [
+                match! (vop) [
                   ,x64:lindirect => <done> [
                     | info_list, x |
                     if (string?(varg))
@@ -850,12 +973,11 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                       ]
                     else
                       [
-                        info_list = match (car(varg))
+                        info_list = match! (car(varg))
                           [
                             ,x64:lcst => mc:a_constants;
                             ,x64:lglobal_constant => mc:a_kglobals;
                             ,x64:lprimitive => mc:a_primitives;
-                            _ => fail()
                           ];
                         x = cdr(varg);
                       ];
@@ -895,7 +1017,7 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                   ];
                   ,x64:lseclev => [
                     info[mc:a_seclevs] = (varg . offset) . info[mc:a_seclevs];
-                    if (varg == x64:sl_c) 2 else 4
+                    4
                   ];
                   ,x64:lspecial => [
                     info[mc:a_builtins]
@@ -931,7 +1053,6 @@ writes mc:nins, mc:nbytes, mc:jccjmp_count, mc:labeled_jmp
                       = (varg . offset) . info[mc:a_kglobals];
                     8
                   ];
-                  _ => fail()
                 ]
               ];
               x => fail_message(format("unknown op %w", x))

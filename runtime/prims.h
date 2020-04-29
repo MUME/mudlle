@@ -37,11 +37,20 @@
    (__THIS_OP_DECL,                             \
     __VA_ARGS__, __THIS_OP_DECL))
 
-#define __EXPAND(...) __VA_ARGS__
 #define ___CODE_ARGS(name, args, ...)                   \
   IF_VOID args(&op_ ## name, __VA_ARGS__, &op_ ## name)
 #define __CODE_ARGS(name, args, callargs)               \
-  ___CODE_ARGS(name, args, __EXPAND callargs)
+  ___CODE_ARGS(name, args, EXPAND_ARGS callargs)
+
+#ifdef PROFILE_CALL_COUNT
+#define _PCC_DEFINE(x) static unsigned call_count_ ## x;
+#define _PCC_REF(x) &call_count_ ## x,
+#define _PCC_COUNT(x) ((void)++*op_ ## x.call_count)
+#else
+#define _PCC_DEFINE(x)
+#define _PCC_REF(x)
+#define _PCC_COUNT(x) ((void)0)
+#endif
 
 /*
  * Arguments for FULLOP():
@@ -56,19 +65,23 @@
  *             'storage_class' is static
  *  seclevel   security level; cf. CASSERT_SECLEVEL()
  *  flags      bitwise-or of OP_xxx flags
- *  type       type signature, of type 'const typing'
+ *  types      list of type signatures; e.g., ("n.n", ...), or a string
  *  storage_class    static or empty
  */
 #define FULLOP(x, pname, helpmsg, nargs, opargs, callargs,              \
-               seclevel, flags, type, storage_class)                    \
+               seclevel, flags, types, storage_class)                   \
+_PCC_DEFINE(x)                                                          \
 static int defined_ ## x;  /* used to warn if not DEFINE'd */           \
 CASSERT(nargs >= NVARARGS && nargs <= MAX_PRIMITIVE_ARGS);              \
-CASSERT(VLENGTH(type) > 0);                                             \
+STATIC_STRING(prim_name_ ## x, IF_EMPTY(pname)(#x, pname));             \
+static const char *const tsig_ ## x[] = {                               \
+  IF_PAREN(types)(EXPAND_ARGS types, types), NULL                       \
+};                                                                      \
 static value prim_ ## x(PRIMARGS ## nargs);                             \
 static const struct prim_op op_ ## x = {                                \
-  (pname) ? (pname) : #x, helpmsg,                                      \
-  (value (*)())prim_ ## x,                                              \
-  nargs, flags, type, seclevel, __FILE__, __LINE__                      \
+  GET_STATIC_STRING(prim_name_ ## x), helpmsg,                          \
+  (value (*)())prim_ ## x, _PCC_REF(x)                                  \
+  nargs, flags, tsig_ ## x, seclevel, __FILE__, __LINE__                \
 };                                                                      \
                                                                         \
 static value op_code_ ## x __CODE_DECL opargs;                          \
@@ -83,6 +96,7 @@ storage_class value code_ ## x                                          \
                                                                         \
 static value prim_ ## x(PRIMARGS ## nargs)                              \
 {                                                                       \
+  _PCC_COUNT(x);                                                        \
   CASSERT_EXPR(!((flags) & ~ALL_OP_FLAGS));                             \
   CASSERT_EXPR(((nargs) < 0 || ((flags) & OP_TRIVIAL)                   \
                 ? (seclevel) == 0                                       \
@@ -126,12 +140,12 @@ static value prim_ ## x(PRIMARGS ## nargs)                              \
   if ((seclevel) > 0)                                                   \
     assert((seclevel) <= intval(maxseclevel));                          \
   uint8_t *oldposgen0 = posgen0;                                        \
-  const char *old_forbid_mudlle_calls = forbid_mudlle_calls;            \
+  const struct prim_op *old_forbid_mudlle_calls = forbid_mudlle_calls;  \
   bool old_seclevel_valid = seclevel_valid;                             \
   if (!((flags) & OP_TRIVIAL))                                          \
     {                                                                   \
       if ((flags) & (OP_LEAF | OP_NOESCAPE))                            \
-        forbid_mudlle_calls = op_ ## x.name;                            \
+        forbid_mudlle_calls = &op_ ## x;                                \
       seclevel_valid = (((seclevel) > 0 && !((flags) & OP_FASTSEC))     \
                         || nargs == NVARARGS);                          \
     }                                                                   \
@@ -150,42 +164,44 @@ static value prim_ ## x(PRIMARGS ## nargs)                              \
 }                                                                       \
 static value op_code_ ## x __CODE_DECL opargs
 
-#define TYPEDOP(x, name, helpmsg, nargs, args, flags, type)             \
-  MTYPE(type_ ## x, type);                                              \
-  FULLOP(x, name, helpmsg, nargs, args, 0,                              \
-         0, flags, type_ ## x, static)
+#define __FULLOP(x, pname, helpmsg, nargs, opargs, callargs,            \
+               seclevel, flags, types, storage_class)                   \
+  FULLOP(x, pname, helpmsg, nargs, opargs,                              \
+         callargs, seclevel, flags, types, storage_class)
 
-#define EXT_TYPEDOP(x, name, helpmsg, nargs, args,                      \
-                    callargs, flags, type)                              \
-  MTYPE(type_ ## x, type);                                              \
-  FULLOP(x, name, helpmsg, nargs, args, callargs, 0,                    \
-         flags, type_ ## x, /* extern */)
+#define _FULLOP(x, pname, helpmsg, opargs, callargs,                    \
+                seclevel, flags, types, storage_class)                  \
+  __FULLOP(x, pname, helpmsg, IF_VOID opargs(0, VA_NARGS opargs),       \
+           opargs, callargs, seclevel, flags, types, storage_class)
 
-#define VARTOP(x, name, helpmsg, flags, type)                           \
-  MTYPE(type_ ## x, type);                                              \
+#define TYPEDOP(x, name, helpmsg, args, flags, types)                   \
+  _FULLOP(x, name, helpmsg, args, 0, 0, flags, types, static)
+
+#define EXT_TYPEDOP(x, name, helpmsg, opargs, callargs, flags, types)   \
+  _FULLOP(x, name, helpmsg, opargs, callargs, 0, flags, types,          \
+          /* extern */)
+
+#define VAROP(x, name, helpmsg, flags, types)                           \
   FULLOP(x, name, helpmsg, NVARARGS,                                    \
-         (struct vector *args, ulong nargs), 0,                         \
-         0, flags, type_ ## x, static)
+         (struct vector *args, ulong nargs), 0, 0, flags, types, static)
 
-#define SECTOP(x, name, helpmsg, nargs, args, seclevel, flags, type)    \
-  MTYPE(type_ ## x, type);                                              \
-  FULLOP(x, name, helpmsg, nargs, args, 0,                              \
-         seclevel, flags, type_ ## x, static)
+#define SECOP(x, name, helpmsg, args, seclevel, flags, types)           \
+  _FULLOP(x, name, helpmsg, args, 0, seclevel, flags, types, static)
 
-#define UNSAFETOP(x, name, helpmsg, nargs, args, flags, type)           \
-  SECTOP(x, name, "UNSAFE:" helpmsg, nargs, args,                       \
-         LVL_IMPLEMENTOR, flags, type)
+#define UNSAFEOP(x, name, helpmsg, args, flags, types)                  \
+  SECOP(x, name, "UNSAFE:" helpmsg, args, LVL_IMPLEMENTOR,              \
+        flags, types)
 
-#define UNIMPLEMENTED(x, name, helpmsg, nargs, args, flags, type)       \
-TYPEDOP(x, name, "UNIMPLEMENTED: " helpmsg, nargs, args, flags, type)   \
+#define UNIMPLEMENTED(x, name, helpmsg, args, flags, types)             \
+TYPEDOP(x, name, "UNIMPLEMENTED: " helpmsg, args, flags, types)         \
 {                                                                       \
   runtime_error(error_bad_function);                                    \
   undefined();                                                          \
 }
 
 #define DEFINE(x) do {                          \
-    (void)defined_ ## x;                        \
-    runtime_define(&op_ ## x);                  \
+  (void)defined_ ## x;                          \
+  runtime_define(&op_ ## x);                    \
 } while (0)
 
 /* use this to silence warning if a primitive isn't DEFINED'd */
@@ -196,41 +212,35 @@ TYPEDOP(x, name, "UNIMPLEMENTED: " helpmsg, nargs, args, flags, type)   \
   system_string_define(GET_STATIC_STRING(define_name), (val));  \
 } while (0)
 
-/* Set 'dst' to an alloca'ed copy of 'src', or NULL if 'src' is longer
-   than 'maxlen', or contains NUL characters. */
-#define ALLOCA_STRING(dst, src, maxlen) do {    \
-  struct string *__src = (src);                 \
-  ulong __l = string_len(__src);                \
-  (dst) = NULL;                                 \
-  if (__l < (maxlen))                           \
-    {                                           \
-      char *__dst = alloca(__l + 1);            \
-      memcpy(__dst, __src->str, __l + 1);       \
-      if (strlen(__dst) == __l)                 \
-        (dst) = __dst;                          \
-    }                                           \
-} while (0)
+/* Set 'dst' to a local, variable-length array copy of 'src'. Causes an
+   error if it needs more than 'maxsize' characters. */
+#define LOCAL_C_STR(dst, src, maxsize)                  \
+  struct string *__tmp_ ## dst = (src);                 \
+  ulong __size_ ## dst = string_len(__tmp_ ## dst) + 1; \
+  if (__size_ ## dst > (maxsize))                       \
+    RUNTIME_ERROR(error_bad_value, "string too long");  \
+  char dst[__size_ ## dst];                             \
+  memcpy(dst, __tmp_ ## dst->str, __size_ ## dst)
 
 /* stop at first NUL */
-#define ALLOCA_PATH(dst, src) do {              \
-  struct string *__src = (src);                 \
-  TYPEIS(__src, string);                        \
-  size_t __l = strlen(__src->str);              \
-  if (__l > PATH_MAX)                           \
-    runtime_error(error_bad_value);             \
-  char *__dst = alloca(__l + 1);                \
-  memcpy(__dst, __src->str, __l + 1);           \
-  (dst) = __dst;                                \
+#define ALLOCA_PATH(dst, src) do {                      \
+  struct string *__src = (src);                         \
+  TYPEIS(__src, string);                                \
+  size_t __l = strlen(__src->str);                      \
+  if (__l > PATH_MAX)                                   \
+    RUNTIME_ERROR(error_bad_value, "path too long");    \
+  char *__dst = alloca(__l + 1);                        \
+  memcpy(__dst, __src->str, __l + 1);                   \
+  (dst) = __dst;                                        \
 } while (0)
 
 #define UNDEFINED_VALUE (makeint(42))
 /* Return the undefined result */
 #define undefined()  return UNDEFINED_VALUE
 
-/* Typing information for primitives */
-/* A type signature is a string xxx.y, where the
+/* Type signatures for primitives are strings of the format "xxx.y", where the
    x's stand for the type of arguments, y for the type of the result.
-   y can be ommitted for functions with undefined results.
+   y is ommitted for functions with undefined results.
    The following characters are used:
 
    f: function (closure, primitive, vararg, secure)
@@ -256,12 +266,7 @@ TYPEDOP(x, name, "UNIMPLEMENTED: " helpmsg, nargs, args, flags, type)   \
    *: Kleene closure of the previous type; must be followed by "."
    [...]: one of the enclosed characters
 
-  A typing is just an array of strings (terminated by NULL).
-  Rep chosen for ease of type specification
-
   Cf. the "typesets" variable in inference.mud
 */
-
-#define MTYPE(name, sig) static const typing name = { sig, NULL }
 
 #endif  /* RUNTIME_PRIMS_H */

@@ -28,6 +28,8 @@
 
 #  include "x64consts.h"
 
+#define SEP_SEMI() ;
+
 #ifdef __MACH__
 .section	__TEXT,__text,regular,pure_instructions
 #else
@@ -42,17 +44,18 @@
  #define N(x) _ ## x
  #define SO_N(x) _ ## x
  #define SETSIZE(x)
+ #define FALIGN 4		/* in powers of two */
 #else
  #define N(x) x
  #define SO_N(x) x@PLT
  #define SETSIZE(x) .size x, . - x
+ #define FALIGN 16		/* in bytes */
 #endif
 
 #define GA(x) N(x)@GOTPCREL(%rip) /* address to global */
 
 #define GLABEL(n) .globl N(n) ; N(n)
 
-#define FALIGN 16
 #define GFUNC(n) .align FALIGN ; GLABEL(n): ; .cfi_startproc
 #define GEND(n) .cfi_endproc ; SETSIZE(N(n))
 #define LFUNC(n) .align FALIGN ; n: ; .cfi_startproc
@@ -98,6 +101,7 @@ GLABEL(builtin_start):
 #define arg2	    %rdx
 #define arg2d	    %edx
 #define arg2w	    %dx
+#define arg2b	    %dl
 #define arg3	    %rcx
 #define arg3d	    %ecx
 #define arg3b	    %cl
@@ -111,6 +115,7 @@ GLABEL(builtin_start):
 #define argcount    %rax
 #define argcountd   %eax
 #define argcountw   %ax
+#define argcountb   %al
 #define closure	    %r15
 #define closure_in  %r10
 #define closure_inb %r10b
@@ -201,27 +206,27 @@ GLABEL(builtin_start):
 */
 #define __SAVE_CALLEE(n, reg) mov %reg,cc_callee_ ## reg(%r11)
 #define __RESTORE_CALLEE(n, reg) mov cc_callee_ ## reg(%r11),%reg
-#define SAVE_CALLEE				\
-	mov	GA(ccontext),%r11;		\
-	FOR_CALLEE_SAVE(__SAVE_CALLEE, ;)
-#define RESTORE_CALLEE				\
-	mov	GA(ccontext),%r11;		\
-	FOR_CALLEE_SAVE(__RESTORE_CALLEE, ;);	\
+#define SAVE_CALLEE                                     \
+	mov	GA(ccontext),%r11;                      \
+	FOR_CALLEE_SAVE(__SAVE_CALLEE, SEP_SEMI)
+#define RESTORE_CALLEE                                  \
+	mov	GA(ccontext),%r11;                      \
+	FOR_CALLEE_SAVE(__RESTORE_CALLEE, SEP_SEMI);	\
 	CLEAR_CALLER
 
 #define __SAVE_CALLER(n, reg) mov %reg,cc_caller_ ## reg(%r11)
 #define __RESTORE_CALLER(n, reg) mov cc_caller_ ## reg(%r11),%reg
-#define SAVE_CALLER				\
-	SAVE_CALLEE;				\
-	FOR_CALLER_SAVE(__SAVE_CALLER, ;)
-#define RESTORE_CALLER				\
-	mov	GA(ccontext),%r11;		\
-	FOR_CALLEE_SAVE(__RESTORE_CALLEE, ;);	\
-	FOR_CALLER_SAVE(__RESTORE_CALLER, ;)
+#define SAVE_CALLER                                     \
+	SAVE_CALLEE;                                    \
+	FOR_CALLER_SAVE(__SAVE_CALLER, SEP_SEMI)
+#define RESTORE_CALLER                                  \
+	mov	GA(ccontext),%r11;                      \
+	FOR_CALLEE_SAVE(__RESTORE_CALLEE, SEP_SEMI);	\
+	FOR_CALLER_SAVE(__RESTORE_CALLER, SEP_SEMI)
 
 #define __CLEAR_REG(n, reg) xor %reg ## d,%reg ## d
 #define CLEAR_CALLER				\
-	FOR_CALLER_SAVE(__CLEAR_REG, ;)
+	FOR_CALLER_SAVE(__CLEAR_REG, SEP_SEMI)
 
 #define ARGS_FROM_STACK					\
 	mov	(argstart + 0 * WORD_SIZE)(%rbp),arg0;	\
@@ -260,7 +265,7 @@ GLABEL(builtin_start):
 	cmp	(%r11),%rsp;				\
 	jb	E(early_error_recurse);			\
 	mov	GA(minlevel),%r11;			\
-	cmpw	(%r11),arg1w;				\
+	cmpb	(%r11),arg1b;				\
 	jb	E(early_error_security_violation)
 
 #define E(n) N(b ## n)
@@ -514,11 +519,11 @@ LFUNC(cref)
 #define __POP_CALLER(n, reg) mov -(n * WORD_SIZE)(%rbp),%reg
 	FUNC_ENTER
 	/* only need to save caller-saves; ref doesn't allocate */
-	FOR_CALLER_SAVE(__PUSH_CALLER, ;)
+	FOR_CALLER_SAVE(__PUSH_CALLER, SEP_SEMI)
 	ALIGN_STACK
 	END_PREVIOUS_FRAME
 	CCALL_LEAF(N(code_ref))
-	FOR_CALLER_SAVE(__POP_CALLER, ;)
+	FOR_CALLER_SAVE(__POP_CALLER, SEP_SEMI)
 	FUNC_RETURN
 LEND(cref)
 
@@ -635,7 +640,7 @@ GEND(brglobal)
    bvarargs: clear stack between sp and bp, check seclevel and loop count,
 	     return vector of arguments
    Register usage:
-     in: ZF, closure_in, seclevel in arg1w
+     in: ZF, closure_in, seclevel in arg1
      out: closure_in unchanged
 	  arg vector in result for bvarargs
 */
@@ -690,7 +695,6 @@ GFUNC(bvarargs)
 	lea	object_offset(,%r11,WORD_SIZE),arg0 /* object size */
 	GCSTAT_ADD(type_vector, arg0)
 	call	alloc_bytes
-	mov	arg1,result
 
 	/* new object now in result */
 	movq	$garbage_record | type_vector << 8,object_info(result)
@@ -709,7 +713,7 @@ GEND(bvarargs)
 
 /* Storage allocation operations */
 
-/* Allocate arg0 bytes and return in arg1 (!). The caller's stack frame
+/* Allocate arg0 bytes and return in result. The caller's stack frame
    will be GC-protected. Preserves mudlle values in all the non-scratch
    registers. Does not require stack to be aligned.*/
 LFUNC(alloc_bytes)
@@ -717,19 +721,19 @@ LFUNC(alloc_bytes)
 	ja	.Lalloc_bytes_fail
 
 	mov	GA(posgen0),%r11
-	mov	(%r11),arg1
-	sub	arg0,arg1
+	mov	(%r11),result
+	sub	arg0,result
 	mov	GA(startgen0),%r11
-	cmp	(%r11),arg1
+	cmp	(%r11),result
 	jb	.Lalloc_bytes_gc
 
 	mov	GA(posgen0),%r11
-	mov	arg1,(%r11)
-	mov	arg0,object_size(arg1)
+	mov	result,(%r11)
+	mov	arg0,object_size(result)
 #ifdef GCDEBUG
 	mov	GA(minorgen),%r11
-	mov	(%r11),%rax
-	mov	%rax,object_gen(arg1)
+	mov	(%r11),%r11
+	mov	%r11,object_gen(result)
 #endif
 	ret
 
@@ -753,21 +757,21 @@ LFUNC(alloc_bytes)
 	FUNC_NORETURN
 LEND(alloc_bytes)
 
-	/* Alloc variable cell, return in arg1 */
+	/* Alloc variable cell, return in result */
 GFUNC(balloc_variable)
 	GCSTAT_ADD(type_variable, $variable_size)
 	mov	$variable_size,arg0d
 	call	alloc_bytes
-	movq	$garbage_record | type_variable << 8,object_info(arg1)
+	movq	$garbage_record | type_variable << 8,object_info(result)
 	ret
 GEND(balloc_variable)
 
-	/* Size of closure is in arg0, return result in arg1 */
+	/* Size of closure is in arg0, return in result */
 GFUNC(balloc_closure)
 	GCSTAT_ADD(type_closure, arg0)
 	call	alloc_bytes
 	movq	$garbage_record | type_closure << 8 | OBJ_READONLY << 16, \
-		object_info(arg1)
+		object_info(result)
 	ret
 GEND(balloc_closure)
 
@@ -776,7 +780,7 @@ LFUNC(alloc_cons)
 	GCSTAT_ADD(type_pair, $pair_size)
 	mov	$pair_size,arg0d
 	call	alloc_bytes
-	movq	$garbage_record | type_pair << 8,object_info(arg1)
+	movq	$garbage_record | type_pair << 8,object_info(result)
 	ret
 LEND(alloc_cons)
 
@@ -785,12 +789,11 @@ GFUNC(bcons)
 	FUNC_ENTER
 	push	arg1
 	push	arg0
-	call	alloc_cons	/* cons cell in arg1 */
+	call	alloc_cons	/* cons cell in result */
 	mov	(%rsp),arg0
-	mov	arg0,pair_cdr_offset(arg1)
+	mov	arg0,pair_cdr_offset(result)
 	mov	WORD_SIZE(%rsp),arg0
-	mov	arg0,pair_car_offset(arg1)
-	mov	arg1,result
+	mov	arg0,pair_car_offset(result)
 	FUNC_RETURN
 GEND(bcons)
 
@@ -798,15 +801,16 @@ GEND(bcons)
 GFUNC(bpcons)
 	FUNC_ENTER
 
-	push	%rbx
+	push	%rbx            /* save value */
+
 	push	arg1
 	push	arg0
-	call	alloc_cons	/* cons cell in arg1 */
+	call	alloc_cons	/* cons cell in result */
 
-	mov	$OBJ_IMMUTABLE,%bl
+	mov	$OBJ_IMMUTABLE,%rbx
 
 	mov	(%rsp),arg0	/* load arg0: the cdr */
-	mov	arg0,pair_cdr_offset(arg1)
+	mov	arg0,pair_cdr_offset(result)
 	ISNULL(arg0)
 	je	0f
 	ISINT(arg0b)
@@ -814,7 +818,7 @@ GFUNC(bpcons)
 	andb	object_flags(arg0),%bl
 
 0:	mov	WORD_SIZE(%rsp),arg0	/* load arg1: the car */
-	mov	arg0,pair_car_offset(arg1)
+	mov	arg0,pair_car_offset(result)
 	ISNULL(arg0)
 	je	1f
 	ISINT(arg0b)
@@ -822,18 +826,18 @@ GFUNC(bpcons)
 	andb	object_flags(arg0),%bl
 
 1:	orb	$OBJ_READONLY,%bl
-	mov	%bl,object_flags(arg1)
-	mov	arg1,result
-	mov	-WORD_SIZE(%rbp),%rbx
+	mov	%bl,object_flags(result)
+
+	mov	-WORD_SIZE(%rbp),%rbx /* restore value */
 
 	FUNC_RETURN
 GEND(bpcons)
 
-	/* Allocate vector of arg0 bytes, return in arg1 (!) */
+	/* Allocate vector of arg0 bytes, return in result */
 GFUNC(balloc_vector)
 	GCSTAT_ADD(type_vector, arg0)
 	call	alloc_bytes
-	movq	$garbage_record | type_vector << 8,object_info(arg1)
+	movq	$garbage_record | type_vector << 8,object_info(result)
 	ret
 GEND(balloc_vector)
 
@@ -884,7 +888,7 @@ GFUNC(bcall)
 	jne	bcall_error_bad_function
 
 	mov	GA(internal_seclevel),%r11
-	movw	$DEFAULT_SECLEVEL,(%r11)
+	movb	$DEFAULT_SECLEVEL,(%r11)
 
 	cmpb	$type_closure,object_type(closure_in)
 	je	call_closure
@@ -935,14 +939,14 @@ call_secure:
 	cmpw	primop_nargs(arg5),argcountw
 	jne	bcall_error_wrong_parameters
 
-	mov	primop_seclevel(arg5),arg0w
+	movzb	primop_seclevel(arg5),arg0d
 	mov	GA(internal_seclevel),%r11
-	cmp	%di,(%r11)
+	cmp	arg0b,(%r11)
 	jb	bcall_error_security_violation
 	mov	GA(maxseclevel),%r11
 	mov	(%r11),arg5
 	INTVAL(arg5)
-	cmp	arg0w,arg5w
+	cmp	arg0,arg5
 	jb	bcall_error_security_violation
 
 	mov	primitive_op(closure_in),arg5
@@ -985,15 +989,15 @@ GFUNC(bcall_secure)
 
 	mov	primitive_op(closure_in),closure_in
 	/* Check the immediate caller's security level */
-	cmpw	primop_seclevel(closure_in),argcountw
+	cmpb	primop_seclevel(closure_in),argcountb
 	jb	E(error_security_violation)
 	mov	GA(internal_seclevel),%r11
-	mov	argcountw,(%r11)
+	mov	argcountb,(%r11)
 	/* Check the session's security level */
 	mov	GA(maxseclevel),%r11
 	mov	(%r11),argcount
 	INTVAL(argcount)
-	cmpw	primop_seclevel(closure_in),argcountw
+	cmpb	primop_seclevel(closure_in),argcountb
 	jb	E(error_security_violation)
 	/* Check arg count */
 	mov	-WORD_SIZE(%rsp),argcount
@@ -1011,12 +1015,12 @@ GFUNC(bcall_secure)
 GEND(bcall_secure)
 
 	/* call varargs primitive in arg0 with arg1 arguments from the
-	   stack, at seclevel in arg2w */
+	   stack, at seclevel in arg2 */
 GFUNC(bcall_varargs)
 	FUNC_ENTER
 	ASSERT_STACK_ALIGNED
 	mov	GA(internal_seclevel),%r11
-	movw	arg2w,(%r11)
+	movb	arg2b,(%r11)
 	SAVE_CALLEE
 	END_PREVIOUS_FRAME
 	lea	argstart(%rbp),arg2
@@ -1031,7 +1035,7 @@ GFUNC(bapply_varargs)
 	FUNC_ENTER
 	ASSERT_STACK_ALIGNED
 	mov	GA(internal_seclevel),%r11
-	movw	arg2w,(%r11)
+	movb	arg2b,(%r11)
 	mov	argstart(%rbp),arg1
 	SAVE_CALLEE
 	END_PREVIOUS_FRAME
@@ -1146,7 +1150,7 @@ GFUNC(invoke1plus)
 	FUNC_NORETURN
 GEND(invoke1plus)
 
-GFUNC(invoke)
+GFUNC(invokev)
 	START_INVOKE
 	mov	arg0,closure
 	/* arg1 (%rsi) already holds the argument vector */
@@ -1154,7 +1158,7 @@ GFUNC(invoke)
 	PUSH_VECTORARGS
 	jmp	.Linvoke_tail
 	FUNC_NORETURN
-GEND(invoke)
+GEND(invokev)
 
 GFUNC(invoke0)
 	START_INVOKE
@@ -1220,7 +1224,7 @@ GFUNC(x64_invoke5)
 	mov	closure_code_offset(closure_in),%r11
 	add	$mcode_code_offset,%r11
 	/* make sure all non-scratch registers have valid mudlle values */
-	FOR_CALLEE_SAVE(__CLEAR_REG, ;)
+	FOR_CALLEE_SAVE(__CLEAR_REG, SEP_SEMI)
 
 	ASSERT_STACK_ALIGNED
 	call	*%r11

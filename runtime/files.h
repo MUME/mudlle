@@ -74,6 +74,16 @@ enum {
   GROUP_ENTRY_FIELDS
 };
 
+enum {
+  MNT_FSNAME,
+  MNT_DIR,
+  MNT_TYPE,
+  MNT_OPTS,
+  MNT_FREQ,
+  MNT_PASSNO,
+  MOUNT_ENTRY_FIELDS
+};
+
 void files_init(void);
 void poll_async_processes(void);
 

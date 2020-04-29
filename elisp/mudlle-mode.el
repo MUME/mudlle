@@ -80,6 +80,7 @@
   (modify-syntax-entry ?_ "_" mudlle-mode-syntax-table)
   (modify-syntax-entry ?! "_" mudlle-mode-syntax-table)
   (modify-syntax-entry ?? "_" mudlle-mode-syntax-table)
+  (modify-syntax-entry ?# "_" mudlle-mode-syntax-table)
   (modify-syntax-entry ?+ "." mudlle-mode-syntax-table)
   (modify-syntax-entry ?- "." mudlle-mode-syntax-table)
   (modify-syntax-entry ?= "." mudlle-mode-syntax-table)
@@ -123,8 +124,9 @@ Does not contain any submatch groups.")
   "Regular expression matching a possibly partial mudlle string.
 The first submatch group, if present, contains any closing double quote.")
 
-(defconst mudlle-formal-argument-regexp
-  (concat "\\(" mudlle-typeset-regexp "[[:space:]\n]+\\)?"
+(defconst mudlle-anchored-formal-argument-regexp
+  (concat "\\="
+          "\\(" mudlle-typeset-regexp "[[:space:]\n]+\\)?"
 	  "\\(" mudlle-symbol-regexp "\\)")
   "Regular expression matching a mudlle formal argument.
 The first submatch group, if present, contains the data typeset.
@@ -153,6 +155,30 @@ typically for `mudlle-typeset-regexp'."
             (font-lock-apply-highlight
              '(0 font-lock-type-face nil t))))))))
 
+(defun mudlle-fontiy-complex-argument (limit)
+  "Fontifies one complex argument component starting at point, until LIMIT."
+  (mudlle-skip-comment limit)
+  (cond ((re-search-forward "\\=,\\s-*" limit t)
+         (cond ((looking-at "(")
+                (forward-sexp)
+                t)
+               ((re-search-forward mudlle-symbol-regexp limit t)
+                t)))
+        ((looking-at "[[({]")
+         (let ((end (save-excursion (forward-sexp) (point))))
+           (when (<= end limit)
+             (forward-char)
+             (setq end (1- end))
+             (while (< (point) end)
+               (mudlle-fontiy-complex-argument end))
+             (when (= (point) end)
+               (forward-char)
+               t))))
+        ((re-search-forward mudlle-anchored-symbol-regexp limit t)
+	 (font-lock-apply-highlight
+	  '(0 font-lock-variable-name-face)))
+        ((re-search-forward "\\S-+" limit t))))
+
 (defun mudlle-fontify-defun (limit)
   "Fontifies the mudlle function starting at point, which must be
 right after the \"fn\" keyword, until LIMIT."
@@ -175,16 +201,19 @@ right after the \"fn\" keyword, until LIMIT."
 	((re-search-forward "\\=([[:space:]\n]*" limit t)
 	 (while (progn
 		  (mudlle-skip-comment limit)
-		  (when (re-search-forward
-			 (concat "\\=" mudlle-formal-argument-regexp)
-			 limit t)
-                    (mudlle-fontify-typeset 1)
-		    (font-lock-apply-highlight
-		     '(2 font-lock-variable-name-face))
-		    (when (and (mudlle-skip-comment limit)
-			       (eq (char-after) ?,))
-		      (forward-char)
-		      t)))))))
+		  (and (cond ((re-search-forward
+                               mudlle-anchored-formal-argument-regexp
+                               limit t)
+                              (mudlle-fontify-typeset 1)
+                              (font-lock-apply-highlight
+                               '(2 font-lock-variable-name-face))
+                              t)
+                             ((re-search-forward "\\=\\s-*@\\s-*" limit t)
+                              (mudlle-fontiy-complex-argument limit)))
+                       (mudlle-skip-comment limit)
+                       (eq (char-after) ?,)
+                       (or (forward-char) t)))
+           ))))
 
 (defconst mudlle-defun-regexp
   (concat "\\(?:\\(" mudlle-symbol-regexp "\\)[[:space:]\n]*"
@@ -244,8 +273,8 @@ that should be indented at the beginning of the line. Its first
 parenthesized expression is the keyword.")
 
 (defconst mudlle-font-lock-keywords
-  (let ((kw (regexp-opt '("fn" "if" "else" "while" "for"
-                          "exit" "loop" "match") 'words)))
+  (let ((kw (regexp-opt '("#arith" "fn" "if" "else" "while" "for"
+                          "exit" "loop" "match" "match!") 'symbols)))
     `(,kw
       (,mudlle-bol-keyword-regexp . 1)
       (mudlle-fontify-local-vars)

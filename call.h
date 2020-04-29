@@ -45,7 +45,7 @@
 #define PRIMARGS4     CONCATCOMMA(4, __PRIMARG)
 #define PRIMARGS5     CONCATCOMMA(5, __PRIMARG)
 
-extern const char *forbid_mudlle_calls;
+extern const struct prim_op *forbid_mudlle_calls;
 
 void fail_allow_mudlle_call(void);
 
@@ -61,8 +61,8 @@ static inline void check_allow_mudlle_call(void)
    Requires: callable(c, N) does not fail.
 */
 value call0(value c);
-#define DECL_CALL(N) value call ## N(value c, PRIMARGS ## N);
-DOPRIMARGS(DECL_CALL)
+#define DECL_CALL(N) value call ## N(value c, PRIMARGS ## N)
+DOPRIMARGS(DECL_CALL, SEP_SEMI);
 #undef DECL_CALL
 
 value call1plus(value c, value arg, struct vector *args);
@@ -74,7 +74,7 @@ value call1plus(value c, value arg, struct vector *args);
      become painful).
 */
 
-value call(value c, struct vector *args);
+value callv(value c, struct vector *args);
 /* Effects: Calls c with arguments args
    Returns: c's result
    Requires: callable(c, vector_len(args)) does not fail.
@@ -95,29 +95,26 @@ bool callablep(value c, int nargs);
      nargs arguments.
 */
 
-bool minlevel_violator(value c);
+bool minlevel_violator(value c, seclev_t minlev);
 /* Returns: true is calling c will cause a minlevel runtime error
 */
 
 /* As above, but trap errors. An error was caused if
    has_pending_exception(); mexception.sig and .err are set appropriately.
 */
-value mcatchv(const char *name, value c, int argc, ...);
-value mcatch_call0(const char *name, value c);
+value internal_mcatch_call(int argc, const char *name, value c, ...);
+value internal_mcatch_call0(const char *name, value c);
 
-#define DEF_MCATCH_CALL(N)                                      \
-static inline value mcatch_call ## N(                           \
-  const char *name,                                             \
-  value c, PRIMARGS ## N)                                       \
-{                                                               \
-  return mcatchv(name, c, N, CONCATCOMMA(N, __PRIMNAME));       \
-}
-DOPRIMARGS(DEF_MCATCH_CALL)
-#undef DEF_MCATCH_CALL
+/* mcatch_call(name, function, args ...) */
+#define mcatch_call(name, ...)                                  \
+  IF_NO_COMMA(__VA_ARGS__)(                                     \
+    internal_mcatch_call0((name), __VA_ARGS__),                 \
+    internal_mcatch_call(DEC(VA_NARGS(__VA_ARGS__)), (name),    \
+                         __VA_ARGS__))
 
 value mcatch_call1plus(const char *name, value c, value arg,
                        struct vector *args);
-value mcatch_call(const char *name, value c, struct vector *args);
+value mcatch_callv(const char *name, value c, struct vector *args);
 
 /* Machine language interface */
 
@@ -128,12 +125,13 @@ value x64_invoke ## N(PRIMARGS ## N, struct closure *c);                \
 static inline value invoke ## N(struct closure *c, PRIMARGS ## N)       \
 {                                                                       \
   return x64_invoke ## N(PRIMARGNAMES ## N, c);                         \
-}
+}                                                                       \
+value x64_invoke ## N(PRIMARGS ## N, struct closure *c)
 #else
 #define DECL_INVOKE(N)                                                  \
-value invoke ## N(struct closure *c, PRIMARGS ## N);
+value invoke ## N(struct closure *c, PRIMARGS ## N)
 #endif
-DOPRIMARGS(DECL_INVOKE)
+DOPRIMARGS(DECL_INVOKE, SEP_SEMI);
 #undef DECL_INVOKE
 
 /* Requires: c be a closure whose code is in machine code, i.e.
@@ -149,7 +147,7 @@ value invoke1plus(struct closure *c, value arg, struct vector *args);
    Returns: c(args)'s result
 */
 
-value invoke(struct closure *c, struct vector *args);
+value invokev(struct closure *c, struct vector *args);
 /* Requires: c be a closure whose code is in machine code, i.e.
      TYPEIS(c->code, mcode);
    Effects: Executes c(args)

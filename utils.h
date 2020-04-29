@@ -45,13 +45,10 @@ void *xrealloc(void *old, int size);
 char *xstrdup(const char *s);
 #endif
 
-void log_error(const struct loc *loc, const char *msg, ...) FMT_PRINTF(2, 3);
 void compile_error(const struct loc *loc, const char *msg, ...)
   FMT_PRINTF(2, 3);
 void compile_warning(const struct loc *loc, const char *msg, ...)
   FMT_PRINTF(2, 3);
-void warning_loc(const char *fname, const char *nname, const struct loc *loc,
-                 const char *msg, ...) FMT_PRINTF(4, 5);
 
 void *internal_reverse_list(void *l, size_t ofs);
 
@@ -128,13 +125,34 @@ static inline int popcount(unsigned u)
 {
   return __builtin_popcount(u);
 }
-#else
+
+/* count leading zeros */
+static inline int clz(int i)
+{
+  return i == 0 ? CHAR_BIT * sizeof (int) : __builtin_clz(i);
+}
+
+#else  /* ! __GNUC__ */
+
 int popcountl(unsigned long u);
 
 static inline int popcount(unsigned u)
 {
   return popcountl(u);
 }
+
+int clz(int i);
+
+#endif  /* ! __GNUC__ */
+
+#if defined i386 || defined __x86_64__
+  #define NOP1 "\x90"
+  #define NOP2 "\x66\x90"
+  #define NOP3 "\x0f\x1f\x00"
+  #define NOP4 "\x0f\x1f\x40\x00"
+  #define NOP5 "\x0f\x1f\x44\x00\x00"
+  #define NOP6 "\x66\x0f\x1f\x44\x00\x00"
+  #define NOP7 "\x0f\x1f\x80\x00\x00\x00\x00"
 #endif
 
 #endif

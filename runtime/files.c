@@ -33,10 +33,16 @@
 #include <unistd.h>
 #include <utime.h>
 
+#ifdef __linux__
+ #include <mntent.h>
+#elif defined __MACH__
+ #include <fstab.h>
+#endif
+
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/statvfs.h>
 
 #include "../call.h"
 #include "../compile.h"
@@ -45,6 +51,7 @@
 #include "../mparser.h"
 #include "../mudlle-macro.h"
 #include "../ports.h"
+#include "../tree.h"
 #include "../utils.h"
 
 #include "bigint.h"
@@ -57,38 +64,39 @@
 #ifdef ARG_MAX
 #endif
 
-TYPEDOP(load, 0, "`s -> `b. Loads file `s. Returns true if successful",
-        1, (struct string *name), OP_STR_READONLY | OP_TRACE, "s.n")
+TYPEDOP(load, , "`s -> `b. Loads file `s. Returns true if successful",
+        (struct string *name), OP_STR_READONLY | OP_TRACE, "s.n")
 {
   CHECK_TYPES(name, string);
-  char *fname;
-  ALLOCA_PATH(fname, name);
-  return makebool(load_file(fname, fname, fname, 1, true));
+  char *path;
+  ALLOCA_PATH(path, name);
+  struct filename fname = { .path = path, .nice = path };
+  return makebool(load_file(path, &fname, 1, true));
 }
 
 
-UNSAFETOP(mkdir, 0, "`s `n1 -> `n2. Make directory `s (mode `n1)."
-          " Returns Unix errno.",
-          2, (struct string *name, value mode),
-          OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
+UNSAFEOP(mkdir, , "`s `n1 -> `n2. Make directory `s (mode `n1)."
+         " Returns Unix errno.",
+         (struct string *name, value mode),
+         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
   CHECK_TYPES(name, string,
               mode, integer);
   return makeint(mkdir(name->str, intval(mode)));
 }
 
-UNSAFETOP(rmdir, 0, "`s -> `n. Remove directory `s. Returns Unix errno.",
-          1, (struct string *name),
-          OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
+UNSAFEOP(rmdir, , "`s -> `n. Remove directory `s. Returns Unix errno.",
+         (struct string *name),
+         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
   CHECK_TYPES(name, string);
   return makeint(rmdir(name->str));
 }
 
-UNSAFETOP(directory_files, 0, "`s -> `l. List all files of directory `s"
-          " (returns false if problems)",
-          1, (struct string *dir),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[ln]")
+UNSAFEOP(directory_files, , "`s -> `l. List all files of directory `s"
+         " (returns false if problems)",
+         (struct string *dir),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[ln]")
 {
   CHECK_TYPES(dir, string);
 
@@ -114,42 +122,42 @@ static const long allowed_glob_flags =
 #ifdef GLOB_TILDE
  #define GD_TILDE     "  `GLOB_TILDE    \tCarry out tilde expansion for"     \
                       " home directories.\n"
- | GLOB_TILDE
+  | GLOB_TILDE
 #else
  #define GD_TILDE ""
 #endif
 #ifdef GLOB_BRACE
  #define GD_BRACE     "  `GLOB_BRACE    \tExpand {a,b} style brace"          \
                       " expressions.\n"
- | GLOB_BRACE
+  | GLOB_BRACE
 #else
  #define GD_BRACE ""
 #endif
 #ifdef GLOB_MARK
  #define GD_MARK      "  `GLOB_MARK     \tAppend a slash to each path"       \
                       " corresponding to a directory.\n"
- | GLOB_MARK
+  | GLOB_MARK
 #else
  #define GD_MARK ""
 #endif
 #ifdef GLOB_NOCHECK
  #define GD_NOCHECK   "  `GLOB_NOCHECK  \tIf no pattern matches, return the" \
                       " original pattern.\n"
- | GLOB_NOCHECK
+  | GLOB_NOCHECK
 #else
  #define GD_NOCHECK ""
 #endif
 #ifdef GLOB_NOESCAPE
  #define GD_NOESCAPE  "  `GLOB_NOESCAPE \tDo not allow backslash to be"      \
                       " used as an escape character.\n"
- | GLOB_NOESCAPE
+  | GLOB_NOESCAPE
 #else
  #define GD_NOESCAPE ""
 #endif
 #ifdef GLOB_PERIOD
  #define GD_PERIOD    "  `GLOB_PERIOD   \tAllow a leading period to be"      \
                       " matched by metacharacters.\n"
- | GLOB_PERIOD
+  | GLOB_PERIOD
 #else
  #define GD_PERIOD ""
 #endif
@@ -157,7 +165,7 @@ static const long allowed_glob_flags =
  #define GD_NOMAGIC   "  `GLOB_NOMAGIC  \tIf the pattern contains no"        \
                       " metacharacters, return it as the only match,"        \
                       " even if there is no such file.\n"
- | GLOB_NOMAGIC
+  | GLOB_NOMAGIC
 #else
  #define GD_NOMAGIC ""
 #endif
@@ -165,26 +173,26 @@ static const long allowed_glob_flags =
  #define GD_ONLYDIR   "  `GLOB_ONLYDIR  \tHint only to return matching"      \
                       " directories. The implementation may ignore this"     \
                       " flag.\n"
- | GLOB_ONLYDIR
+  | GLOB_ONLYDIR
 #else
  #define GD_ONLYDIR ""
 #endif
- | 0;
+  | 0;
 
-UNSAFETOP(glob_files, 0,
-          "`s0 `s1 `n -> `l. Returns a list of all files matched by "
-          "the glob pattern `s1, executed in directory `s0. Returns false on"
-          " error. `n specifies flags to use:\n"
-          GD_TILDE
-          GD_BRACE
-          GD_MARK
-          GD_NOCHECK
-          GD_NOESCAPE
-          GD_PERIOD
-          GD_NOMAGIC
-          GD_ONLYDIR,
-          3, (struct string *dir, struct string *pat, value n),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ssn.[ln]")
+UNSAFEOP(glob_files, ,
+         "`s0 `s1 `n -> `l. Returns a list of all files matched by"
+         " the glob pattern `s1, executed in directory `s0. Returns false on"
+         " error. `n specifies flags to use:\n"
+         GD_TILDE
+         GD_BRACE
+         GD_MARK
+         GD_NOCHECK
+         GD_NOESCAPE
+         GD_PERIOD
+         GD_NOMAGIC
+         GD_ONLYDIR,
+         (struct string *dir, struct string *pat, value n),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ssn.[ln]")
 {
   long flags;
   CHECK_TYPES(pat, string,
@@ -234,7 +242,7 @@ UNSAFETOP(glob_files, 0,
 
 static value make_timespec(const struct timespec *ts)
 {
-  return makefloat(ts->tv_sec + ts->tv_nsec * 1e-9);
+  return alloc_float(ts->tv_sec + ts->tv_nsec * 1e-9);
 }
 
 #ifdef __MACH__
@@ -279,10 +287,10 @@ static value build_file_stat(struct stat *sb)
   return info;
 }
 
-UNSAFETOP(file_stat, 0, "`s -> `v. Returns status of file `s, or false for"
-          " failure. See the `FS_xxx constants and `file_lstat().",
-          1, (struct string *fname),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
+UNSAFEOP(file_stat, , "`s -> `v. Returns status of file `s, or false for"
+         " failure. See the `FS_xxx constants and `file_lstat().",
+         (struct string *fname),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
 {
   CHECK_TYPES(fname, string);
 
@@ -294,12 +302,13 @@ UNSAFETOP(file_stat, 0, "`s -> `v. Returns status of file `s, or false for"
 }
 
 #ifdef USE_GMP
-TYPEDOP(file_system_stat, 0, "`s -> `v. Returns file system statistics"
+TYPEDOP(file_system_stat, , "`s -> `v. Returns file system statistics"
         " for the file system containing file `s, or Unix errno for error.\n"
         "Note that all entries may contain bigints if the result does"
         " not fit in an integer.\n"
-        "See the `FSYS_xxx and `FILE_SYSTEM_STAT_FIELDS constants.",
-        1, (struct string *fname),
+        "See the `FSYS_xxx and `FILE_SYSTEM_STAT_FIELDS constants.\n"
+        "Cf. `mount_points().",
+        (struct string *fname),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vn]")
 {
   CHECK_TYPES(fname, string);
@@ -333,12 +342,12 @@ TYPEDOP(file_system_stat, 0, "`s -> `v. Returns file system statistics"
 }
 #endif  /* USE_GMP */
 
-UNSAFETOP(real_path, 0,
-          "`s0 -> `s1. Resolves any symbolic links, follows references to"
-          " /./ and /../, and returns the canonicalized path for `s0."
-          " Returns `errno on error.",
-          1, (struct string *path),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sn]")
+UNSAFEOP(real_path, ,
+         "`s0 -> `s1. Resolves any symbolic links, follows references to"
+         " /./ and /../, and returns the canonicalized path for `s0."
+         " Returns `errno on error.",
+         (struct string *path),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sn]")
 {
   CHECK_TYPES(path, string);
   char buf[PATH_MAX], *res;
@@ -347,12 +356,12 @@ UNSAFETOP(real_path, 0,
   return alloc_string(res);
 }
 
-UNSAFETOP(file_lstat, 0,
-          "`s -> `v. Returns status of file `s (not following links)."
-          " Returns FALSE for failure. See the `FS_xxx constants and"
-          " `file_stat()",
-          1, (struct string *fname),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
+UNSAFEOP(file_lstat, ,
+         "`s -> `v. Returns status of file `s (not following links)."
+         " Returns FALSE for failure. See the `FS_xxx constants and"
+         " `file_stat()",
+         (struct string *fname),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[vz]")
 {
   CHECK_TYPES(fname, string);
   struct stat sb;
@@ -362,13 +371,13 @@ UNSAFETOP(file_lstat, 0,
     return makebool(false);
 }
 
-UNSAFETOP(file_utime, 0,
-          "`s `x -> `n. Sets the access and modification times"
-          " of file `s. If `x is `null, set both to the current time;"
-          " if `x is a pair, set them to `car(`x) and `cdr(`x), respectively."
-          " Returns zero on success or `errno on failure.",
-          2, (struct string *fname, struct list *mtimes),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sl.n")
+UNSAFEOP(file_utime, ,
+         "`s `x -> `n. Sets the access and modification times"
+         " of file `s. If `x is `null, set both to the current time;"
+         " if `x is a pair, set them to `car(`x) and `cdr(`x), respectively."
+         " Returns zero on success or `errno on failure.",
+         (struct string *fname, struct list *mtimes),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sl.n")
 {
   CHECK_TYPES(fname, string,
               mtimes, CT_TYPESET(TYPESET_LIST));
@@ -389,10 +398,10 @@ UNSAFETOP(file_utime, 0,
   return makeint(0);
 }
 
-UNSAFETOP(readlink, 0,
-          "`s1 -> `s2. Returns the contents of symlink `s, or FALSE "
-          "for failure", 1, (struct string *lname),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
+UNSAFEOP(readlink, ,
+         "`s1 -> `s2. Returns the contents of symlink `s, or FALSE"
+         " for failure", (struct string *lname),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.[sz]")
 {
   CHECK_TYPES(lname, string);
 
@@ -414,51 +423,51 @@ UNSAFETOP(readlink, 0,
   return res;
 }
 
-UNSAFETOP(file_regularp, "file_regular?",
-          "`s -> `b. Returns TRUE if `s is a regular file.",
-          1, (struct string *fname),
-          OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
+UNSAFEOP(file_regularp, "file_regular?",
+         "`s -> `b. Returns TRUE if `s is a regular file.",
+         (struct string *fname),
+         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
   CHECK_TYPES(fname, string);
   struct stat sb;
   return makebool(stat(fname->str, &sb) == 0 && S_ISREG(sb.st_mode));
 }
 
-UNSAFETOP(directoryp, "directory?",
-          "`s -> `b. Returns TRUE if `s is a directory.",
-          1, (struct string *dname),
-          OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
+UNSAFEOP(directoryp, "directory?",
+         "`s -> `b. Returns TRUE if `s is a directory.",
+         (struct string *dname),
+         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
   CHECK_TYPES(dname, string);
   struct stat sb;
   return makebool(stat(dname->str, &sb) == 0 && S_ISDIR(sb.st_mode));
 }
 
-UNSAFETOP(remove, 0, "`s -> `n. Removes file `s. Returns the Unix error"
-          " number or 0 for success.",
-	  1, (struct string *fname),
-	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.n")
+UNSAFEOP(remove, , "`s -> `n. Removes file `s. Returns the Unix error"
+         " number or 0 for success.",
+         (struct string *fname),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
   CHECK_TYPES(fname, string);
   return makeint(unlink(fname->str) ? errno : 0);
 }
 
-UNSAFETOP(rename, 0,
-          "`s1 `s2 -> `n. Renames file `s1 to `s2. Returns the Unix error "
-          "number or 0 for success",
-	  2, (struct string *oldname, struct string *newname),
-	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.n")
+UNSAFEOP(rename, ,
+         "`s1 `s2 -> `n. Renames file `s1 to `s2. Returns the Unix error"
+         " number or 0 for success",
+         (struct string *oldname, struct string *newname),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.n")
 {
   CHECK_TYPES(oldname, string,
               newname, string);
   return makeint(rename(oldname->str, newname->str) ? errno : 0);
 }
 
-UNSAFETOP(chown, 0, "`s1 `n0 `n1 -> `n2. Changed owner of file `s1 to uid `n0"
-          " and gid `n1. Use -1 not to change that field."
-          " Returns errno or 0 for success.",
-          3, (struct string *fname, value uid, value gid),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "snn.n")
+UNSAFEOP(chown, , "`s1 `n0 `n1 -> `n2. Changed owner of file `s1 to uid `n0"
+         " and gid `n1. Use -1 not to change that field."
+         " Returns errno or 0 for success.",
+         (struct string *fname, value uid, value gid),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "snn.n")
 {
   CHECK_TYPES(fname, string,
               uid,   integer,
@@ -466,28 +475,28 @@ UNSAFETOP(chown, 0, "`s1 `n0 `n1 -> `n2. Changed owner of file `s1 to uid `n0"
   return makeint(chown(fname->str, intval(uid), intval(gid)) ? errno : 0);
 }
 
-UNSAFETOP(chmod, 0, "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0. "
-          " Returns errno or 0 for success.",
-          2, (struct string *fname, value mode),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
+UNSAFEOP(chmod, , "`s1 `n0 -> `n1. Changed mode of file `s1 to `n0."
+         "  Returns errno or 0 for success.",
+         (struct string *fname, value mode),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
   CHECK_TYPES(fname, string,
               mode,  integer);
   return makeint(chmod(fname->str, intval(mode)) ? errno : 0);
 }
 
-TYPEDOP(strerror, 0, "`n -> `s. Returns an error string corresponding to"
+TYPEDOP(strerror, , "`n -> `s. Returns an error string corresponding to"
         " errno `n, or `false if there is no such errno.",
-        1, (value merrno), OP_LEAF | OP_NOESCAPE, "n.[sz]")
+        (value merrno), OP_LEAF | OP_NOESCAPE, "n.[sz]")
 {
   CHECK_TYPES(merrno, integer);
   const char *s = strerror(intval(merrno));
   return s ? alloc_string(s) : makebool(false);
 }
 
-TYPEDOP(getenv, 0, "`s0 -> `s1|false. Return the value of the environment"
+TYPEDOP(getenv, , "`s0 -> `s1|false. Return the value of the environment"
         " variable `s0, or false if no match.",
-        1, (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
+        (struct string *s), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
         "s.[sz]")
 {
   CHECK_TYPES(s, string);
@@ -495,19 +504,19 @@ TYPEDOP(getenv, 0, "`s0 -> `s1|false. Return the value of the environment"
   return r == NULL ? makebool(false) : alloc_string(r);
 }
 
-TYPEDOP(getcwd, 0, "-> `s. Returns the name of the current working directory,"
+TYPEDOP(getcwd, , "-> `s. Returns the name of the current working directory,"
         " or a Unix errno value on error. Cf. `strerror",
-        0, (void), OP_LEAF | OP_NOESCAPE, ".[sn]")
+        (void), OP_LEAF | OP_NOESCAPE, ".[sn]")
 {
   char buf[PATH_MAX];
   char *wd = getcwd(buf, sizeof buf);
   return wd == NULL ? makeint(errno) : alloc_string(wd);
 }
 
-UNSAFETOP(chdir, 0, "`s -> `n. Change current working directory to `s."
-          " Returns Unix error number or 0 for success.",
-          1, (struct string *path), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
-          "s.n")
+UNSAFEOP(chdir, , "`s -> `n. Change current working directory to `s."
+         " Returns Unix error number or 0 for success.",
+         (struct string *path), OP_LEAF | OP_NOESCAPE | OP_STR_READONLY,
+         "s.n")
 {
   CHECK_TYPES(path, string);
   if (chdir(path->str) < 0)
@@ -515,12 +524,12 @@ UNSAFETOP(chdir, 0, "`s -> `n. Change current working directory to `s."
   return makeint(0);
 }
 
-#define PROC_GETINT(name, desc, see)                                    \
-TYPEDOP(name, 0, "-> `n. Return the " desc " of the process."           \
-        " See also " see ".",                                           \
-        0, (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")            \
-{                                                                       \
-  return makeint(name());                                               \
+#define PROC_GETINT(name, desc, see)                            \
+TYPEDOP(name, , "-> `n. Return the " desc " of the process."    \
+        " See also " see ".",                                   \
+        (void), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, ".n")       \
+{                                                               \
+  return makeint(name());                                       \
 }
 
 PROC_GETINT(getuid, "real user ID", "`geteuid() and `getgid()")
@@ -528,18 +537,18 @@ PROC_GETINT(geteuid, "effective user ID", "`getuid() and `getegid()")
 PROC_GETINT(getgid, "real group ID", "`getuid() and `getegid()")
 PROC_GETINT(getegid, "effective group ID", "`geteuid() and `getgid()")
 
-UNSAFETOP(print_file_part, 0,
-          "`oport `s `n0 `x -> `n1. Print `x bytes from file"
-          " `s starting from byte `n0, or the rest of the file if"
-          " `x is null.\n"
-          "Output it sent to port `oport.\n"
-          "Returns zero if successful, a Unix errno value"
-          " if there was file I/O error, or -1 if `oport became too full.\n"
-          "It is not an error to start after the end of the file, nor to"
-          " try to read beyond the end of the file.",
-	  4, (struct oport *p, struct string *name, value mstart,
-              value mbytes),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "osn[nu].n")
+UNSAFEOP(print_file_part, ,
+         "`oport `s `n0 `x -> `n1. Print `x bytes from file"
+         " `s starting from byte `n0, or the rest of the file if"
+         " `x is null.\n"
+         "Output it sent to port `oport.\n"
+         "Returns zero if successful, a Unix errno value"
+         " if there was file I/O error, or -1 if `oport became too full.\n"
+         "It is not an error to start after the end of the file, nor to"
+         " try to read beyond the end of the file.",
+         (struct oport *p, struct string *name, value mstart,
+          value mbytes),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "osn[nu].n")
 {
   long start, bytes = -1;
   {
@@ -598,22 +607,22 @@ UNSAFETOP(print_file_part, 0,
   return makeint(result);
 }
 
-UNSAFETOP(print_file, 0,
-          "`oport `s -> `n. Print the contents of file `s to output"
-          " port `oport. Returns zero if successful, a Unix errno value"
-          " if there was file I/O error, or -1 if `oport became too full."
-          " Cf. `print_file_part().",
-	  2, (struct oport *p, struct string *name),
-	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "os.n")
+UNSAFEOP(print_file, ,
+         "`oport `s -> `n. Print the contents of file `s to output"
+         " port `oport. Returns zero if successful, a Unix errno value"
+         " if there was file I/O error, or -1 if `oport became too full."
+         " Cf. `print_file_part().",
+         (struct oport *p, struct string *name),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "os.n")
 {
   return code_print_file_part(p, name, makeint(0), NULL);
 }
 
-UNSAFETOP(file_read, 0,
-          "`s1 -> `s2|`n. Reads and returns at most `MAX_STRING_SIZE"
-          " characters from file `s1. Returns a Unix errno value on error.",
-	  1, (struct string *name),
-	  OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s.[sn]")
+UNSAFEOP(file_read, ,
+         "`s1 -> `s2|`n. Reads and returns at most `MAX_STRING_SIZE"
+         " characters from file `s1. Returns a Unix errno value on error.",
+         (struct string *name),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s.[sn]")
 {
   CHECK_TYPES(name, string);
 
@@ -700,35 +709,35 @@ static value file_write(struct string *file, value data, bool do_append,
   return makeint(r);
 }
 
-UNSAFETOP(file_write, 0,
-          "`s1 `s2|`p -> `n. Writes string `s2 (or contents of string"
-          " oport `p) to file `s1.\n"
-          "Creates the file if does not exist.\n"
-          "Returns a Unix error number for failure or 0 for success.\n"
-          "On failure, partial data may have been written.",
-          2, (struct string *file, value data),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s[so].n")
+UNSAFEOP(file_write, ,
+         "`s1 `s2|`p -> `n. Writes string `s2 (or contents of string"
+         " oport `p) to file `s1.\n"
+         "Creates the file if does not exist.\n"
+         "Returns a Unix error number for failure or 0 for success.\n"
+         "On failure, partial data may have been written.",
+         (struct string *file, value data),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s[so].n")
 {
   return file_write(file, data, false, THIS_OP);
 }
 
-UNSAFETOP(file_append, 0,
-          "`s1 `s2|`p -> `n. Appends string `s2 (or contents of string"
-          " oport `p) to file `s1.\n"
-          "Creates the file if does not exist.\n"
-          "Returns a Unix error number for failure or 0 for success.\n"
-          "On failure, partial data may have been written.",
-          2, (struct string *file, value data),
-          OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s[so].n")
+UNSAFEOP(file_append, ,
+         "`s1 `s2|`p -> `n. Appends string `s2 (or contents of string"
+         " oport `p) to file `s1.\n"
+         "Creates the file if does not exist.\n"
+         "Returns a Unix error number for failure or 0 for success.\n"
+         "On failure, partial data may have been written.",
+         (struct string *file, value data),
+         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_NUL_STR, "s[so].n")
 {
   return file_write(file, data, true, THIS_OP);
 }
 
-SECTOP(passwd_file_entries, 0,
-       "-> `l. Returns a list of [ `pw_name `pw_uid "
-       "`pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of "
-       "/etc/passwd. Cf. `getpwent(3)",
-       0, (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
+SECOP(passwd_file_entries, ,
+      "-> `l. Returns a list of [ `pw_name `pw_uid"
+      " `pw_gid `pw_gecos `pw_dir `pw_shell ] from the contents of"
+      " /etc/passwd. Cf. `getpwent(3)",
+      (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
 {
   struct list *res = NULL;
   struct vector *v = NULL;
@@ -768,11 +777,10 @@ SECTOP(passwd_file_entries, 0,
   return res;
 }
 
-SECTOP(group_file_entries, 0,
-       "-> `l. Returns a list of [ `gr_name `gr_gid "
-       "( `gr_mem ... ) ] from the contents of /etc/group."
-       " Cf. `getgrent(3)",
-       0, (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
+SECOP(group_file_entries, ,
+      "-> `l. Returns a list of [ `gr_name `gr_gid ( `gr_mem ... ) ] from"
+      " the contents of /etc/group. Cf. `getgrent(3)",
+      (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
 {
   struct list *res = NULL, *l = NULL;
   struct group *grp;
@@ -820,6 +828,57 @@ SECTOP(group_file_entries, 0,
   return res;
 }
 
+#if defined __linux__ || defined __MACH__
+SECOP(mount_points, ,
+      "-> `l. Returns a list of mount points, where each mount point"
+      " is a vector indexed by `MNT_xxx:\n"
+      "  `MNT_FSNAME   \tname fo the filesystem\n"
+      "  `MNT_DIR      \tfilesystem path prefix\n"
+      "  `MNT_TYPE     \tmount type\n"
+      "  `MNT_OPTS     \tmount options\n"
+      "  `MNT_FREQ     \tdump frequency in days\n"
+      "  `MNT_PASSNO   \tpass number for parallel fsck\n"
+      "Cf. `file_system_stat().",
+      (void), LVL_VALA, OP_LEAF | OP_NOESCAPE, ".l")
+{
+#ifdef __linux__
+  FILE *f = setmntent("/etc/mtab", "r");
+  if (f == NULL)
+    runtime_error_message(error_abort, "failed to open /etc/mtab");
+ #define FSF(l, m) ent->mnt_ ## l
+ #define FOR_FSENT() for (struct mntent *ent; (ent = getmntent(f));)
+ #define END_FSENT()  endmntent(f)
+#elif defined __MACH__
+  if (!setfsent())
+    runtime_error_message(error_abort, "setfsent() failed");
+ #define FSF(l, m) ent->fs_ ## m
+ #define FOR_FSENT() for (struct fstab *ent; (ent = getfsent());)
+ #define END_FSENT() endfsent()
+#else
+  #error Unsupported platform
+#endif
+  struct list *res = NULL;
+  struct vector *v = NULL;
+  GCPRO(res, v);
+  FOR_FSENT()
+    {
+      v = alloc_vector(MOUNT_ENTRY_FIELDS);
+      SET_VECTOR(v, MNT_FSNAME, alloc_string(FSF(fsname, spec)));
+      SET_VECTOR(v, MNT_DIR,    alloc_string(FSF(dir,    file)));
+      SET_VECTOR(v, MNT_TYPE,   alloc_string(FSF(type,   type)));
+      SET_VECTOR(v, MNT_OPTS,   alloc_string(FSF(opts,   mntops)));
+#ifdef USE_GMP
+      SET_VECTOR(v, MNT_FREQ,   make_int_or_bigint(FSF(freq,   freq)));
+      SET_VECTOR(v, MNT_PASSNO, make_int_or_bigint(FSF(passno, passno)));
+#endif
+      res = alloc_list(v, res);
+    }
+  UNGCPRO();
+  END_FSENT();
+  return res;
+}
+#endif	/* __linux__ || defined __MACH__ */
+
 #define DEF(s) system_define(#s, makeint(s))
 
 void files_init(void)
@@ -845,6 +904,9 @@ void files_init(void)
   DEFINE(passwd_file_entries);
   DEFINE(group_file_entries);
 
+#if defined __linux__ || defined __MACH__
+  DEFINE(mount_points);
+#endif
 #ifdef USE_GMP
   DEFINE(file_system_stat);
 #endif  /* USE_GMP */

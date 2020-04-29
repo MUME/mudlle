@@ -21,9 +21,9 @@
 
 #include "mudlle-config.h"
 
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "alloc.h"
 #include "call.h"
@@ -155,7 +155,9 @@ void do_interpret(struct closure *fn, int nargs)
   };
   call_stack = &me.s;
 
-  ++me.code->call_count;
+#ifdef PROFILE_CALL_COUNT
+  ++me.code->code.call_count;
+#endif
 
   /* make local variables */
   me.locals = allocate_locals(me.code->nb_locals);
@@ -273,7 +275,6 @@ void do_interpret(struct closure *fn, int nargs)
 #define C_START_CALL(n, pop) do {               \
           SAVE_OFFSET();                        \
           struct primitive *__pop = (pop);      \
-          __pop->call_count++;			\
           primop.c.u.prim = __pop;              \
           op = __pop->op;                       \
           primop.c.nargs = n;			\
@@ -374,8 +375,8 @@ void do_interpret(struct closure *fn, int nargs)
 #define __CALL_PRIM(N)                                                  \
                   case N:                                               \
                     result = op->op(CONCATCOMMA(N, __CPRIMARG));        \
-                    break;
-                  DOPRIMARGS(__CALL_PRIM)
+                    break
+                  DOPRIMARGS(__CALL_PRIM, SEP_SEMI);
 #undef __CALL_PRIM
 #undef __CPRIMARG
                 default:
@@ -620,7 +621,7 @@ void do_interpret(struct closure *fn, int nargs)
 #define INTEGER_OP(op, opname) do {		\
 	  value arg2 = FAST_POP();              \
 	  value arg1 = FAST_GET(0);             \
-	  if (integerp(arg1) && integerp(arg2))	\
+	  if ((long)arg1 & (long)arg2 & 1)	\
 	    FAST_SET(0, op);			\
 	  else					\
             {                                   \
@@ -642,11 +643,15 @@ void do_interpret(struct closure *fn, int nargs)
 	INTEGER_OP(makebool((long)arg1 >= (long)arg2), greater_equal);
 	break;
 
+      case op_builtin_addint:
+        INTEGER_OP((value)((long)arg1 + (long)arg2 - 1), iadd);
+        break;
+
       case op_builtin_add:
         {
           value arg2 = FAST_POP();
           value arg1 = FAST_GET(0);
-          if (integerp(arg1) && integerp(arg2))
+          if ((long)arg1 & (long)arg2 & 1)
             FAST_SET(0, (value)((long)arg1 + (long)arg2 - 1));
           else if (TYPE(arg1, string) && TYPE(arg2, string))
             {
@@ -729,7 +734,7 @@ void do_interpret(struct closure *fn, int nargs)
 #define _OP_TYPECHECK(simple, arg, type) IF(simple)(    \
           _SIMPLE_TYPECHECK(arg, type),                 \
           goto pointer_typecheck;)
-#define OP_TYPECHECK(arg, type)                         \
+#define OP_TYPECHECK(type, arg)                         \
         case op_typecheck_ ## type:                     \
           _OP_TYPECHECK(                                \
             IF(IS_MARK(_TYPE_IS_NULL_ ## type))(        \
@@ -807,7 +812,7 @@ static inline value invoke_stack(struct closure *c, int nargs)
       RESTORE_STACK();
       for (int i = nargs; i > 0; )
         extra->data[--i] = FAST_POP();
-      return invoke(c, extra);
+      return invokev(c, extra);
     }
 
   struct stack_cache stack_cache;
@@ -824,7 +829,7 @@ static inline value invoke_stack(struct closure *c, int nargs)
 
   switch (nargs)
     {
-    DOPRIMARGS(__INVOKE)
+      DOPRIMARGS(__INVOKE, SEP_EMPTY)
     default: abort();
     }
 

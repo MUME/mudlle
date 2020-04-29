@@ -28,7 +28,8 @@ defines
   mc:flow_live, mc:rscan_live, mc:flow_display, mc:clear_dataflow,
   mc:split_blocks, mc:flatten_blocks, mc:display_blocks, mc:f_ilist,
   mc:f_ambiguous_w, mc:f_ambiguous_rw, mc:f_uses, mc:f_copies, mc:f_live,
-  mc:f_dvars, mc:f_types, mc:f_sizes, mc:all_functions, mc:flow_sizes
+  mc:f_dvars, mc:f_types, mc:f_sizes, mc:all_functions, mc:flow_sizes,
+  mc:add_fallthrough_block
 
 reads mc:show_type_info, mc:verbose
 
@@ -163,18 +164,43 @@ reads mc:show_type_info, mc:verbose
 	];
 
       // Now add edges for branches in the flow graph
-      graph_nodes_apply(fn (node)
-			[
-			  | last |
-			  last = dget(dprev(graph_node_get(node)[mc:f_ilist]))[mc:il_ins];
-			  if (last[mc:i_class] == mc:i_branch)
-			    graph_add_edge(
-                              node,
-                              last[mc:i_bdest][mc:l_ilist][mc:il_node],
-                              false)
-			], flow);
+      graph_nodes_apply(fn (node) [
+        | last |
+        last = dget(dprev(graph_node_get(node)[mc:f_ilist]))[mc:il_ins];
+        if (last[mc:i_class] == mc:i_branch)
+          graph_add_edge(
+            node,
+            last[mc:i_bdest][mc:l_ilist][mc:il_node],
+            false)
+      ], flow);
 
       ifn[mc:c_fvalue] = entry_node . flow
+    ];
+
+  // Adds and returns new block after 'src_block' that contains a
+  // single mc:branch_always to dst_block
+  mc:add_fallthrough_block = fn (src_block, dst_block)
+    [
+      | fcode, src_node, bgraph, bnode, ilist, label |
+      src_node = dget(src_block[mc:f_ilist])[mc:il_node];
+      ilist = dcons!(null, null); // create with placeholder entry
+      fcode = mc:new_fncode(null);
+      mc:set_instruction(fcode, ilist);
+      label = dget(dst_block[mc:f_ilist])[mc:il_label];
+      if (!label)
+        [
+          label = mc:new_label();
+          mc:set_label(label, dget(dst_block[mc:f_ilist]));
+        ];
+      mc:set_loc(mc:no_loc);
+      mc:ins_branch(fcode, mc:branch_always, label, null);
+      ilist = dremove!(ilist, ilist); // remove placeholder entry
+      bgraph = graph_node_graph(src_node);
+      bnode = graph_add_node(bgraph, new_block(ilist));
+      set_ilist_node(ilist, bnode);
+      graph_add_edge(src_node, bnode, true);
+      graph_add_edge(bnode, dget(dst_block[mc:f_ilist])[mc:il_node], false);
+      graph_node_get(bnode);
     ];
 
   set_ilist_node = fn (ilist, node)
@@ -223,22 +249,16 @@ reads mc:show_type_info, mc:verbose
       loop
 	<cont> [
 	  // next node is entry
-	  | next |
-
 	  nodes = entry . nodes;
 	  allnodes = ldelete!(entry, allnodes);
 	  if (allnodes == null)
             exit lreverse(nodes);
 
 	  // Find next node:
-	  next = null;
-	  graph_edges_out_apply(fn (edge) [
-            if (graph_edge_get(edge))
-              next = graph_edge_to(edge)
-          ], entry);
-
-	  if (next != null)
-            exit<cont> entry = next;
+          | edge |
+	  edge = graph_edges_out_exists?(graph_edge_get, entry);
+	  if (edge)
+            exit<cont> entry = graph_edge_to(edge);
 
           // find nodes that have no direct predecessors
           | nodes |
@@ -278,11 +298,16 @@ intersection_predecessors = fn (n, problem)
 
     // in = union{p:predecessors of n} out(p)
     new_in = info[mc:flow_in];
-    graph_edges_in_apply(fn (predecessor) bintersection!(new_in, graph_node_get(graph_edge_from(predecessor))[problem][mc:flow_out]), n);
+    graph_edges_in_apply(fn (predecessor) [
+      bintersection!(
+        new_in,
+        graph_node_get(graph_edge_from(predecessor))[problem][mc:flow_out])
+    ], n);
     info[mc:flow_in] = new_in;
 
     // out(i) = gen(i) U (in(i) - kill(i))
-    new_out = bunion!(bdifference(new_in, info[mc:flow_kill]), info[mc:flow_gen]);
+    new_out = bunion!(bdifference(new_in, info[mc:flow_kill]),
+                      info[mc:flow_gen]);
     if (bitset_eq?(info[mc:flow_out], new_out)) false
     else
       [
@@ -306,11 +331,16 @@ union_predecessors = fn (n, problem)
 
     // in = union{p:predecessors of n} out(p)
     new_in = info[mc:flow_in];
-    graph_edges_in_apply(fn (predecessor) bunion!(new_in, graph_node_get(graph_edge_from(predecessor))[problem][mc:flow_out]), n);
+    graph_edges_in_apply(fn (predecessor) [
+      bunion!(
+        new_in,
+        graph_node_get(graph_edge_from(predecessor))[problem][mc:flow_out])
+    ], n);
     info[mc:flow_in] = new_in;
 
     // out(i) = gen(i) U (in(i) - kill(i))
-    new_out = bunion!(bdifference(new_in, info[mc:flow_kill]), info[mc:flow_gen]);
+    new_out = bunion!(bdifference(new_in, info[mc:flow_kill]),
+                      info[mc:flow_gen]);
     if (bitset_eq?(info[mc:flow_out], new_out)) false
     else
       [
@@ -334,11 +364,16 @@ union_successors = fn (n, problem)
 
     // out = union{s:successors of n} in(s)
     new_out = info[mc:flow_out];
-    graph_edges_out_apply(fn (successor) bunion!(new_out, graph_node_get(graph_edge_to(successor))[problem][mc:flow_in]), n);
+    graph_edges_out_apply(fn (successor) [
+      bunion!(
+        new_out,
+        graph_node_get(graph_edge_to(successor))[problem][mc:flow_in])
+    ], n);
     info[mc:flow_out] = new_out;
 
     // in(i) = gen(i) U (out(i) - kill(i))
-    new_in = bunion!(bdifference(new_out, info[mc:flow_kill]), info[mc:flow_gen]);
+    new_in = bunion!(bdifference(new_out, info[mc:flow_kill]),
+                     info[mc:flow_gen]);
     if (bitset_eq?(info[mc:flow_in], new_in)) false
     else
       [
@@ -674,10 +709,11 @@ mc:flow_ambiguous = fn (ifn, type)
 	    | ins |
 
 	    ins = dget(scan)[mc:il_ins];
-	    if (ins[mc:i_class] == mc:i_closure)
-	      mc:set_closure_vars!(ins, rwmask, amb)
-            else if (ins[mc:i_class] == mc:i_vref)
-              set_bit!(amb, ins[mc:i_varg][mc:v_number]);
+            match (ins[mc:i_class])
+              [
+                ,mc:i_closure => mc:set_closure_vars!(ins, rwmask, amb);
+                ,mc:i_vref => set_bit!(amb, ins[mc:i_varg][mc:v_number]);
+              ];
 
 	    scan = dnext(scan);
 	    if (scan == ilist) exit amb
@@ -742,8 +778,11 @@ mc:scan_ambiguous = fn (f, x, block, globals, type)
 	ins = il[mc:il_ins];
 
 	x = f(il, ambiguous, x);
-	if (ins[mc:i_class] == mc:i_closure)
-	  mc:set_closure_vars!(ins, rwmask, ambiguous);
+        match (ins[mc:i_class])
+          [
+            ,mc:i_closure => mc:set_closure_vars!(ins, rwmask, ambiguous);
+            ,mc:i_vref => set_bit!(ambiguous, ins[mc:i_varg][mc:v_number]);
+          ];
 
 	scan = dnext(scan);
 	if (scan == ilist) exit x
@@ -772,32 +811,36 @@ mc:build_ambiguous_list = fn (block, globals, type)
 	scan = dnext(scan);
 	if (scan == ilist) exit result;
 
-	if (ins[mc:i_class] == mc:i_closure)
+        match (ins[mc:i_class])
           [
-            | vars, new? |
-            new? = false;
-            vars = ins[mc:i_ffunction][mc:c_fclosure];
-            while (vars != null)
-              [
-                | var |
-                @(var . vars) = vars;
-                if (rwmask == (mc:closure_read | mc:closure_write)
-                    || (mc:var_base(var)[mc:v_lclosure_uses] & rwmask))
-                  [
-                    | vnum |
-                    vnum = var[mc:v_cparent][mc:v_number];
-                    if (!new? && bit_clear?(ambiguous, vnum))
-                      [
-                        ambiguous = bcopy(ambiguous);
-                        new? = true;
-                      ];
-                    set_bit!(ambiguous, vnum);
-                  ];
-              ];
-          ];
+            ,mc:i_closure => [
+              | vars, new? |
+              new? = false;
+              vars = ins[mc:i_ffunction][mc:c_fclosure];
+              while (vars != null)
+                [
+                  | var |
+                  @(var . vars) = vars;
+                  if (rwmask == (mc:closure_read | mc:closure_write)
+                      || (mc:var_base(var)[mc:v_lclosure_uses] & rwmask))
+                    [
+                      | vnum |
+                      vnum = var[mc:v_cparent][mc:v_number];
+                      if (!new? && bit_clear?(ambiguous, vnum))
+                        [
+                          ambiguous = bcopy(ambiguous);
+                          new? = true;
+                        ];
+                      set_bit!(ambiguous, vnum);
+                    ];
+                ];
+            ];
+            ,mc:i_vref => [
+              set_bit!(ambiguous, ins[mc:i_varg][mc:v_number])
+            ]
+          ]
       ]
   ];
-
 mc:flow_uses = fn (ifn)
   // Types: ifn: intermediate function
   // Requires: ambiguous data-flow information
@@ -871,7 +914,8 @@ mc:flow_uses = fn (ifn)
 			block[mc:f_uses] = uses;
 		      ], cdr(fg));
 
-    // make map of use number to uses (all_uses is in reverse order of use number)
+    // make map of use number to uses (all_uses is in reverse order of
+    // use number)
     uindex = uindex + 1;
     i = uindex;
     uses = all_uses;
@@ -1035,9 +1079,10 @@ mc:flow_copies = fn (ifn)
 			copies = block_copies(block, globals);
 			all_copies = lappend(cdr(copies), all_copies);
 			block[mc:f_copies] = copies;
-n		      ], cdr(fg));
+		      ], cdr(fg));
 
-    // make map of use number to uses (all_uses is in reverse order of use number)
+    // make map of use number to uses (all_uses is in reverse order of
+    // use number)
     ++cindex;
     i = cindex;
     copies = all_copies;
@@ -1108,7 +1153,8 @@ n		      ], cdr(fg));
     eblock[mc:flow_out] = eblock[mc:flow_gen];
 
     merge_block = fn (n)
-      if (n != entry && intersection_predecessors(n, mc:f_copies)) change = true;
+      if (n != entry && intersection_predecessors(n, mc:f_copies))
+        change = true;
 
     change = true;
     while (change)
@@ -1245,9 +1291,10 @@ mc:rscan_live = fn (f, x, block)
                    [
                      display("  from ins");
                      graph_edges_in_apply(fn (edge) [
-                       | fnode |
+                       | fnode, il |
                        fnode = graph_edge_from(edge);
-                       dformat(" %d", dget(dprev(graph_node_get(fnode)[mc:f_ilist]))[mc:il_number]);
+                       il = dget(dprev(graph_node_get(fnode)[mc:f_ilist]));
+                       dformat(" %d", il[mc:il_number]);
                      ], node);
                      newline();
                    ];
@@ -1258,9 +1305,11 @@ mc:rscan_live = fn (f, x, block)
                    [
                      display("  to ins");
                      graph_edges_out_apply(fn (edge) [
-                       | tnode |
+                       | tnode, il |
                        tnode = graph_edge_to(edge);
-                       dformat(" %d", dget(graph_node_get(tnode)[mc:f_ilist])[mc:il_number]);
+                       il = dget(graph_node_get(tnode)[mc:f_ilist]);
+                       dformat(" %d(%c)", il[mc:il_number],
+                               if (graph_edge_get(edge)) ?f else ?b);
                      ], node);
                      newline();
                    ];

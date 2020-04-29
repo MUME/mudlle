@@ -31,4 +31,13 @@ struct mfile;
 bool parse(struct alloc_block *heap, struct mfile **f);
 bool parse_constant(struct alloc_block *heap, struct constant **c);
 
+#define YYLTYPE YYLTYPE
+typedef struct {
+  int first_line;
+  int first_column;
+  int last_line;
+  int last_column;
+  const struct filename *fname;
+} YYLTYPE;
+
 #endif /* MPARSER_H */

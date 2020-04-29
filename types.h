@@ -25,8 +25,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 
-#include "mudlle.h"
 #include "mudlle-macro.h"
+#include "mudlle.h"
 
 #ifdef USE_GMP
 #include <gmp.h>
@@ -34,7 +34,7 @@
 
 typedef unsigned long ulong;
 
-typedef unsigned char seclev_t;
+typedef uint8_t seclev_t;
 
 #define sizeoffield(type, field) (sizeof ((type *)0)->field)
 
@@ -56,30 +56,30 @@ enum garbage_type {
    Add new types just before 'type_null'.
    Also some generated code depends on the values. */
 #define FOR_PLAIN_TYPES(op, arg)					\
-  op(arg, code) op(arg, closure) op(arg, variable) op(arg, internal)	\
-  op(arg, primitive) op(arg, varargs) op(arg, secure)			\
+  op(code, arg) op(closure, arg) op(variable, arg) op(internal, arg)	\
+  op(primitive, arg) op(varargs, arg) op(secure, arg)			\
 									\
-  op(arg, integer) op(arg, string) op(arg, vector) op(arg, pair)	\
-  op(arg, symbol) op(arg, table) op(arg, private)			\
+  op(integer, arg) op(string, arg) op(vector, arg) op(pair, arg)	\
+  op(symbol, arg) op(table, arg) op(private, arg)			\
 									\
-  op(arg, object) op(arg, character) op(arg, gone)			\
+  op(object, arg) op(character, arg) op(gone, arg)			\
 									\
-  op(arg, oport) op(arg, mcode) op(arg, float) op(arg, bigint)		\
-  op(arg, reference)							\
+  op(oport, arg) op(mcode, arg) op(float, arg) op(bigint, arg)		\
+  op(reference, arg)							\
 									\
-  op(arg, null)
+  op(null, arg)
 
 /* Synthetic types, not used in object representations but represent
    a set of the previous types.
    They can thus change */
 #define FOR_SYNTHETIC_TYPES(op, arg)				\
-  op(arg, none)	     /* no types */				\
-  op(arg, any)	     /* any types */				\
-  op(arg, function)  /* closure, primitive, varargs, secure */	\
-  op(arg, list)	     /* pair, null */
+  op(none, arg)	     /* no types */				\
+  op(any, arg)	     /* any types */				\
+  op(function, arg)  /* closure, primitive, varargs, secure */	\
+  op(list, arg)	     /* pair, null */
 
-#define FOR_MTYPE(op, name) op(type_ ## name)
-#define FOR_STYPE(op, name) op(stype_ ## name)
+#define FOR_MTYPE(name, op) op(type_ ## name)
+#define FOR_STYPE(name, op) op(stype_ ## name)
 
 #define FOR_MUDLLE_TYPES(op)					\
   FOR_PLAIN_TYPES(FOR_MTYPE, op)				\
@@ -216,22 +216,22 @@ struct primitive		/* Is a permanent external */
 {
   struct obj o;
   const struct prim_op *op;
-  ulong call_count;
 };
-
-typedef const char *typing[];
 
 struct vector;
 typedef value (*vararg_op_fn)(struct vector *args, ulong nargs);
 
 struct prim_op                  /* The primitive's definition */
 {
-  const char *name;
+  struct string *name;          /* Always points to a static string */
   const char *help;
   value (*op)();
+#ifdef PROFILE_CALL_COUNT
+  unsigned *call_count;
+#endif
   int16_t nargs;
   uint16_t flags;		/* Helps compiler select calling sequence */
-  const char *const *type;	/* Pointer to a typing array */
+  const char *const *types;	/* Pointer to type signature array */
   seclev_t seclevel;		/* Only for type_secure */
   const char *filename;
   int lineno;
@@ -251,8 +251,8 @@ enum {
                               this primitive. */
   OP_CONST       = P(5),   /* May be evaluated at compile-time if all its
                               arguments are known constants.
-                              check_immutable(result) must be immutable and the
-                              result must be readonly. */
+                              try_make_immutable(result) must be immutable and
+                              the result must be readonly. */
   OP_OPERATOR    = P(6),   /* Print as an operator (unary prefix, binary infix,
                               or ref/set!) in stack traces. */
   OP_APPLY       = P(7),   /* apply-like function, evaluating one argument,
@@ -315,22 +315,6 @@ struct mjmpbuf                  /* a string */
                                    NULL while being jumped to */
 };
 
-struct static_obj
-{
-  ulong *static_data;
-  struct obj o;
-};
-
-CASSERT_SIZEOF(struct static_obj, (offsetof(struct static_obj, o)
-				    + sizeof (struct obj)));
-
-static inline ulong *static_data(struct obj *obj)
-{
-  struct static_obj *sobj
-    = (struct static_obj *)((char *)obj - offsetof(struct static_obj, o));
-  return sobj->static_data;
-}
-
 struct closure *unsafe_alloc_closure(ulong nb_variables);
 struct closure *alloc_closure0(struct code *code);
 struct string *alloc_string(const char *s);
@@ -338,7 +322,7 @@ struct string *mudlle_string_copy(struct string *s);
 char *mudlle_string_dup(struct string *s);
 struct string *alloc_empty_string(size_t length);
 struct string *alloc_string_length(const char *s, size_t length);
-struct mudlle_float *alloc_mudlle_float(double d);
+struct mudlle_float *alloc_float(double d);
 struct bigint *alloc_bigint(mpz_t mpz);
 struct string *safe_alloc_string(const char *s);
 struct variable *alloc_variable(value val);
@@ -418,6 +402,21 @@ struct mprivate *alloc_private(enum mprivate_type id, ulong size);
 /* Make a mudlle boolean (true or false) from a C integer */
 #define makebool(i) makeint(((i) | 0) != 0)
 
+#ifdef WORDS_BIGENDIAN
+ /* MUDLLE_VALUE_UNION bitfield layouts assume little-endian */
+ #error Unsupported endianness
+#endif
+#define MUDLLE_VALUE_UNION(name, ...)           \
+union name {                                    \
+  struct {                                      \
+    bool isint : 1;                             \
+    __VA_ARGS__                                 \
+  }  __attribute__((__packed__)) i;             \
+  value v;                                      \
+};                                              \
+CASSERT_SIZEOF(union name, sizeof (value));     \
+union name
+
 /* used to disguise an aligned C pointer as a mudlle integer */
 struct tagged_ptr {
   value v;
@@ -462,6 +461,7 @@ bool mudlle_strtolong(const char *sp, size_t len, long *l, int base,
 bool mudlle_strtofloat(const char *sp, size_t len, double *d);
 
 #define MAX_PRIMITIVE_ARGS 5
-#define DOPRIMARGS(op) op(1) op(2) op(3) op(4) op(5)
+#define DOPRIMARGS(op, sep) \
+  op(1) sep() op(2) sep() op(3) sep() op(4) sep() op(5)
 
 #endif /* TYPES_H */

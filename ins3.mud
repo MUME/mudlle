@@ -70,7 +70,8 @@ defines
   mc:replace_dest, mc:replace_args, mc:ins_list, mc:ins_list1, mc:print_ins,
   mc:slabel, mc:fncode_fn, mc:new_varset, mc:set_vars!, mc:call_escapes?,
   mc:my_protected_global?, mc:make_trap_ins,
-  mc:skip_label_alias
+  mc:skip_label_alias,
+  mc:reset_ins_count
 
 reads mc:this_module
 
@@ -577,6 +578,8 @@ generating instructions for function component" (top)
     v[mc:v_class] == mc:v_local && string_length(v[mc:v_name]) == 0;
 
   ins_index = 0;
+  mc:reset_ins_count = fn () ins_index = 0;
+
   add_ins = fn (fcode, ins)
     // Types: fcode : fncode
     //        ins : instruction
@@ -661,9 +664,8 @@ generating instructions for function component" (top)
   // labels
 
   label_index = 0;
-  mc:new_label = fn "fncode -> label. Returns a new unassigned label in fncode"
-    (fcode)
-      vector(false, false, label_index = label_index + 1, null);
+  mc:new_label = fn "-> label. Returns a new unassigned label" ()
+      vector(false, false, ++label_index, null);
 
   mc:ins_label = fn "fncode label -> . Makes label point at the next instruction to\n\
 be generated in fncode" (fcode, label)
@@ -691,7 +693,7 @@ be generated in fncode" (fcode, label)
 
   // labeled blocks
   mc:start_block = fn "fncode s -> . Starts a new block called s in fncode" (fcode, name)
-    fcode[3] = vector(name, mc:new_label(fcode), mc:new_local(fcode)) . fcode[3];
+    fcode[3] = vector(name, mc:new_label(), mc:new_local(fcode)) . fcode[3];
 
   mc:end_block = fn "fncode var1 -> var2. End of block, with value var1. Returns block value var2" (fcode, v)
     [

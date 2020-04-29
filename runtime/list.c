@@ -25,17 +25,17 @@
 
 #include "../interpret.h"
 
-TYPEDOP(cons, 0, "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2."
+TYPEDOP(cons, , "`x1 `x2 -> `l. Make a new pair from elements `x1 and `x2."
         " See also `pcons().",
-	2, (value car, value cdr),
+	(value car, value cdr),
 	OP_LEAF | OP_NOESCAPE, "xx.k")
 {
   return alloc_list(car, cdr);
 }
 
-TYPEDOP(pcons, 0, "`x1 `x2 -> `l. Make a new read-only, possibly immutable,"
+TYPEDOP(pcons, , "`x1 `x2 -> `l. Make a new read-only, possibly immutable,"
         " pair from elements `x1 and `x2.",
-	2, (value car, value cdr),
+	(value car, value cdr),
 	OP_LEAF | OP_NOESCAPE | OP_CONST, "xx.k")
 {
   unsigned imm = immutablep(car) && immutablep(cdr) ? OBJ_IMMUTABLE : 0;
@@ -44,37 +44,37 @@ TYPEDOP(pcons, 0, "`x1 `x2 -> `l. Make a new read-only, possibly immutable,"
   return p;
 }
 
-TYPEDOP(car, 0, "`l -> `x. Returns the first element of pair `l.",
-        1, (struct list *l),
+TYPEDOP(car, , "`l -> `x. Returns the first element of pair `l.",
+        (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
   CHECK_TYPES(l, pair);
   return l->car;
 }
 
-TYPEDOP(cdr, 0, "`l -> `x. Returns second element of pair `l.",
-        1, (struct list *l),
+TYPEDOP(cdr, , "`l -> `x. Returns second element of pair `l.",
+        (struct list *l),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "k.x")
 {
   CHECK_TYPES(l, pair);
   return l->cdr;
 }
 
-TYPEDOP(pairp, "pair?", "`x -> `b. Returns TRUE if `x is a pair", 1, (value v),
+TYPEDOP(pairp, "pair?", "`x -> `b. Returns TRUE if `x is a pair", (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(TYPE(v, pair));
 }
 
 TYPEDOP(listp, "list?", "`x -> `b. Returns TRUE if `x is a pair or null",
-        1, (value v),
+        (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(!v || TYPE(v, pair));
 }
 
 TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object",
-        1, (value v),
+        (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(v == NULL);
@@ -82,7 +82,7 @@ TYPEDOP(nullp, "null?", "`x -> `b. Returns TRUE if `x is the null object",
 
 EXT_TYPEDOP(set_carb, "set_car!", "`l `x -> `x. Sets the first element of"
             " pair `l to `x",
-            2, (struct list *l, value x), (l, x),
+            (struct list *l, value x), (l, x),
             OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "kx.1")
 {
   CHECK_TYPES(l, pair,
@@ -94,7 +94,7 @@ EXT_TYPEDOP(set_carb, "set_car!", "`l `x -> `x. Sets the first element of"
 
 EXT_TYPEDOP(set_cdrb, "set_cdr!", "`l `x -> `x. Sets the second element of"
             " pair `l to `x",
-            2, (struct list *l, value x), (l, x),
+            (struct list *l, value x), (l, x),
             OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "kx.1")
 {
   CHECK_TYPES(l, pair,
@@ -104,11 +104,8 @@ EXT_TYPEDOP(set_cdrb, "set_cdr!", "`l `x -> `x. Sets the second element of"
   return l->cdr = x;
 }
 
-static const typing list_tset = { ".u", "xx*.k", NULL };
-
-FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
-       NVARARGS, (struct vector *args, ulong nargs), (args, nargs),
-       0, OP_LEAF | OP_NOESCAPE, list_tset, static)
+VAROP(list, , "`x1 ... -> `l. Returns a list of the arguments",
+       OP_LEAF | OP_NOESCAPE, (".u", "xx*.k"))
 {
   struct list *l = NULL;
   GCPRO(l, args);
@@ -120,11 +117,9 @@ FULLOP(list, 0, "`x1 ... -> `l. Returns a list of the arguments",
   return l;
 }
 
-FULLOP(plist, 0, "`x1 ... -> `l. Returns a read-only and (if all elements"
-       " are immutable) immutable list of the arguments.",
-       NVARARGS, (struct vector *args, ulong nargs), (args, nargs), 0,
-       OP_LEAF | OP_NOESCAPE | OP_CONST,
-       list_tset, static)
+VAROP(plist, , "`x1 ... -> `l. Returns a read-only and (if all elements"
+      " are immutable) immutable list of the arguments.",
+      OP_LEAF | OP_NOESCAPE | OP_CONST, (".u", "xx*.k"))
 {
   struct list *l = NULL;
   GCPRO(l, args);

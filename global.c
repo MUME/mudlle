@@ -20,12 +20,13 @@
  */
 
 #include <string.h>
-#include "global.h"
-#include "table.h"
+
 #include "alloc.h"
-#include "error.h"
-#include "module.h"
 #include "context.h"
+#include "error.h"
+#include "global.h"
+#include "module.h"
+#include "table.h"
 
 #include "runtime/support.h"
 
@@ -82,7 +83,7 @@ static ulong global_add(struct string *name, value val)
              global_names->o.size - sizeof (struct obj));
       global_names = vec;
 
-#if defined(__i386__) && !defined(NOCOMPILER)
+#ifndef NOCOMPILER
       /* This is evil, but the alternative is to lose a scarce, callee-save
 	 register */
       patch_globals_stack(old_values, environment->values);

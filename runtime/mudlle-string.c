@@ -31,11 +31,12 @@
 
 #include "../call.h"
 #include "../charset.h"
+#include "../hash.h"
 #include "../print.h"
 
 #include "check-types.h"
-#include "prims.h"
 #include "mudlle-string.h"
+#include "prims.h"
 
 
 #ifdef USE_PCRE
@@ -88,15 +89,15 @@ enum runtime_error ct_string_index(long idx, const char **errmsg,
   return error_none;
 }
 
-TYPEDOP(stringp, "string?", "`x -> `b. TRUE if `x is a string", 1, (value v),
+TYPEDOP(stringp, "string?", "`x -> `b. TRUE if `x is a string", (value v),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "x.n")
 {
   return makebool(TYPE(v, string));
 }
 
-TYPEDOP(make_string, 0, "`n -> `s. Create an all-zero string of length `n,"
+TYPEDOP(make_string, , "`n -> `s. Create an all-zero string of length `n,"
         " where 0 <= `n <= `MAX_STRING_SIZE.",
-        1, (value msize), OP_LEAF | OP_NOESCAPE, "n.s")
+        (value msize), OP_LEAF | OP_NOESCAPE, "n.s")
 {
   int size = GETRANGE(msize, 0, MAX_STRING_SIZE);
   struct string *newp = alloc_empty_string(size);
@@ -107,8 +108,8 @@ TYPEDOP(make_string, 0, "`n -> `s. Create an all-zero string of length `n,"
   return newp;
 }
 
-TYPEDOP(string_length, 0, "`s -> `n. Return length of string",
-        1, (struct string *str),
+TYPEDOP(string_length, , "`s -> `n. Return length of string",
+        (struct string *str),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "s.n")
 {
   CHECK_TYPES(str, string);
@@ -142,25 +143,25 @@ static value string_translate(struct string *src,
   return dst;
 }
 
-TYPEDOP(string_downcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
+TYPEDOP(string_downcase, , "`s0 -> `s1. Returns a copy of `s0 with all"
         " characters lower case",
-	1, (struct string *s),
+	(struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
   return string_translate(s, mem8lwr, THIS_OP);
 }
 
-TYPEDOP(string_upcase, 0, "`s0 -> `s1. Returns a copy of `s0 with all"
+TYPEDOP(string_upcase, , "`s0 -> `s1. Returns a copy of `s0 with all"
         " characters upper case",
-	1, (struct string *s),
+	(struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
   return string_translate(s, mem8upr, THIS_OP);
 }
 
-TYPEDOP(string_7bit, 0, "`s0 -> `s1. Returns a copy of `s0 with all characters"
+TYPEDOP(string_7bit, , "`s0 -> `s1. Returns a copy of `s0 with all characters"
         " converted to printable 7 bit form",
-	1, (struct string *s),
+	(struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
   return string_translate(s, mem7prt, THIS_OP);
@@ -226,21 +227,21 @@ static value string_xspan(struct string *s, value mofs, value mmax,
   return func(start, end, filter->str, string_len(filter));
 }
 
-TYPEDOP(string_span, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
+TYPEDOP(string_span, , "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
         " characters, but at most `n1, in string `s0, starting at offset `n0,"
         " that consist entirely of characters in `s1.\n"
         "See also `string_cspan().",
-        4, (struct string *s, value mofs, value mmax, struct string *accept),
+        (struct string *s, value mofs, value mmax, struct string *accept),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "snns.n")
 {
   return string_xspan(s, mofs, mmax, accept, string_span, THIS_OP);
 }
 
-TYPEDOP(string_cspan, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
+TYPEDOP(string_cspan, , "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
         " characters, at most `n1, in string `s0 starting at offset `n0"
         " that consists entirely of characters not in `s1.\n"
         "See also `string_span().",
-        4, (struct string *s, value mofs, value mmax, struct string *reject),
+        (struct string *s, value mofs, value mmax, struct string *reject),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "snns.n")
 {
   return string_xspan(s, mofs, mmax, reject, string_cspan, THIS_OP);
@@ -248,7 +249,7 @@ TYPEDOP(string_cspan, 0, "`s0 `n0 `n1 `s1 -> `n2. Returns the number of"
 
 TYPEDOP(sdelete, "sdelete", "`n `s0 -> `s1. Return a copy of `s0 without any"
         " occurrence of character `n.",
-        2, (value mch, struct string *src),
+        (value mch, struct string *src),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, "ns.s")
 {
   unsigned char c;
@@ -279,7 +280,7 @@ TYPEDOP(sdelete, "sdelete", "`n `s0 -> `s1. Return a copy of `s0 without any"
 
 TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
         " character `n",
-	2, (struct string *str, value mc),
+	(struct string *str, value mc),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "sn.1")
 {
   unsigned char c;
@@ -296,10 +297,10 @@ TYPEDOP(string_fill, "string_fill!", "`s `n -> `s. Set all characters of `s to"
   return str;
 }
 
-TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
+TYPEDOP(ascii_to_html, , "`s0 -> `s0|`s1. Escapes HTML special characters."
         " May return either `s0, if `s0 doesn't contain any special chars,"
         " or a new string.",
-	1, (struct string *s),
+	(struct string *s),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.s")
 {
   CHECK_TYPES(s, string);
@@ -340,11 +341,7 @@ TYPEDOP(ascii_to_html, 0, "`s0 -> `s0|`s1. Escapes HTML special characters."
   return newp;
 }
 
-#ifndef NBSP
-#  define NBSP "\240"
-#endif
-
-TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
+TYPEDOP(string_from_utf8, , "`s0 `n -> `s1. Returns the UTF-8 string `s0"
         " converted to an ISO" NBSP "8859-1 string. `n controls how conversion"
         " errors are handled:\n"
         "   0  \tcharacters that cannot be represented in ISO" NBSP "8859-1"
@@ -355,7 +352,7 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
         " if possible; incorrect codes are skipped\n"
         "   3  \tcharacters that cannot be represented and incorrect"
         " codes are skipped",
-        2, (struct string *s, value mmode),
+        (struct string *s, value mmode),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.s")
 {
   int mode;
@@ -429,9 +426,9 @@ TYPEDOP(string_from_utf8, 0, "`s0 `n -> `s1. Returns the UTF-8 string `s0"
   return result;
 }
 
-EXT_TYPEDOP(string_ref, 0, "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
+EXT_TYPEDOP(string_ref, , "`s `n1 -> `n2. Return the code (`n2) of the `n1'th"
             " character of `s. Negative `n1 are counted from the end of `s.",
-	    2, (struct string *str, value c), (str, c),
+	    (struct string *str, value c), (str, c),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY, "sn.n")
 {
   long idx;
@@ -445,7 +442,7 @@ EXT_TYPEDOP(string_set, "string_set!", "`s `n1 `n2 -> `n3. Set the `n1'th"
             "Negative `n1 are counted from the end of `s.\n"
             "The return value is the actual stored value, which is"
             " `n2 & 255.",
-	    3, (struct string *str, value i, value mc), (str, i, mc),
+	    (struct string *str, value i, value mc), (str, i, mc),
 	    OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "snn.n")
 {
   long idx;
@@ -497,11 +494,11 @@ static value string_n ## type ## cmp(struct string *s1,                 \
     }                                                                   \
 }                                                                       \
                                                                         \
-TYPEDOP(string_n ## type ## cmp, 0, "`s1 `s2 `n0 -> `n1. Compare at"    \
+TYPEDOP(string_n ## type ## cmp, , "`s1 `s2 `n0 -> `n1. Compare at"     \
         " most `n0 characters of two strings" desc "."                  \
         " Returns 0 if `s1 = `s2, < 0 if `s1 < `s2"                     \
         " and > 0 if `s1 > `s2",                                        \
-	3, (struct string *s1, struct string *s2, value nmax),          \
+	(struct string *s1, struct string *s2, value nmax),             \
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE                              \
         | OP_STR_READONLY | OP_CONST,                                   \
         "ssn.n")                                                        \
@@ -513,10 +510,10 @@ TYPEDOP(string_n ## type ## cmp, 0, "`s1 `s2 `n0 -> `n1. Compare at"    \
   return string_n ## type ## cmp(s1, s2, lmax);                         \
 }                                                                       \
                                                                         \
-TYPEDOP(string_ ## type ## cmp, 0, "`s1 `s2 -> `n. Compare two"         \
+TYPEDOP(string_ ## type ## cmp, , "`s1 `s2 -> `n. Compare two"          \
         " strings" desc ". Returns 0 if `s1 = `s2, < 0 if `s1 < `s2"    \
         " and > 0 if `s1 > `s2",                                        \
-	2, (struct string *s1, struct string *s2),                      \
+	(struct string *s1, struct string *s2),                         \
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE                              \
         | OP_STR_READONLY | OP_CONST,                                   \
         "ss.n")                                                         \
@@ -527,7 +524,7 @@ TYPEDOP(string_ ## type ## cmp, 0, "`s1 `s2 -> `n. Compare two"         \
                                                                         \
 TYPEDOP(string_ ## type ## equalp, "string_" #type "equal?",            \
         "`s1 `s2 -> `b. Return true if `s1 and `s2 are equal" desc ".", \
-        2, (struct string *s1, struct string *s2),                      \
+        (struct string *s1, struct string *s2),                         \
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE                              \
         | OP_STR_READONLY | OP_CONST,                                   \
         "ss.n")                                                         \
@@ -550,10 +547,10 @@ static value string_index(struct string *haystack, char needle, long ofs)
   return makeint(found - str);
 }
 
-TYPEDOP(string_index, 0,
+TYPEDOP(string_index, ,
         "`s `n1 -> `n2. Returns the index in `s of the first occurrence"
         " of the character `n1, or -1 if not found.",
-        2, (struct string *haystack, value mneedle),
+        (struct string *haystack, value mneedle),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "sn.n")
 {
@@ -563,10 +560,10 @@ TYPEDOP(string_index, 0,
   return string_index(haystack, needle, 0);
 }
 
-TYPEDOP(string_index_offset, 0,
+TYPEDOP(string_index_offset, ,
         "`s `n1 `n2 -> `n3. Returns the index in `s of the first occurrence,"
         " not before index `n2, of the character `n1, or -1 if not found.",
-        3, (struct string *haystack, value mneedle, value mofs),
+        (struct string *haystack, value mneedle, value mofs),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "snn.n")
 {
@@ -641,7 +638,7 @@ static int string_search(struct string *s1, struct string *s2,
 
 int mudlle_string_isearch(struct string *haystack, struct string *needle)
 {
-  return string_search(haystack, needle, 0, mem8icmp, mem8ichr, step8ilen);
+  return string_search(haystack, needle, 0, mem7icmp, mem7ichr, step8ilen);
 }
 
 static value string_msearch(struct string *s1, struct string *s2,
@@ -654,11 +651,11 @@ static value string_msearch(struct string *s1, struct string *s2,
 }
 
 #define DEF_STRING_SEARCH(infix, cmpfn, chrfn, stepfn, doc)             \
-TYPEDOP(string_ ## infix ## search, 0,                                  \
+TYPEDOP(string_ ## infix ## search, ,                                   \
         "`s1 `s2 -> `n. Searches in string `s1 for string `s2" doc "."  \
         " Returns the first index in `s1 where `s2 was found,"          \
         " or -1 if not found.",                                         \
-	2, (struct string *s1, struct string *s2),                      \
+	(struct string *s1, struct string *s2),                         \
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST, \
         "ss.n")                                                         \
 {                                                                       \
@@ -668,15 +665,15 @@ TYPEDOP(string_ ## infix ## search, 0,                                  \
 }
 
 DEF_STRING_SEARCH(,  memcmp,   memchr,   steplen, "")
-DEF_STRING_SEARCH(i, mem8icmp, mem8ichr, step8ilen,
+DEF_STRING_SEARCH(i, mem7icmp, mem7ichr, step8ilen,
                   " (case- and accentuation-insensitive)")
 
-TYPEDOP(string_isearch_offset, 0,
+TYPEDOP(string_isearch_offset, ,
         "`s1 `n0 `s2 -> `n1. Searches in string `s1, starting at offset"
         " `n0, for string `s2 (case- and accentuation-insensitive)."
         " Returns the first index in `s1 where `s2 was found,"
         " or -1 if not found.",
-	3, (struct string *s1, value mofs, struct string *s2),
+	(struct string *s1, value mofs, struct string *s2),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "sns.n")
 {
@@ -684,12 +681,12 @@ TYPEDOP(string_isearch_offset, 0,
   CHECK_TYPES(s1, string,
               mofs, CT_INT(ofs),
               s2, string);
-  return string_msearch(s1, s2, ofs, mem8icmp, mem8ichr, step8ilen);
+  return string_msearch(s1, s2, ofs, mem7icmp, mem7ichr, step8ilen);
 }
 
-TYPEDOP(substring, 0, "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
+TYPEDOP(substring, , "`s1 `n1 `n2 -> `s2. Extract substring of `s starting"
         " at `n1 of length `n2. The first character is numbered 0",
-	3, (struct string *s, value start, value length),
+	(struct string *s, value start, value length),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "snn.s")
 {
   long first, size;
@@ -714,9 +711,9 @@ bool string_equalp(struct string *a, struct string *b)
   return la == string_len(b) && memcmp(a->str, b->str, la) == 0;
 }
 
-VARTOP(concat_strings, 0, "`s0 `s1 ... -> `s. Returns the concatenated"
-       " strings `s0, `s1, ... as a new string.",
-       OP_STR_READONLY | OP_LEAF, "s*.s")
+VAROP(concat_strings, , "`s0 `s1 ... -> `s. Returns the concatenated"
+      " strings `s0, `s1, ... as a new string.",
+      OP_STR_READONLY | OP_LEAF, "s*.s")
 {
   long size = 0;
   for (int n = 0; n < nargs; ++n)
@@ -790,10 +787,10 @@ value string_append(struct string *s1, struct string *s2,
   return newp;
 }
 
-TYPEDOP(string_append, 0, "`s1 `s2 -> `s. Concatenate `s1 and `s2."
+TYPEDOP(string_append, , "`s1 `s2 -> `s. Concatenate `s1 and `s2."
         " The resulting string must not have more than `MAX_STRING_SIZE"
         " characters.",
-        2, (struct string *s1, struct string *s2),
+        (struct string *s1, struct string *s2),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.s")
 {
   CHECK_TYPES(s1, string,
@@ -801,10 +798,10 @@ TYPEDOP(string_append, 0, "`s1 `s2 -> `s. Concatenate `s1 and `s2."
   return string_append(s1, s2, THIS_OP);
 }
 
-TYPEDOP(split_words, 0, "`s -> `l. Split string `s into a list of"
+TYPEDOP(split_words, , "`s -> `l. Split string `s into a list of"
         " space-separated words.\n"
         "Single- or double-quoted sequences of words are kept together.",
-        1, (struct string *s),
+        (struct string *s),
         OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "s.l")
 {
   CHECK_TYPES(s, string);
@@ -856,11 +853,11 @@ TYPEDOP(split_words, 0, "`s -> `l. Split string `s into a list of"
   return l;
 }
 
-TYPEDOP(atoi, 0, "`s -> `n|`s. Converts the string `s into an integer.\n"
+TYPEDOP(atoi, , "`s -> `n|`s. Converts the string `s into an integer.\n"
         "Returns `s if the conversion failed.\n"
         "Handles binary, octal, decimal, and hexadecimal notation.\n"
         "Equivalent to `atoi_base(`s, 0).",
-	1, (struct string *s),
+	(struct string *s),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "s.[sn]")
 {
@@ -871,7 +868,7 @@ TYPEDOP(atoi, 0, "`s -> `n|`s. Converts the string `s into an integer.\n"
   return makeint(n);
 }
 
-TYPEDOP(atoi_base, 0, "`s `n0 -> `n1|`s. Converts the string `s into an"
+TYPEDOP(atoi_base, , "`s `n0 -> `n1|`s. Converts the string `s into an"
         " integer.\n"
         "`n0 specifies the base, which must be between 2 and 36 inclusive,"
         " or the special value 0.\n"
@@ -884,7 +881,7 @@ TYPEDOP(atoi_base, 0, "`s `n0 -> `n1|`s. Converts the string `s into an"
         "Following the optional prefix, the rest of the number is"
         " interpreted according to the (possibly deduced) base.\n"
         "Returns `s if the conversion failed.",
-	2, (struct string *s, value mbase),
+	(struct string *s, value mbase),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "sn.[sn]")
 {
@@ -900,7 +897,7 @@ TYPEDOP(atoi_base, 0, "`s `n0 -> `n1|`s. Converts the string `s into an"
   return makeint(n);
 }
 
-TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value mn),
+TYPEDOP(itoa, , "`n -> `s. Converts integer into string", (value mn),
         OP_LEAF | OP_NOESCAPE | OP_CONST, "n.s")
 {
   long n;
@@ -916,28 +913,28 @@ TYPEDOP(itoa, 0, "`n -> `s. Converts integer into string", 1, (value mn),
 
 TYPEDOP(isalpha, "calpha?", "`n -> `b. TRUE if `n is a letter (allowed in"
         " keywords)",
-	1, (value n),
+	(value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makebool(IS_8NAME(GETINT(n)));
 }
 
 TYPEDOP(isdigit, "cdigit?", "`n -> `b. TRUE if `n is a digit",
-	1, (value n),
+	(value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makebool(isdigit((unsigned char)GETINT(n)));
 }
 
 TYPEDOP(isxdigit, "cxdigit?", "`n -> `b. TRUE if `n is a hexadecimal digit",
-	1, (value n),
+	(value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makebool(isxdigit((unsigned char)GETINT(n)));
 }
 
 TYPEDOP(isprint, "cprint?", "`n -> `b. TRUE if `n is a printable character",
-        1, (value n),
+        (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makebool(IS_8PRINT(GETINT(n)));
@@ -945,7 +942,7 @@ TYPEDOP(isprint, "cprint?", "`n -> `b. TRUE if `n is a printable character",
 
 TYPEDOP(isspace, "cspace?", "`n -> `b. TRUE if `n is a white space character."
         " N.b., returns FALSE for non-breaking space (`NBSP).",
-        1, (value n),
+        (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   /* not using IS_8SPACE() so any line-wrapping code that uses
@@ -954,7 +951,7 @@ TYPEDOP(isspace, "cspace?", "`n -> `b. TRUE if `n is a white space character."
 }
 
 TYPEDOP(isupper, "cupper?", "`n -> `b. TRUE if `n is an upper case character",
-        1, (value n),
+        (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   unsigned char c = GETINT(n);
@@ -962,35 +959,35 @@ TYPEDOP(isupper, "cupper?", "`n -> `b. TRUE if `n is an upper case character",
 }
 
 TYPEDOP(islower, "clower?", "`n -> `b. TRUE if `n is an lower case character",
-        1, (value n),
+        (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   unsigned char c = GETINT(n);
   return makebool(TO_8UPPER(c) != c);
 }
 
-TYPEDOP(cupper, 0, "`n0 -> `n1. Return `n0's upper case variant", 1, (value n),
+TYPEDOP(cupper, , "`n0 -> `n1. Return `n0's upper case variant", (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makeint(TO_8UPPER(GETINT(n)));
 }
 
-TYPEDOP(clower, 0, "`n0 -> `n1. Return `n0's lower case variant", 1, (value n),
+TYPEDOP(clower, , "`n0 -> `n1. Return `n0's lower case variant", (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makeint(TO_8LOWER(GETINT(n)));
 }
 
-TYPEDOP(cicmp, 0, "`n0 `n1 -> `n2. Compare characters `n0 and `n1 as"
+TYPEDOP(cicmp, , "`n0 `n1 -> `n2. Compare characters `n0 and `n1 as"
         " `string_icmp() does. Returns -1, 0, or 1 if `n0 is less than,"
         " equal, or greater than `n1.",
-        2, (value n0, value n1),
+        (value n0, value n1),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "nn.n")
 {
   return makeint(TO_7LOWER(GETINT(n0)) - TO_7LOWER(GETINT(n1)));
 }
 
-TYPEDOP(c7bit, 0, "`n0 -> `n1. Return `n0's 7 bit variant", 1, (value n),
+TYPEDOP(c7bit, , "`n0 -> `n1. Return `n0's 7 bit variant", (value n),
 	OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_CONST, "n.n")
 {
   return makeint(TO_7PRINT(GETINT(n)));
@@ -1023,19 +1020,19 @@ const unsigned char *get_iso88591_pcre_table(void)
 
 TYPEDOP(is_regexp, "regexp?", "`x -> `b. Returns TRUE if `x is a"
         " regular expression, as created by `make_regexp()",
-        1, (value re), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
+        (value re), OP_LEAF | OP_NOALLOC | OP_NOESCAPE, "x.n")
 {
   return makebool(is_regexp(re));
 }
 
-TYPEDOP(fnmatch, 0, "`s0 `s1 `n -> `b. Returns true if the glob pattern `s0"
+TYPEDOP(fnmatch, , "`s0 `s1 `n -> `b. Returns true if the glob pattern `s0"
         " matches the string `s1 using flags in `n:\n"
         "  \t`FNM_NOESCAPE  \tdo not treat backslash (\\) as an escape"
         " character\n"
         "  \t`FNM_PATHNAME  \tperform a pathname match, where wildcards"
         " (* and ?) only match between slashes\n"
         "  \t`FNM_PERIOD    \tdo not let wildcards match leading periods",
-        3, (struct string *pat, struct string *str, value mflags),
+        (struct string *pat, struct string *str, value mflags),
         OP_LEAF | OP_NOALLOC | OP_NOESCAPE | OP_STR_READONLY | OP_CONST,
         "ssn.n")
 {
@@ -1081,7 +1078,7 @@ static void regexp_free(void *p)
   regexp_str = NULL;
 }
 
-TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
+TYPEDOP(make_regexp, , "`s `n -> `r. Create a matcher for the regular"
         " expression `s with flags `n.\n"
         "Returns cons(`errorstring, `erroroffset) on error.\n"
 	"The following flags are supported:\n"
@@ -1097,7 +1094,7 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
 	" (no idea what that means)\n"
 	"  \t`PCRE_MULTILINE  \t^ and $ match at newlines\n"
 	"  \t`PCRE_UNGREEDY   \tinvert greedyness of quantifiers",
-	2, (struct string *pat, value mflags),
+	(struct string *pat, value mflags),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "sn.[ok]")
 {
   long flags;
@@ -1144,9 +1141,7 @@ TYPEDOP(make_regexp, 0, "`s `n -> `r. Create a matcher for the regular"
       struct mregexp *mregexp = (struct mregexp *)alloc_private(
         PRIVATE_REGEXP, 1);
       mregexp->re = make_readonly(regexp_str);
-      result = make_readonly(mregexp);
-      if (!check_immutable(result))
-        abort();
+      result = make_immutable(mregexp);
     }
 
   UNGCPRO();
@@ -1162,7 +1157,7 @@ static const pcre *get_regexp(value x)
   return (const pcre *)re->re->str;
 }
 
-TYPEDOP(regexp_exec, 0,
+TYPEDOP(regexp_exec, ,
         "`r `s `n0 `n1 -> `v|`b. Tries to match the string `s, starting at"
 	" character `n0 with regexp matcher `r and flags `n1.\n"
 	"Returns `false if no match; otherwise, it returns a vector of"
@@ -1183,7 +1178,7 @@ TYPEDOP(regexp_exec, 0,
 	"  \t`PCRE_NOTBOL    \t`s is not the beginning of a line\n"
 	"  \t`PCRE_NOTEMPTY  \tan empty string is not a valid match\n"
 	"  \t`PCRE_NOTEOL    \t`s is not the end of a line",
-        4, (value mre, struct string *str, value msofs, value mflags),
+        (value mre, struct string *str, value msofs, value mflags),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "osnn.[vn]")
 {
   long flags, sofs;
@@ -1263,8 +1258,8 @@ TYPEDOP(regexp_exec, 0,
 #endif /* USE_PCRE */
 
 #ifdef HAVE_CRYPT
-TYPEDOP(crypt, 0, "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
-	2, (struct string *s, struct string *salt),
+TYPEDOP(crypt, , "`s1 `s2 -> `s3. Encrypt `s1 using `s2 as salt",
+	(struct string *s, struct string *salt),
 	OP_LEAF | OP_NOESCAPE | OP_STR_READONLY, "ss.s")
 {
   CHECK_TYPES(s,    string,
